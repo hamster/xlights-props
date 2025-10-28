@@ -1,0 +1,5 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "Anytek QT")(type "KiCad")(uri "${KIPRJMOD}/lib_fp.pretty/Anytek QT.pretty")(options "")(descr ""))
+  (lib (name "lib_fp")(type "KiCad")(uri "${KIPRJMOD}/lib_fp.pretty")(options "")(descr ""))
+)

@@ -1,0 +1,6 @@
+
++12V and Ground labels are swapped
+Enable pin on vreg needs to go low
+Programming header needs pins labeled
+Resistor bypass needs to be a DIP switch or move the pins together
+Maybe add diode for blown fuse indicator
