@@ -1,40 +1,8 @@
 # ServoController
 
-ESP32-C3 based stepper motor controller with web interface, designed for DMX lighting control integration via ArtNet and DDP protocols.
+This project aims to allow you to control a prop along a linear rail from xlights.  It can listen to ArtNet (DMX) commands or DDP commands.  The servo is addressed as a single 8 bit channel, with values from 0-255 to coorespond to 0-100% of travel.
 
-## Features
-
-### Hardware Control
-- **FastAccelStepper Integration** - High-performance stepper motor control with acceleration profiles
-- **Automated Homing** - Non-blocking homing routine with limit switch detection
-- **Position Tracking** - Absolute positioning with percentage-based control
-- **Jump Start Support** - Configurable jump start for high-torque applications
-
-### Network Protocols
-- **ArtNet (DMX over Ethernet)** - Industry-standard lighting control protocol
-- **DDP (Distributed Display Protocol)** - UDP-based pixel/servo control
-- **WiFi Client & Access Point** - Dual-mode operation with automatic failover
-- **Static IP Support** - Optional static IP configuration for reliable network addressing
-
-### Web Interface
-- **Modern Responsive UI** - Clean, mobile-friendly interface
-- **Real-time Status Updates** - AJAX-based live monitoring (1Hz update rate)
-- **OTA Firmware Updates** - Over-the-air updates with 4KB buffered writes
-- **Configuration Management** - Web-based settings for all parameters
-- **Locate Mode** - SOS LED pattern for device identification
-
-### Safety & Reliability
-- **Watchdog Timer** - 10-second timeout protection
-- **WiFi Recovery** - Automatic reconnection and power management
-- **Partition Table Diagnostics** - Boot-time partition health checks
-- **Version Tracking** - Auto-incrementing build versioning
-
-## Hardware Requirements
-
-- **Microcontroller**: Seeed XIAO ESP32-C3
-- **Stepper Driver**: Compatible with FastAccelStepper library
-- **Power**: Suitable for your stepper motor requirements
-- **Homing Switch**: NO/NC limit switch for position calibration
+It is expected to be used with the Pixel Cat servo controller
 
 ### Pin Configuration
 
@@ -80,13 +48,14 @@ ESP32-C3 based stepper motor controller with web interface, designed for DMX lig
 
 1. **Connect to AP**
    - Default SSID: `ServoController-XXXX` (where XXXX is MAC address)
-   - Default Password: `12345678`
+   - Default Password: `Spiders1234`
 
 2. **Configure WiFi**
    - Navigate to `http://192.168.4.1`
    - Go to Settings tab → WiFi Client Settings
    - Enter your network credentials
    - Click "Save WiFi Settings" then "Connect Now"
+   - Most likely, you will be 
 
 3. **Configure Motor**
    - Navigate to Settings tab → Stepper Configuration
@@ -136,7 +105,7 @@ Access the device via its IP address in a web browser:
 
 ### Homing Process
 
-The controller uses a non-blocking state machine for homing:
+The controller uses a non-blocking state machine for homing.  The hardware design is a single wheel with a rope running to the prop trolley.  We attempt to wind the wheel so that we find both 'ends', allowing the rope to wrap around backwards.  The middle point is then the 'bottom', and actual usage of the controller will only wind the rope in one direction.
 
 1. **Initial Check** - Verifies switch state at startup
 2. **Clear Switch** - Moves off switch if initially triggered
@@ -234,7 +203,6 @@ When connected via serial monitor (115200 baud):
 
 ### Technical Details
 - 4KB buffered writes for optimal flash performance
-- WiFi power management optimized during upload
 - Automatic partition switching (app0 ↔ app1)
 - Device reboots automatically on success
 
@@ -286,29 +254,6 @@ ServoController/
 └── README.md           # This file
 ```
 
-### Adding New Features
-1. Update version.h (MAJOR or MINOR) if significant change
-2. Implement feature in appropriate handler file
-3. Update web interface in html.h if needed
-4. Build and test thoroughly before deployment
-5. Document changes in commit messages
-
-### Code Style
-- Use descriptive variable names
-- Comment complex logic
-- Follow existing patterns for consistency
-- Keep functions focused and modular
-
-## Technical Specifications
-
-- **CPU**: ESP32-C3 @ 160MHz (single-core RISC-V)
-- **Flash**: Dual OTA partitions (1.9MB each)
-- **RAM**: 400KB SRAM
-- **WiFi**: 2.4GHz 802.11 b/g/n
-- **Protocols**: ArtNet v4, DDP
-- **Update Rate**: 1Hz status updates
-- **Watchdog**: 10-second timeout
-- **Serial Baud**: 115200
 
 ## Version History
 
