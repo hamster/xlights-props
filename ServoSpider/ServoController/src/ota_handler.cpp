@@ -26,34 +26,15 @@ void handleOTAUpdate() {
     Serial.println("OTA Update Starting...");
     Serial.print("Filename: ");
     Serial.println(upload.filename);
-    Serial.println("Using 4KB buffered writes for optimal flash performance");
-
-    // Feed watchdog before starting
-    esp_task_wdt_reset();
-
-    // Maximize WiFi stability during upload
-    WiFi.setSleep(WIFI_PS_NONE);  // Completely disable WiFi power save
-    WiFi.setAutoReconnect(false);  // Disable auto-reconnect during upload
-    WiFi.setTxPower(WIFI_POWER_19_5dBm);  // Set to maximum TX power
 
     if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
       Update.printError(Serial);
       otaInProgress = false;
-      WiFi.setSleep(true);
-      WiFi.setAutoReconnect(true);
     }
   } else if (upload.status == UPLOAD_FILE_WRITE) {
-    // Feed watchdog during upload to prevent timeout
-    esp_task_wdt_reset();
 
     // Buffer the incoming data
     totalBytesReceived += upload.currentSize;
-
-    // Debug: Log every chunk received
-    Serial.print("Received chunk: ");
-    Serial.print(upload.currentSize);
-    Serial.print(" bytes, total: ");
-    Serial.println(totalBytesReceived);
     size_t bytesToCopy = upload.currentSize;
     size_t sourceOffset = 0;
 
@@ -70,8 +51,6 @@ void handleOTAUpdate() {
 
       // If buffer is full (4KB), write it to flash
       if (otaBufferIndex >= OTA_BUFFER_SIZE) {
-        // Allow WiFi stack time to process before flash write
-        yield();
 
         // Write the full 4KB buffer to flash
         size_t written = Update.write(otaBuffer, OTA_BUFFER_SIZE);
@@ -97,11 +76,6 @@ void handleOTAUpdate() {
         // Reset buffer
         otaBufferIndex = 0;
 
-        // Feed watchdog after write
-        esp_task_wdt_reset();
-
-        // Allow WiFi stack time to recover after flash write
-        yield();
       }
     }
   } else if (upload.status == UPLOAD_FILE_END) {
@@ -110,8 +84,6 @@ void handleOTAUpdate() {
       Serial.print("Writing final ");
       Serial.print(otaBufferIndex);
       Serial.println(" bytes...");
-
-      yield();
 
       size_t written = Update.write(otaBuffer, otaBufferIndex);
       if (written != otaBufferIndex) {
@@ -129,10 +101,6 @@ void handleOTAUpdate() {
 
     // Clear flag when upload completes
     otaInProgress = false;
-
-    // Restore WiFi settings
-    WiFi.setSleep(true);
-    WiFi.setAutoReconnect(true);
 
     Serial.print("Upload finished. Total bytes received: ");
     Serial.print(totalBytesReceived);
@@ -157,19 +125,11 @@ void handleOTAUpdate() {
     Serial.print(" bytes, Written: ");
     Serial.print(totalBytesWritten);
     Serial.println(" bytes");
-    Serial.print("WiFi Status: ");
-    Serial.println(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
-    Serial.print("WiFi RSSI: ");
-    Serial.println(WiFi.RSSI());
 
     otaInProgress = false;
     totalBytesWritten = 0;
     totalBytesReceived = 0;
     otaBufferIndex = 0;
-
-    // Restore WiFi settings
-    WiFi.setSleep(true);
-    WiFi.setAutoReconnect(true);
 
     Update.end();
     Serial.println("Update cleanup complete");

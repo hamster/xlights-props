@@ -150,6 +150,72 @@ const char* htmlPage = R"rawliteral(
     .form-group {
       margin-bottom: 15px;
     }
+    .password-wrapper {
+      position: relative;
+      display: inline-block;
+      width: 100%;
+    }
+    .password-wrapper input {
+      width: 100%;
+      padding-right: 45px;
+      margin: 8px 0;
+    }
+    .password-toggle {
+      position: absolute;
+      right: 12px;
+      top: 8px;
+      bottom: 8px;
+      margin: auto;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #666;
+      transition: color 0.2s;
+    }
+    .password-toggle:hover {
+      color: #333;
+    }
+    .password-toggle svg {
+      width: 20px;
+      height: 20px;
+      fill: currentColor;
+    }
+    .position-input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .position-input-group input[type="number"] {
+      width: 100%;
+      margin: 0;
+    }
+    .position-controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .position-mode-selector {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      font-size: 14px;
+    }
+    .position-mode-selector label {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+    }
+    .position-mode-selector input[type="radio"] {
+      width: auto;
+      margin: 0;
+    }
     .button-row {
       display: flex;
       gap: 10px;
@@ -403,10 +469,25 @@ const char* htmlPage = R"rawliteral(
       }
     }
 
-    function toggleApPassword() {
-      var passwordField = document.getElementById("apPassword");
-      var checkbox = document.getElementById("showApPassword");
-      passwordField.type = checkbox.checked ? "text" : "password";
+    function togglePassword(fieldId, buttonId) {
+      var passwordField = document.getElementById(fieldId);
+      var toggleButton = document.getElementById(buttonId);
+
+      // Eye open icon (showing password)
+      var eyeOpen = '<svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>';
+
+      // Eye closed icon (hiding password)
+      var eyeClosed = '<svg viewBox="0 0 24 24"><path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/></svg>';
+
+      if (passwordField.type === "password") {
+        passwordField.type = "text";
+        toggleButton.innerHTML = eyeClosed;
+        toggleButton.title = "Hide password";
+      } else {
+        passwordField.type = "password";
+        toggleButton.innerHTML = eyeOpen;
+        toggleButton.title = "Show password";
+      }
     }
 
     function toggleStaticIpFields() {
@@ -431,22 +512,23 @@ const char* htmlPage = R"rawliteral(
     }
 
     function setPositionStatus() {
-      var position = document.getElementById("setPositionInputStatus").value;
-      fetch('/set-position?position=' + position)
-        .then(response => response.text())
-        .then(data => {
-          console.log('Moving to position ' + position);
-        });
-    }
+      var inputValue = document.getElementById("setPositionInputStatus").value;
+      var mode = document.querySelector('input[name="positionModeStatus"]:checked').value;
+      var position;
 
-    function setPercentPosition() {
-      var percent = document.getElementById("setPercentInput").value;
-      var bottomPos = parseInt(document.getElementById('bottom-position').textContent);
-      var position = Math.round((bottomPos * percent) / 100);
+      if (mode === "percent") {
+        var bottomPos = parseInt(document.getElementById('bottom-position').textContent);
+        position = Math.round((bottomPos * inputValue) / 100);
+        console.log('Moving to ' + inputValue + '% (position ' + position + ')');
+      } else {
+        position = inputValue;
+        console.log('Moving to position ' + position);
+      }
+
       fetch('/set-position?position=' + position)
         .then(response => response.text())
         .then(data => {
-          console.log('Moving to ' + percent + '% (position ' + position + ')');
+          console.log('Move command sent');
         });
     }
 
@@ -461,11 +543,23 @@ const char* htmlPage = R"rawliteral(
     }
 
     function setPosition() {
-      var position = document.getElementById("setPositionInput").value;
+      var inputValue = document.getElementById("setPositionInput").value;
+      var mode = document.querySelector('input[name="positionMode"]:checked').value;
+      var position;
+
+      if (mode === "percent") {
+        var bottomPos = parseInt(document.getElementById('bottom-position').textContent);
+        position = Math.round((bottomPos * inputValue) / 100);
+        console.log('Moving to ' + inputValue + '% (position ' + position + ')');
+      } else {
+        position = inputValue;
+        console.log('Moving to position ' + position);
+      }
+
       fetch('/set-position?position=' + position)
         .then(response => response.text())
         .then(data => {
-          console.log('Moving to position ' + position);
+          console.log('Move command sent');
         });
     }
 
@@ -502,6 +596,34 @@ const char* htmlPage = R"rawliteral(
         })
         .catch(error => {
           console.log('Error toggling locate mode: ' + error);
+        });
+    }
+
+    function rebootDevice() {
+      if (!confirm('Reboot device?')) {
+        return;
+      }
+
+      // Show notification that device is rebooting
+      var notification = document.createElement('div');
+      notification.className = 'notification success';
+      notification.textContent = 'Device is rebooting... Page will refresh in a few seconds.';
+      notification.style.display = 'block';
+      document.body.appendChild(notification);
+
+      // Send reboot command
+      fetch('/reboot')
+        .then(response => {
+          // Wait 5 seconds then reload the page
+          setTimeout(function() {
+            window.location.reload();
+          }, 5000);
+        })
+        .catch(error => {
+          // Device already rebooting, wait and reload
+          setTimeout(function() {
+            window.location.reload();
+          }, 5000);
         });
     }
 
@@ -617,6 +739,7 @@ const char* htmlPage = R"rawliteral(
           document.getElementById('ddp-packets-received').textContent = data.ddpPacketsReceived;
           document.getElementById('ddp-packets-acted').textContent = data.ddpPacketsActedOn;
           document.getElementById('ddp-last-command').textContent = data.ddpLastCommand;
+          document.getElementById('ddp-last-command-percent').textContent = data.ddpLastCommandPercent;
 
           // Update locate mode indicator to sync across all clients
           var indicator = document.getElementById('locate-indicator');
@@ -630,6 +753,12 @@ const char* htmlPage = R"rawliteral(
               indicator.classList.remove('active');
               locateModeActive = false;
             }
+          }
+
+          // Update auto home on boot status (text on status page only, not checkbox on settings page)
+          var autoHomeStatus = document.getElementById('auto-home-on-boot');
+          if (autoHomeStatus) {
+            autoHomeStatus.textContent = data.autoHomeOnBoot ? 'Enabled' : 'Disabled';
           }
         })
         .catch(error => {
@@ -716,15 +845,23 @@ const char* htmlPage = R"rawliteral(
             <h4 style="margin-top: 0;">Position Control</h4>
 
             <div class="form-group">
-              <label for="setPositionInputStatus">Move to Position (steps):</label>
-              <input type="number" id="setPositionInputStatus" name="setPositionInputStatus" value="0" min="0" max="100000">
-              <button onclick="setPositionStatus()" class="btn-warning">Go to Position</button>
-            </div>
-
-            <div class="form-group">
-              <label for="setPercentInput">Move to Position (%):</label>
-              <input type="number" id="setPercentInput" name="setPercentInput" value="0" min="0" max="100">
-              <button onclick="setPercentPosition()" class="btn-warning">Go to Percent</button>
+              <label for="setPositionInputStatus">Move to Position:</label>
+              <div class="position-input-group">
+                <input type="number" id="setPositionInputStatus" name="setPositionInputStatus" value="0" min="0">
+                <div class="position-controls">
+                  <div class="position-mode-selector">
+                    <label>
+                      <input type="radio" name="positionModeStatus" value="steps" checked>
+                      Steps
+                    </label>
+                    <label>
+                      <input type="radio" name="positionModeStatus" value="percent">
+                      Percent
+                    </label>
+                  </div>
+                  <button onclick="setPositionStatus()" class="btn-warning">Go</button>
+                </div>
+              </div>
             </div>
 
             <h4>Incremental Movement</h4>
@@ -764,7 +901,7 @@ const char* htmlPage = R"rawliteral(
         <p><strong>Servo Channel:</strong> <span id="ddp-servo-channel">{{DDP_SERVO_CHANNEL}}</span></p>
         <p><strong>Packets Received:</strong> <span id="ddp-packets-received">0</span></p>
         <p><strong>Packets for this Channel:</strong> <span id="ddp-packets-acted">0</span></p>
-        <p><strong>Last Command:</strong> <span id="ddp-last-command">0</span></p>
+        <p><strong>Last Command:</strong> <span id="ddp-last-command">0</span> (<span id="ddp-last-command-percent">0.0</span>%)</p>
       </div>
       </div>
     </div>
@@ -785,7 +922,12 @@ const char* htmlPage = R"rawliteral(
 
           <div class="form-group">
             <label for="password">Password:</label>
-            <input type="password" id="password" name="password" placeholder="Enter WiFi password">
+            <div class="password-wrapper">
+              <input type="password" id="password" name="password" placeholder="Enter WiFi password">
+              <button type="button" class="password-toggle" id="passwordToggle" onclick="togglePassword('password', 'passwordToggle')" title="Show password">
+                <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+              </button>
+            </div>
           </div>
 
           <div class="form-group">
@@ -834,14 +976,12 @@ const char* htmlPage = R"rawliteral(
 
           <div class="form-group">
             <label for="apPassword">AP Password:</label>
-            <input type="password" id="apPassword" name="apPassword" value="{{AP_PASSWORD}}" required minlength="8">
-          </div>
-
-          <div class="form-group">
-            <label for="showApPassword">
-              <input type="checkbox" id="showApPassword" onchange="toggleApPassword()">
-              Show Password
-            </label>
+            <div class="password-wrapper">
+              <input type="password" id="apPassword" name="apPassword" value="{{AP_PASSWORD}}" required minlength="8">
+              <button type="button" class="password-toggle" id="apPasswordToggle" onclick="togglePassword('apPassword', 'apPasswordToggle')" title="Show password">
+                <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+              </button>
+            </div>
           </div>
 
           <div class="form-group">
@@ -890,9 +1030,23 @@ const char* htmlPage = R"rawliteral(
         <h3>Stepper Control</h3>
 
         <div class="form-group">
-          <label for="setPositionInput">Set Position (steps):</label>
-          <input type="number" id="setPositionInput" name="setPositionInput" value="0" min="0" max="100000">
-          <button onclick="setPosition()" class="btn-warning">Go to Position</button>
+          <label for="setPositionInput">Set Position:</label>
+          <div class="position-input-group">
+            <input type="number" id="setPositionInput" name="setPositionInput" value="0" min="0">
+            <div class="position-controls">
+              <div class="position-mode-selector">
+                <label>
+                  <input type="radio" name="positionMode" value="steps" checked>
+                  Steps
+                </label>
+                <label>
+                  <input type="radio" name="positionMode" value="percent">
+                  Percent
+                </label>
+              </div>
+              <button onclick="setPosition()" class="btn-warning">Go</button>
+            </div>
+          </div>
         </div>
 
         <div class="form-group">
@@ -970,7 +1124,7 @@ const char* htmlPage = R"rawliteral(
       </div>
       </div>
 
-      <button onclick="if(confirm('Reboot device?')) location.href='/reboot'" style="margin-top: 20px; width: 100%;" class="btn-danger">Reboot Device</button>
+      <button onclick="rebootDevice()" style="margin-top: 20px; width: 100%;" class="btn-danger">Reboot Device</button>
     </div>
 
     <!-- OTA Update Tab -->

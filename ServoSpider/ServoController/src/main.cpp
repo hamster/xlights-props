@@ -18,7 +18,6 @@
 Preferences preferences;
 
 // Variables for position tracking
-bool homeSwitchTriggered = false;
 int oldPositionRequest = 0;
 int oldDdpPositionRequest = 0;
 float position = 0;
@@ -30,7 +29,6 @@ unsigned long bootTime = 0;
 bool ledState = false;
 unsigned long ledBlinkInterval = 1000;  // Default 1 second for connected state (in milliseconds)
 bool locateMode = false;
-unsigned long locateModeStartTime = 0;
 
 // Timer for LED blinking
 hw_timer_t *ledTimer = NULL;
@@ -61,9 +59,9 @@ volatile int morseUnitCounter = 0;
 void IRAM_ATTR onLedTimer() {
   if (locateMode) {
     // Morse code SOS pattern
-    // Each unit is 50ms (5 ticks of 10ms timer)
+    // Each unit is 100ms (10 ticks of 10ms timer)
     morseUnitCounter++;
-    if (morseUnitCounter >= 5) {  // 50ms elapsed
+    if (morseUnitCounter >= 10) {  // 100ms elapsed
       morseUnitCounter = 0;
 
       // Set LED based on current pattern
@@ -88,14 +86,12 @@ void IRAM_ATTR onLedTimer() {
 }
 
 void setup() {
-
   Serial.begin(115200);
   delay(1000);
 
-  // Configure watchdog timer (must be done early in setup)
-  Serial.println("Configuring watchdog timer...");
+  // Configure watchdog timer
   esp_task_wdt_init(WDT_TIMEOUT, true);  // 10 second timeout, panic on timeout
-  esp_task_wdt_add(NULL);  // Add current task (loop task) to watchdog
+  esp_task_wdt_add(NULL); 
   Serial.print("Watchdog timer enabled with ");
   Serial.print(WDT_TIMEOUT);
   Serial.println(" second timeout");
@@ -161,21 +157,21 @@ void setup() {
   initializeStepper();
 
   // Determine if we should connect to wifi or start a host access point
-  if(ssid.length() > 0){
+  if(ssid.length() > 0) {
     Serial.println("Attempting to connect to saved WiFi...");
     Serial.print("SSID: ");
     Serial.println(ssid);
-    if(connectToWifi()){
+    if(connectToWifi()) {
       Serial.println("Successfully connected to WiFi!");
     }
-    else{
+    else {
       Serial.print("Could not connect to WiFi network '");
       Serial.print(ssid);
       Serial.println("', starting Access Point mode...");
       startAccessPoint();
     }
   }
-  else{
+  else {
     // Failed to connect or no credentials, start AP mode
     Serial.println("No saved network to connect to, starting Access Point mode...");
     startAccessPoint();
@@ -196,21 +192,11 @@ void setup() {
 }
 
 void loop() {
-
   // Feed the watchdog timer to prevent reset during normal operation
   esp_task_wdt_reset();
 
   // Update non-blocking homing state machine
   updateHoming();
-
-  if(!homeSwitchTriggered && digitalRead(homingSwitchPin) == HIGH){
-    homeSwitchTriggered = true;
-    Serial.println("Homing switch triggered (pin HIGH - switch activated)");
-  }
-  else if(homeSwitchTriggered && digitalRead(homingSwitchPin) == LOW){
-    homeSwitchTriggered = false;
-    Serial.println("Homing switch un-triggered (pin LOW - switch released)");
-  }
 
   server.handleClient();
 
@@ -218,83 +204,16 @@ void loop() {
   if (!otaInProgress) {
     artnet.parse();
     handleDDP();
-
+    
     // Process DNS requests for captive portal (only in AP mode)
     if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
       dnsServer.processNextRequest();
     }
   }
 
-  // Check for serial input
-  if (Serial.available() > 0) {
-    char c = Serial.read();
-    switch(c) {
-      case '?':
-        Serial.println("\n=== Available Serial Commands ===");
-        Serial.println("?  - Show this help menu");
-        Serial.println("h  - Start homing sequence");
-        Serial.println("r  - Reboot device");
-        Serial.println("s  - Print connection status");
-        Serial.println("w  - Attempt WiFi reconnection");
-        Serial.println("p  - Print current stepper position");
-        Serial.println("f  - Move forward 10 steps");
-        Serial.println("b  - Move backward 10 steps");
-        Serial.println("================================\n");
-        break;
-      case 'h':
-        Serial.println("Starting homing...");
-        startHoming();
-        break;
-      case 'r':
-        Serial.print("Rebooting...");
-        ESP.restart();
-        break;
-      case 's':
-        printStatus();
-        break;
-      case 'w':
-        Serial.println("Attempting to reconnect to WiFi...");
-        if (ssid.length() > 0) {
-          if (connectToWifi()) {
-            Serial.println("Successfully connected! Disabling AP mode...");
-            WiFi.softAPdisconnect(true);
-            WiFi.mode(WIFI_STA);
-          } else {
-            Serial.println("Connection failed. AP mode remains active.");
-          }
-        } else {
-          Serial.println("No SSID configured. Cannot connect to WiFi.");
-        }
-        break;
-      case 'p':
-        Serial.print("Current position: ");
-        Serial.println(stepper->getCurrentPosition());
-        break;
-      case 'f':
-        if (isHoming()) {
-          Serial.println("Cannot move while homing is in progress");
-        } else {
-          Serial.println("Moving forward 10 steps");
-          stepper->setAcceleration(stepperAccelHoming);
-          stepper->move(10);
-          stepper->setAcceleration(stepperAccel);
-        }
-        break;
-      case 'b':
-        if (isHoming()) {
-          Serial.println("Cannot move while homing is in progress");
-        } else {
-          Serial.println("Moving backward 10 steps");
-          stepper->setAcceleration(stepperAccelHoming);
-          stepper->move(-10);
-          stepper->setAcceleration(stepperAccel);
-        }
-        break;
-    }
+  handleSerialCommands();
 
-  }
-
-  if(positionRequest != oldPositionRequest){
+  if(positionRequest != oldPositionRequest) {
     // New position requested from ArtNet!
     oldPositionRequest = positionRequest;
 
@@ -318,7 +237,7 @@ void loop() {
       // Enabled, homed and not homing, execute the command
       artnetPacketsActedOn++;
 
-      position = (float)bottomPosition * ((float)positionRequest / 255);
+      position = calcPosition(positionRequest);
 
       Serial.print("ArtNet: Moving to new position ");
       Serial.print(positionRequest);
@@ -326,12 +245,12 @@ void loop() {
       Serial.print(int((float)((float)positionRequest / 255) * 100));
       Serial.print("% - ");
       Serial.println((int)position);
-      // Value is between 0-255.  Calculate where that is in steps and send it
+
       stepper->moveTo((int)position);
     }
   }
 
-  if(ddpPositionRequest != oldDdpPositionRequest){
+  if(ddpPositionRequest != oldDdpPositionRequest) {
     // New position requested from DDP!
     oldDdpPositionRequest = ddpPositionRequest;
 
@@ -355,7 +274,7 @@ void loop() {
       // Enabled, homed and not homing, execute the command
       ddpPacketsActedOn++;
 
-      position = (float)bottomPosition * ((float)ddpPositionRequest / 255);
+      position = calcPosition(positionRequest);
 
       Serial.print("DDP: Moving to new position ");
       Serial.print(ddpPositionRequest);
@@ -363,11 +282,88 @@ void loop() {
       Serial.print(int((float)((float)ddpPositionRequest / 255) * 100));
       Serial.print("% - ");
       Serial.println((int)position);
-      // Value is between 0-255.  Calculate where that is in steps and send it
+
       stepper->moveTo((int)position);
     }
   }
+}
 
+float calcPosition(float positionRequest) {
+  return (float)bottomPosition * ((float)positionRequest / 255);
+}
+
+void handleSerialCommands() {
+  // Check for serial input
+  if (Serial.available() > 0) {
+    char c = Serial.read();
+    switch (c) {
+    case '?':
+      Serial.println("\n=== Available Serial Commands ===");
+      Serial.println("?  - Show this help menu");
+      Serial.println("h  - Start homing sequence");
+      Serial.println("r  - Reboot device");
+      Serial.println("s  - Print connection status");
+      Serial.println("w  - Attempt WiFi reconnection");
+      Serial.println("p  - Print current stepper position");
+      Serial.println("f  - Move forward 10 steps");
+      Serial.println("b  - Move backward 10 steps");
+      Serial.println("================================\n");
+      break;
+    case 'h':
+      Serial.println("Starting homing...");
+      startHoming();
+      break;
+    case 'r':
+      Serial.print("Rebooting...");
+      ESP.restart();
+      break;
+    case 's':
+      printStatus();
+      break;
+    case 'w':
+      Serial.println("Attempting to reconnect to WiFi...");
+      if (ssid.length() > 0) {
+        if (connectToWifi()) {
+          Serial.println("Successfully connected! Disabling AP mode...");
+          WiFi.softAPdisconnect(true);
+          WiFi.mode(WIFI_STA);
+        }
+        else {
+          Serial.println("Connection failed. AP mode remains active.");
+        }
+      }
+      else {
+        Serial.println("No SSID configured. Cannot connect to WiFi.");
+      }
+      break;
+    case 'p':
+      Serial.print("Current position: ");
+      Serial.println(stepper->getCurrentPosition());
+      break;
+    case 'f':
+      if (isHoming()) {
+        Serial.println("Cannot move while homing is in progress");
+      }
+      else {
+        Serial.println("Moving forward 10 steps");
+        stepper->setAcceleration(stepperAccelHoming);
+        stepper->move(10);
+        stepper->setAcceleration(stepperAccel);
+      }
+      break;
+    case 'b':
+      if (isHoming()) {
+        Serial.println("Cannot move while homing is in progress");
+      }
+      else {
+        Serial.println("Moving backward 10 steps");
+        stepper->setAcceleration(stepperAccelHoming);
+        stepper->move(-10);
+        stepper->setAcceleration(stepperAccel);
+      }
+      break;
+    }
+  }
 }
 
 void printStatus() {
@@ -385,7 +381,9 @@ void printStatus() {
   } else if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
     Serial.println("Mode: Access Point (AP Mode)");
     Serial.print("SSID: ");
-    Serial.println(ap_ssid);
+    Serial.println(getAPName());
+    Serial.print("Password: ");
+    Serial.println(ap_password);
     Serial.print("IP Address: ");
     Serial.println(WiFi.softAPIP());
     Serial.print("Connected Clients: ");

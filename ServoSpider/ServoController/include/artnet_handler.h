@@ -13,8 +13,6 @@ extern int artnetChannelConfig;
 extern bool artnetEnabledConfig;
 
 // ArtNet data
-extern int previousDataLength;
-extern char frame[256];
 extern uint8_t positionRequest;
 extern uint8_t lastReceivedPosition;
 

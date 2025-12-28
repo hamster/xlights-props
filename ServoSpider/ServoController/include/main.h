@@ -10,7 +10,6 @@
 extern bool ledState;
 extern unsigned long ledBlinkInterval;
 extern bool locateMode;
-extern unsigned long locateModeStartTime;
 
 // Timer for LED blinking
 extern hw_timer_t *ledTimer;
@@ -18,5 +17,6 @@ extern hw_timer_t *ledTimer;
 // LED timer interrupt handler
 void IRAM_ATTR onLedTimer();
 void printStatus();
+float calcPosition(float);
 
 #endif

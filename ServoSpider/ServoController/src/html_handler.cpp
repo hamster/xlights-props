@@ -89,11 +89,6 @@ void handleRoot() {
   server.send(200, "text/html", page);
 }
 
-// Legacy handler - kept for backward compatibility
-void handleSave() {
-  handleRoot();
-}
-
 void handleSaveWifi() {
   if (server.hasArg("ssid")) {
     ssid = server.arg("ssid");
@@ -337,7 +332,6 @@ void handleLocate() {
     String enableArg = server.arg("enable");
     if (enableArg == "true") {
       locateMode = true;
-      locateModeStartTime = millis();
       Serial.println("Locate mode enabled - LED showing SOS pattern");
       server.send(200, "application/json", "{\"success\":true,\"locateMode\":true}");
     } else {
@@ -379,6 +373,9 @@ void handleStatusData() {
   // ArtNet last command
   float artnetPercent = (lastReceivedPosition / 255.0) * 100.0;
 
+  // DDP last command
+  float ddpPercent = (ddpLastReceivedPosition / 255.0) * 100.0;
+
   String json = "{";
   json += "\"wifiConnected\":" + String(wifiConnected ? "true" : "false") + ",";
   json += "\"wifiMode\":\"" + wifiMode + "\",";
@@ -409,7 +406,9 @@ void handleStatusData() {
   json += "\"ddpPacketsReceived\":" + String(ddpPacketsReceived) + ",";
   json += "\"ddpPacketsActedOn\":" + String(ddpPacketsActedOn) + ",";
   json += "\"ddpLastCommand\":" + String(ddpLastReceivedPosition) + ",";
-  json += "\"locateMode\":" + String(locateMode ? "true" : "false");
+  json += "\"ddpLastCommandPercent\":" + String(ddpPercent, 1) + ",";
+  json += "\"locateMode\":" + String(locateMode ? "true" : "false") + ",";
+  json += "\"autoHomeOnBoot\":" + String(autoHomeOnBootConfig ? "true" : "false");
   json += "}";
 
   server.send(200, "application/json", json);
@@ -459,7 +458,6 @@ void startWebServer() {
   server.on("/", HTTP_GET, handleRoot);
 
   // Save configuration endpoints
-  server.on("/save", HTTP_POST, handleSave);              // Legacy - for backward compatibility
   server.on("/save-wifi", HTTP_POST, handleSaveWifi);     // WiFi settings
   server.on("/save-ap", HTTP_POST, handleSaveAP);         // AP settings
   server.on("/save-stepper", HTTP_POST, handleSaveStepper); // Stepper settings

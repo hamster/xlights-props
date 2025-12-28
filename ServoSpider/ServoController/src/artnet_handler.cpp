@@ -16,11 +16,10 @@ uint8_t lastReceivedPosition = 0;
 unsigned long artnetPacketsReceived = 0;
 unsigned long artnetPacketsActedOn = 0;
 
-void onDmxFrame(const uint8_t* data, uint16_t size, const ArtDmxMetadata& metadata, const ArtNetRemoteInfo& remote){
-
+void onDmxFrame(const uint8_t* data, uint16_t size, const ArtDmxMetadata& metadata, const ArtNetRemoteInfo& remote) {
   artnetPacketsReceived++;
 
-  if(artnetDebugConfig){
+  if(artnetDebugConfig) {
     Serial.print("Artnet: src ");
     Serial.print(remote.ip);
     Serial.print(":");
@@ -33,19 +32,18 @@ void onDmxFrame(const uint8_t* data, uint16_t size, const ArtDmxMetadata& metada
     Serial.print(metadata.sequence);
     Serial.print(") :");
     for (size_t i = 0; i < size; ++i) {
-        Serial.print(data[i]);
-        if (i < size - 1) {
-            Serial.print(",");
-        }
+      Serial.print(data[i]);
+      if (i < size - 1) {
+        Serial.print(",");
+      }
     }
     Serial.println();
   }
 
-  if(size > artnetChannelConfig){
+  if(size > artnetChannelConfig) {
     positionRequest = data[artnetChannelConfig];
     lastReceivedPosition = data[artnetChannelConfig];
   }
-
 }
 
 void initializeArtNet() {

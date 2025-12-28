@@ -142,7 +142,7 @@ void handleDDP() {
       Serial.println(ddpPositionRequest);
     }
   }
-  else{
+  else {
     if (ddpDebugConfig) {
       Serial.print("  -> Servo channel ");
       Serial.print(ddpServoChannelConfig);

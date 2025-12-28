@@ -50,7 +50,6 @@ extern bool autoHomeOnBootConfig;
 
 // Stepper functions
 void IRAM_ATTR handleHomingInterrupt();
-bool home();                    // Blocking version (deprecated but kept for compatibility)
 void startHoming();             // Start non-blocking homing
 void updateHoming();            // Call from loop() to update homing state
 bool isHoming();                // Returns true if homing is in progress

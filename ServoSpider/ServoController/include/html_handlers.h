@@ -15,7 +15,6 @@ extern bool otaInProgress;
 
 // Web handler functions
 void handleRoot();
-void handleSave();
 void handleSaveWifi();
 void handleSaveAP();
 void handleSaveStepper();
