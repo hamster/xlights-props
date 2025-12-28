@@ -1,0 +1,11 @@
+{
+    "platformio-ide.customPATH": null,
+    "platformio-ide.activateOnlyOnPlatformIOProject": true,
+    "platformio-ide.autoRebuildAutocompleteIndex": true,
+    "platformio-ide.useBuiltinPIOCore": true,
+    "platformio-ide.forceUploadAndMonitor": false,
+    "files.associations": {
+        "*.ino": "cpp",
+        "*.h": "cpp"
+    }
+}
