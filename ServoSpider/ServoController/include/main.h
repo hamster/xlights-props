@@ -17,6 +17,6 @@ extern hw_timer_t *ledTimer;
 // LED timer interrupt handler
 void IRAM_ATTR onLedTimer();
 void printStatus();
-float calcPosition(float);
+float calcPosition(float, bool);
 
 #endif

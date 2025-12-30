@@ -627,6 +627,35 @@ const char* htmlPage = R"rawliteral(
         });
     }
 
+    function resetSettings() {
+      if (!confirm('Reset all settings to default values? This will reset WiFi credentials, stepper settings, ArtNet/DDP configuration, etc. The device will reboot after reset.')) {
+        return;
+      }
+
+      // Show notification that settings are being reset
+      var notification = document.createElement('div');
+      notification.className = 'notification success';
+      notification.textContent = 'Resetting settings to defaults... Device will reboot.';
+      notification.style.display = 'block';
+      document.body.appendChild(notification);
+
+      // Send reset command
+      fetch('/reset-settings')
+        .then(response => response.text())
+        .then(data => {
+          // Wait 5 seconds then reload the page
+          setTimeout(function() {
+            window.location.reload();
+          }, 5000);
+        })
+        .catch(error => {
+          // Device may already be rebooting, wait and reload
+          setTimeout(function() {
+            window.location.reload();
+          }, 5000);
+        });
+    }
+
     var isOffline = false;
     var offlineNotification = null;
     var reconnectInterval = null;
@@ -718,6 +747,7 @@ const char* htmlPage = R"rawliteral(
           }
           document.getElementById('artnet-universe').textContent = data.artnetUniverse;
           document.getElementById('artnet-channel').textContent = data.artnetChannel;
+          document.getElementById('artnet-mode').textContent = data.artnet16Bit ? '16-bit' : '8-bit';
           document.getElementById('artnet-packets-received').textContent = data.artnetPacketsReceived;
           document.getElementById('artnet-packets-acted').textContent = data.artnetPacketsActedOn;
           document.getElementById('artnet-last-command').textContent = data.artnetLastCommand;
@@ -736,6 +766,7 @@ const char* htmlPage = R"rawliteral(
             ddpStatusElement.className = 'status connected';
           }
           document.getElementById('ddp-servo-channel').textContent = data.ddpServoChannel;
+          document.getElementById('ddp-mode').textContent = data.ddp16Bit ? '16-bit' : '8-bit';
           document.getElementById('ddp-packets-received').textContent = data.ddpPacketsReceived;
           document.getElementById('ddp-packets-acted').textContent = data.ddpPacketsActedOn;
           document.getElementById('ddp-last-command').textContent = data.ddpLastCommand;
@@ -787,7 +818,7 @@ const char* htmlPage = R"rawliteral(
 <body>
   <div class="container">
     <div class="header-container">
-      <h1>Servo Controller</h1>
+      <h1>Servo Controller<br><span style="font-size: 0.5em; font-style: italic; font-weight: normal;" id="hostname-display">{{HOSTNAME}}</span></h1>
       <div id="locate-indicator" class="locate-indicator" onclick="toggleLocate()" title="Click to locate this device (LED will blink SOS)">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
           <circle cx="50" cy="50" r="15" class="spider-body" fill="#333"/>
@@ -819,6 +850,7 @@ const char* htmlPage = R"rawliteral(
         <div id="wifi-status-text" class="status {{STATUS_CLASS}}">
           {{STATUS_TEXT}}
         </div>
+        <p><strong>Hostname:</strong> <span id="wifi-hostname">{{HOSTNAME}}</span></p>
         <p><strong>Mode:</strong> <span id="wifi-mode">{{WIFI_MODE}}</span></p>
         <p><strong>Network:</strong> <span id="wifi-network">{{WIFI_NETWORK}}</span></p>
         <p><strong>IP Type:</strong> <span id="ip-type">N/A</span></p>
@@ -888,6 +920,7 @@ const char* htmlPage = R"rawliteral(
         </div>
         <p><strong>Universe:</strong> <span id="artnet-universe">{{ARTNET_UNIVERSE}}</span></p>
         <p><strong>Channel:</strong> <span id="artnet-channel">{{ARTNET_CHANNEL}}</span></p>
+        <p><strong>Mode:</strong> <span id="artnet-mode">8-bit</span></p>
         <p><strong>Packets Received:</strong> <span id="artnet-packets-received">0</span></p>
         <p><strong>Packets for this Channel:</strong> <span id="artnet-packets-acted">0</span></p>
         <p><strong>Last Command:</strong> <span id="artnet-last-command">0</span> (<span id="artnet-last-command-percent">0.0</span>%)</p>
@@ -899,6 +932,7 @@ const char* htmlPage = R"rawliteral(
           DDP Disabled - Not Homed
         </div>
         <p><strong>Servo Channel:</strong> <span id="ddp-servo-channel">{{DDP_SERVO_CHANNEL}}</span></p>
+        <p><strong>Mode:</strong> <span id="ddp-mode">8-bit</span></p>
         <p><strong>Packets Received:</strong> <span id="ddp-packets-received">0</span></p>
         <p><strong>Packets for this Channel:</strong> <span id="ddp-packets-acted">0</span></p>
         <p><strong>Last Command:</strong> <span id="ddp-last-command">0</span> (<span id="ddp-last-command-percent">0.0</span>%)</p>
@@ -915,6 +949,11 @@ const char* htmlPage = R"rawliteral(
 
         <form onsubmit="return handleFormSubmit(event, '/save-wifi')">
           <h3>WiFi Client Settings</h3>
+          <div class="form-group">
+            <label for="hostname">Hostname:</label>
+            <input type="text" id="hostname" name="hostname" value="{{HOSTNAME}}" required pattern="[a-zA-Z0-9\-]+" title="Only letters, numbers, and hyphens allowed">
+          </div>
+
           <div class="form-group">
             <label for="ssid">WiFi Network (SSID):</label>
             <input type="text" id="ssid" name="ssid" value="{{CURRENT_SSID}}" required>
@@ -1062,7 +1101,7 @@ const char* htmlPage = R"rawliteral(
         <button onclick="homeServo()" class="btn-success">Home Servo</button>
       </div>
 
-      <!-- ArtNet Configuration Box -->
+      <!-- ArtNet & DDP Configuration Box -->
       <div class="status-box">
         <h4>ArtNet Configuration</h4>
 
@@ -1085,6 +1124,13 @@ const char* htmlPage = R"rawliteral(
           </div>
 
           <div class="form-group">
+            <label for="artnet16Bit">
+              <input type="checkbox" id="artnet16Bit" name="artnet16Bit" {{ARTNET_16BIT_CHECKED}}>
+              16-bit Mode (uses 2 channels)
+            </label>
+          </div>
+
+          <div class="form-group">
             <label for="artnetDebug">
               <input type="checkbox" id="artnetDebug" name="artnetDebug" {{ARTNET_DEBUG_CHECKED}}>
               Enable Serial Debug Output
@@ -1093,10 +1139,9 @@ const char* htmlPage = R"rawliteral(
 
           <button type="submit" class="btn-primary">Save ArtNet Settings</button>
         </form>
-      </div>
 
-      <!-- DDP Configuration Box -->
-      <div class="status-box">
+        <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;">
+
         <h4>DDP Configuration</h4>
 
         <form onsubmit="return handleFormSubmit(event, '/save-ddp')">
@@ -1113,6 +1158,13 @@ const char* htmlPage = R"rawliteral(
           </div>
 
           <div class="form-group">
+            <label for="ddp16Bit">
+              <input type="checkbox" id="ddp16Bit" name="ddp16Bit" {{DDP_16BIT_CHECKED}}>
+              16-bit Mode (uses 2 channels)
+            </label>
+          </div>
+
+          <div class="form-group">
             <label for="ddpDebug">
               <input type="checkbox" id="ddpDebug" name="ddpDebug" {{DDP_DEBUG_CHECKED}}>
               Enable Serial Debug Output
@@ -1122,9 +1174,14 @@ const char* htmlPage = R"rawliteral(
           <button type="submit" class="btn-primary">Save DDP Settings</button>
         </form>
       </div>
-      </div>
 
-      <button onclick="rebootDevice()" style="margin-top: 20px; width: 100%;" class="btn-danger">Reboot Device</button>
+      <!-- System Control Box -->
+      <div class="status-box">
+        <h4>System Control</h4>
+        <button onclick="rebootDevice()" style="width: 100%; margin-bottom: 10px;" class="btn-danger">Reboot Device</button>
+        <button onclick="resetSettings()" style="width: 100%;" class="btn-danger">Reset Settings</button>
+      </div>
+      </div>
     </div>
 
     <!-- OTA Update Tab -->

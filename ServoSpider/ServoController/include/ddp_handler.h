@@ -10,10 +10,11 @@ extern int ddpServoChannelConfig;
 extern bool ddpEnabled;
 extern bool ddpEnabledConfig;
 extern bool ddpDebugConfig;
+extern bool ddp16BitConfig;
 
 // DDP Data
-extern uint8_t ddpPositionRequest;
-extern uint8_t ddpLastReceivedPosition;
+extern uint16_t ddpPositionRequest;
+extern uint16_t ddpLastReceivedPosition;
 
 // DDP Statistics
 extern unsigned long ddpPacketsReceived;

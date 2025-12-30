@@ -32,7 +32,7 @@ void initializeStepper() {
   engine.init();
   stepper = engine.stepperConnectToPin(stepperStepPin);
   if (stepper) {
-    stepper->setDirectionPin(stepperDirectionPin);
+    stepper->setDirectionPin(stepperDirectionPin, LOW);
     stepper->setEnablePin(stepperEnablePin);
     stepper->setAutoEnable(true);
     stepper->setSpeedInHz(stepperSpeedConfig);

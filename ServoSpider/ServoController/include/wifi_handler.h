@@ -13,6 +13,7 @@
 // WiFi credentials
 extern String ssid;
 extern String password;
+extern String hostname;
 
 // Static IP configuration
 extern bool useStaticIp;

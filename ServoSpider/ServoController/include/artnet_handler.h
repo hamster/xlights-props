@@ -11,10 +11,11 @@ extern int artnetUniverseConfig;
 extern bool artnetDebugConfig;
 extern int artnetChannelConfig;
 extern bool artnetEnabledConfig;
+extern bool artnet16BitConfig;
 
 // ArtNet data
-extern uint8_t positionRequest;
-extern uint8_t lastReceivedPosition;
+extern uint16_t positionRequest;
+extern uint16_t lastReceivedPosition;
 
 // ArtNet statistics
 extern unsigned long artnetPacketsReceived;

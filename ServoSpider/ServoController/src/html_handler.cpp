@@ -52,6 +52,7 @@ void handleRoot() {
   page.replace("{{AUTO_HOME_STATUS}}", autoHomeOnBootConfig ? "Enabled" : "Disabled");
 
   // Configuration values
+  page.replace("{{HOSTNAME}}", hostname);
   page.replace("{{CURRENT_SSID}}", ssid);
   page.replace("{{DHCP_CHECKED}}", useStaticIp ? "" : "checked");
   page.replace("{{STATIC_CHECKED}}", useStaticIp ? "checked" : "");
@@ -71,11 +72,13 @@ void handleRoot() {
   page.replace("{{ARTNET_UNIVERSE}}", String(artnetUniverseConfig));
   page.replace("{{ARTNET_CHANNEL}}", String(artnetChannelConfig + 1));  // Display as 1-based
   page.replace("{{ARTNET_DEBUG_CHECKED}}", artnetDebugConfig ? "checked" : "");
+  page.replace("{{ARTNET_16BIT_CHECKED}}", artnet16BitConfig ? "checked" : "");
 
   // DDP configuration values
   page.replace("{{DDP_ENABLED_CHECKED}}", ddpEnabledConfig ? "checked" : "");
   page.replace("{{DDP_SERVO_CHANNEL}}", String(ddpServoChannelConfig));  // Already 1-based
   page.replace("{{DDP_DEBUG_CHECKED}}", ddpDebugConfig ? "checked" : "");
+  page.replace("{{DDP_16BIT_CHECKED}}", ddp16BitConfig ? "checked" : "");
 
   // Version information
   page.replace("{{VERSION}}", VERSION_STRING);
@@ -91,6 +94,14 @@ void handleRoot() {
 
 void handleSaveWifi() {
   if (server.hasArg("ssid")) {
+    // Save hostname
+    if (server.hasArg("hostname")) {
+      hostname = server.arg("hostname");
+      preferences.putString("hostname", hostname);
+      Serial.print("Hostname saved: ");
+      Serial.println(hostname);
+    }
+
     ssid = server.arg("ssid");
     password = server.arg("password");
 
@@ -201,17 +212,20 @@ void handleSaveArtnet() {
     int newChannel = server.arg("artnetChannel").toInt();
     bool newEnabled = server.hasArg("artnetEnabled");
     bool newDebug = server.hasArg("artnetDebug");
+    bool new16Bit = server.hasArg("artnet16Bit");
 
     // Convert from 1-based (user) to 0-based (internal)
     artnetUniverseConfig = newUniverse;
     artnetChannelConfig = newChannel - 1;  // User enters 1-512, we store 0-511
     artnetEnabledConfig = newEnabled;
     artnetDebugConfig = newDebug;
+    artnet16BitConfig = new16Bit;
 
     preferences.putInt("artnetUniverse", artnetUniverseConfig);
     preferences.putInt("artnetChannel", artnetChannelConfig);
     preferences.putBool("artnetEnabled", artnetEnabledConfig);
     preferences.putBool("artnetDebug", artnetDebugConfig);
+    preferences.putBool("artnet16Bit", artnet16BitConfig);
 
     Serial.println("ArtNet configuration saved!");
     Serial.print("Enabled: ");
@@ -223,6 +237,8 @@ void handleSaveArtnet() {
     Serial.print(" (internal: ");
     Serial.print(artnetChannelConfig);
     Serial.println(")");
+    Serial.print("16-bit: ");
+    Serial.println(artnet16BitConfig ? "Yes" : "No");
     Serial.print("Debug: ");
     Serial.println(artnetDebugConfig ? "Enabled" : "Disabled");
 
@@ -240,6 +256,7 @@ void handleSaveDDP() {
     int newServoChannel = server.arg("ddpServoChannel").toInt();
     bool newEnabled = server.hasArg("ddpEnabled");
     bool newDebug = server.hasArg("ddpDebug");
+    bool new16Bit = server.hasArg("ddp16Bit");
 
     // Validate values (1-based input, store as 1-based)
     if (newServoChannel < 1 || newServoChannel > 512) {
@@ -252,10 +269,12 @@ void handleSaveDDP() {
     ddpServoChannelConfig = newServoChannel;
     ddpEnabledConfig = newEnabled;
     ddpDebugConfig = newDebug;
+    ddp16BitConfig = new16Bit;
 
     preferences.putInt("ddpServoChannel", ddpServoChannelConfig);
     preferences.putBool("ddpEnabled", ddpEnabledConfig);
     preferences.putBool("ddpDebug", ddpDebugConfig);
+    preferences.putBool("ddp16Bit", ddp16BitConfig);
 
     // Send JSON response FIRST before reinitializing DDP
     String response = "{\"success\":true,\"message\":\"DDP settings saved and applied!\"}";
@@ -266,6 +285,8 @@ void handleSaveDDP() {
     Serial.println(ddpEnabledConfig ? "Yes" : "No");
     Serial.print("Servo Channel: ");
     Serial.println(ddpServoChannelConfig);  // Already 1-based
+    Serial.print("16-bit: ");
+    Serial.println(ddp16BitConfig ? "Yes" : "No");
     Serial.print("Debug: ");
     Serial.println(ddpDebugConfig ? "Enabled" : "Disabled");
 
@@ -306,6 +327,29 @@ void handleReboot() {
   server.send(200, "text/html", response);
 
   Serial.println("Rebooting device...");
+
+  // Feed watchdog and give time for response to be sent
+  esp_task_wdt_reset();
+  delay(100);
+  esp_task_wdt_reset();
+  delay(100);
+  esp_task_wdt_reset();
+  delay(100);
+  esp_task_wdt_reset();
+
+  ESP.restart();
+}
+
+void handleResetSettings() {
+  String response = "Settings reset to defaults. Rebooting...";
+  server.send(200, "text/plain", response);
+
+  Serial.println("Resetting all settings to defaults...");
+
+  // Clear all preferences
+  preferences.clear();
+
+  Serial.println("Settings cleared. Rebooting device...");
 
   // Feed watchdog and give time for response to be sent
   esp_task_wdt_reset();
@@ -371,10 +415,12 @@ void handleStatusData() {
   bool homingSwitchTripped = isHomingSwitchTripped();
 
   // ArtNet last command
-  float artnetPercent = (lastReceivedPosition / 255.0) * 100.0;
+  float artnetMaxValue = artnet16BitConfig ? 65535.0 : 255.0;
+  float artnetPercent = (lastReceivedPosition / artnetMaxValue) * 100.0;
 
   // DDP last command
-  float ddpPercent = (ddpLastReceivedPosition / 255.0) * 100.0;
+  float ddpMaxValue = ddp16BitConfig ? 65535.0 : 255.0;
+  float ddpPercent = (ddpLastReceivedPosition / ddpMaxValue) * 100.0;
 
   String json = "{";
   json += "\"wifiConnected\":" + String(wifiConnected ? "true" : "false") + ",";
@@ -401,12 +447,14 @@ void handleStatusData() {
   json += "\"artnetPacketsActedOn\":" + String(artnetPacketsActedOn) + ",";
   json += "\"artnetLastCommand\":" + String(lastReceivedPosition) + ",";
   json += "\"artnetLastCommandPercent\":" + String(artnetPercent, 1) + ",";
+  json += "\"artnet16Bit\":" + String(artnet16BitConfig ? "true" : "false") + ",";
   json += "\"ddpEnabled\":" + String(ddpEnabledConfig ? "true" : "false") + ",";
   json += "\"ddpServoChannel\":" + String(ddpServoChannelConfig) + ",";  // Already 1-based
   json += "\"ddpPacketsReceived\":" + String(ddpPacketsReceived) + ",";
   json += "\"ddpPacketsActedOn\":" + String(ddpPacketsActedOn) + ",";
   json += "\"ddpLastCommand\":" + String(ddpLastReceivedPosition) + ",";
   json += "\"ddpLastCommandPercent\":" + String(ddpPercent, 1) + ",";
+  json += "\"ddp16Bit\":" + String(ddp16BitConfig ? "true" : "false") + ",";
   json += "\"locateMode\":" + String(locateMode ? "true" : "false") + ",";
   json += "\"autoHomeOnBoot\":" + String(autoHomeOnBootConfig ? "true" : "false");
   json += "}";
@@ -474,6 +522,9 @@ void startWebServer() {
 
   // Reboot
   server.on("/reboot", HTTP_GET, handleReboot);
+
+  // Reset Settings
+  server.on("/reset-settings", HTTP_GET, handleResetSettings);
 
   // Homing
   server.on("/home", HTTP_GET, handleHoming);

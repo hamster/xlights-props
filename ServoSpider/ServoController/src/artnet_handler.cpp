@@ -7,10 +7,11 @@ int artnetUniverseConfig = startUniverse;
 bool artnetDebugConfig = false;
 int artnetChannelConfig = 0;
 bool artnetEnabledConfig = true;
+bool artnet16BitConfig = false;
 
 // ArtNet data
-uint8_t positionRequest = 0;
-uint8_t lastReceivedPosition = 0;
+uint16_t positionRequest = 0;
+uint16_t lastReceivedPosition = 0;
 
 // ArtNet statistics
 unsigned long artnetPacketsReceived = 0;
@@ -40,9 +41,19 @@ void onDmxFrame(const uint8_t* data, uint16_t size, const ArtDmxMetadata& metada
     Serial.println();
   }
 
-  if(size > artnetChannelConfig) {
-    positionRequest = data[artnetChannelConfig];
-    lastReceivedPosition = data[artnetChannelConfig];
+  if(artnet16BitConfig) {
+    // 16-bit mode: read two consecutive channels (MSB first)
+    if(size > artnetChannelConfig + 1) {
+      positionRequest = ((uint16_t)data[artnetChannelConfig] << 8) | data[artnetChannelConfig + 1];
+      lastReceivedPosition = positionRequest;
+    }
+  }
+  else {
+    // 8-bit mode: read single channel
+    if(size > artnetChannelConfig) {
+      positionRequest = data[artnetChannelConfig];
+      lastReceivedPosition = positionRequest;
+    }
   }
 }
 

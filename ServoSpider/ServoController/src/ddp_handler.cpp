@@ -6,10 +6,11 @@ int ddpServoChannelConfig = 0;
 bool ddpEnabled = false;
 bool ddpEnabledConfig = true;
 bool ddpDebugConfig = false;
+bool ddp16BitConfig = false;
 
 // DDP Data
-uint8_t ddpPositionRequest = 0;
-uint8_t ddpLastReceivedPosition = 0;
+uint16_t ddpPositionRequest = 0;
+uint16_t ddpLastReceivedPosition = 0;
 
 // DDP Statistics
 unsigned long ddpPacketsReceived = 0;
@@ -26,6 +27,7 @@ void initDDP() {
   ddpServoChannelConfig = preferences.getInt("ddpServoChannel", 1);
   ddpEnabledConfig = preferences.getBool("ddpEnabled", true);
   ddpDebugConfig = preferences.getBool("ddpDebug", false);
+  ddp16BitConfig = preferences.getBool("ddp16Bit", false);
   ddpEnabled = ddpEnabledConfig && (ddpServoChannelConfig >= 1);
 
   Serial.println("DDP Configuration:");
@@ -123,32 +125,68 @@ void handleDDP() {
   uint32_t startByte = header.dataOffset;
   uint32_t endByte = startByte + bytesRead - 1;
 
-  // Check if our servo channel falls within this packet's data range
-  if (byteOffset >= startByte && byteOffset <= endByte) {
-    // Calculate offset within this packet's data
-    uint32_t byteOffsetInPacket = byteOffset - startByte;
+  if(ddp16BitConfig) {
+    // 16-bit mode: check if both bytes are in this packet
+    if (byteOffset >= startByte && (byteOffset + 1) <= endByte) {
+      // Calculate offset within this packet's data
+      uint32_t byteOffsetInPacket = byteOffset - startByte;
 
-    // Extract the servo position byte
-    ddpPositionRequest = channelData[byteOffsetInPacket];
-    ddpLastReceivedPosition = ddpPositionRequest;
-    ddpPacketsActedOn++;
+      // Extract the servo position (MSB first)
+      ddpPositionRequest = ((uint16_t)channelData[byteOffsetInPacket] << 8) | channelData[byteOffsetInPacket + 1];
+      ddpLastReceivedPosition = ddpPositionRequest;
+      ddpPacketsActedOn++;
 
-    if (ddpDebugConfig) {
-      Serial.print("  -> Servo channel ");
-      Serial.print(ddpServoChannelConfig);
-      Serial.print(" (byte offset ");
-      Serial.print(byteOffset);
-      Serial.print(") value: ");
-      Serial.println(ddpPositionRequest);
+      if (ddpDebugConfig) {
+        Serial.print("  -> Servo channel ");
+        Serial.print(ddpServoChannelConfig);
+        Serial.print(" (16-bit, byte offset ");
+        Serial.print(byteOffset);
+        Serial.print("-");
+        Serial.print(byteOffset + 1);
+        Serial.print(") value: ");
+        Serial.println(ddpPositionRequest);
+      }
+    }
+    else {
+      if (ddpDebugConfig) {
+        Serial.print("  -> Servo channel ");
+        Serial.print(ddpServoChannelConfig);
+        Serial.print(" (16-bit, byte offset ");
+        Serial.print(byteOffset);
+        Serial.print("-");
+        Serial.print(byteOffset + 1);
+        Serial.println(") not in this packet");
+      }
     }
   }
   else {
-    if (ddpDebugConfig) {
-      Serial.print("  -> Servo channel ");
-      Serial.print(ddpServoChannelConfig);
-      Serial.print(" (byte offset ");
-      Serial.print(byteOffset);
-      Serial.println(") not in this packet");
+    // 8-bit mode: check if our servo channel falls within this packet's data range
+    if (byteOffset >= startByte && byteOffset <= endByte) {
+      // Calculate offset within this packet's data
+      uint32_t byteOffsetInPacket = byteOffset - startByte;
+
+      // Extract the servo position byte
+      ddpPositionRequest = channelData[byteOffsetInPacket];
+      ddpLastReceivedPosition = ddpPositionRequest;
+      ddpPacketsActedOn++;
+
+      if (ddpDebugConfig) {
+        Serial.print("  -> Servo channel ");
+        Serial.print(ddpServoChannelConfig);
+        Serial.print(" (8-bit, byte offset ");
+        Serial.print(byteOffset);
+        Serial.print(") value: ");
+        Serial.println(ddpPositionRequest);
+      }
+    }
+    else {
+      if (ddpDebugConfig) {
+        Serial.print("  -> Servo channel ");
+        Serial.print(ddpServoChannelConfig);
+        Serial.print(" (8-bit, byte offset ");
+        Serial.print(byteOffset);
+        Serial.println(") not in this packet");
+      }
     }
   }
 

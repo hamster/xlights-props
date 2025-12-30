@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <Preferences.h>
 #include <esp_task_wdt.h>
+#include <ESPmDNS.h>
 #include "main.h"
 #include "version.h"
 #include "stepper_handler.h"
@@ -18,8 +19,8 @@
 Preferences preferences;
 
 // Variables for position tracking
-int oldPositionRequest = 0;
-int oldDdpPositionRequest = 0;
+uint16_t oldPositionRequest = 0;
+uint16_t oldDdpPositionRequest = 0;
 float position = 0;
 
 // Uptime tracking
@@ -126,9 +127,17 @@ void setup() {
   // Initialize preferences
   preferences.begin("wifi-config", false);
 
+  // Generate default hostname with MAC address
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  String macSuffix = String(mac[4], HEX) + String(mac[5], HEX);
+  macSuffix.toUpperCase();
+  String defaultHostname = "ServoController-" + macSuffix;
+
   // Load saved credentials
   ssid = preferences.getString("ssid", "");
   password = preferences.getString("password", "");
+  hostname = preferences.getString("hostname", defaultHostname);
 
   // Load static IP configuration
   useStaticIp = preferences.getBool("useStaticIp", false);
@@ -152,6 +161,7 @@ void setup() {
   artnetChannelConfig = preferences.getInt("artnetChannel", 0);
   artnetEnabledConfig = preferences.getBool("artnetEnabled", true);
   artnetDebugConfig = preferences.getBool("artnetDebug", false);
+  artnet16BitConfig = preferences.getBool("artnet16Bit", false);
 
   // Initialize stepper
   initializeStepper();
@@ -163,6 +173,16 @@ void setup() {
     Serial.println(ssid);
     if(connectToWifi()) {
       Serial.println("Successfully connected to WiFi!");
+
+      // Start mDNS
+      if (MDNS.begin(hostname.c_str())) {
+        Serial.print("mDNS responder started: ");
+        Serial.print(hostname);
+        Serial.println(".local");
+        MDNS.addService("http", "tcp", 80);
+      } else {
+        Serial.println("Error starting mDNS");
+      }
     }
     else {
       Serial.print("Could not connect to WiFi network '");
@@ -237,12 +257,13 @@ void loop() {
       // Enabled, homed and not homing, execute the command
       artnetPacketsActedOn++;
 
-      position = calcPosition(positionRequest);
+      position = calcPosition(positionRequest, artnet16BitConfig);
 
       Serial.print("ArtNet: Moving to new position ");
       Serial.print(positionRequest);
       Serial.print(" - ");
-      Serial.print(int((float)((float)positionRequest / 255) * 100));
+      float maxValue = artnet16BitConfig ? 65535.0 : 255.0;
+      Serial.print(int((float)((float)positionRequest / maxValue) * 100));
       Serial.print("% - ");
       Serial.println((int)position);
 
@@ -274,12 +295,13 @@ void loop() {
       // Enabled, homed and not homing, execute the command
       ddpPacketsActedOn++;
 
-      position = calcPosition(positionRequest);
+      position = calcPosition(ddpPositionRequest, ddp16BitConfig);
 
       Serial.print("DDP: Moving to new position ");
       Serial.print(ddpPositionRequest);
       Serial.print(" - ");
-      Serial.print(int((float)((float)ddpPositionRequest / 255) * 100));
+      float maxValue = ddp16BitConfig ? 65535.0 : 255.0;
+      Serial.print(int((float)((float)ddpPositionRequest / maxValue) * 100));
       Serial.print("% - ");
       Serial.println((int)position);
 
@@ -288,8 +310,9 @@ void loop() {
   }
 }
 
-float calcPosition(float positionRequest) {
-  return (float)bottomPosition * ((float)positionRequest / 255);
+float calcPosition(float positionRequest, bool is16Bit) {
+  float maxValue = is16Bit ? 65535.0 : 255.0;
+  return (float)bottomPosition * ((float)positionRequest / maxValue);
 }
 
 void handleSerialCommands() {
@@ -304,6 +327,7 @@ void handleSerialCommands() {
       Serial.println("r  - Reboot device");
       Serial.println("s  - Print connection status");
       Serial.println("w  - Attempt WiFi reconnection");
+      Serial.println("a  - Switch to Access Point mode");
       Serial.println("p  - Print current stepper position");
       Serial.println("f  - Move forward 10 steps");
       Serial.println("b  - Move backward 10 steps");
@@ -327,6 +351,16 @@ void handleSerialCommands() {
           Serial.println("Successfully connected! Disabling AP mode...");
           WiFi.softAPdisconnect(true);
           WiFi.mode(WIFI_STA);
+
+          // Start mDNS
+          if (MDNS.begin(hostname.c_str())) {
+            Serial.print("mDNS responder started: ");
+            Serial.print(hostname);
+            Serial.println(".local");
+            MDNS.addService("http", "tcp", 80);
+          } else {
+            Serial.println("Error starting mDNS");
+          }
         }
         else {
           Serial.println("Connection failed. AP mode remains active.");
@@ -335,6 +369,21 @@ void handleSerialCommands() {
       else {
         Serial.println("No SSID configured. Cannot connect to WiFi.");
       }
+      break;
+    case 'a':
+      Serial.println("Switching to Access Point mode...");
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("Disconnecting from WiFi...");
+        WiFi.disconnect(true);
+      }
+      startAccessPoint();
+      Serial.println("Access Point mode activated");
+      Serial.print("AP SSID: ");
+      Serial.println(getAPName());
+      Serial.print("AP Password: ");
+      Serial.println(ap_password);
+      Serial.print("AP IP: ");
+      Serial.println(WiFi.softAPIP());
       break;
     case 'p':
       Serial.print("Current position: ");

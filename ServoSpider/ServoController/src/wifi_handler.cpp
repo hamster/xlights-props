@@ -10,6 +10,7 @@ const byte DNS_PORT = 53;
 // WiFi credentials
 String ssid = "";
 String password = "";
+String hostname = "";
 
 // Static IP configuration
 bool useStaticIp = false;
@@ -28,6 +29,13 @@ const unsigned long WIFI_TIMEOUT = 10000; // 10 seconds
 // connect to wifi – returns true if successful or false if not
 boolean connectToWifi() {
   WiFi.mode(WIFI_STA);
+
+  // Set hostname
+  if (hostname.length() > 0) {
+    WiFi.setHostname(hostname.c_str());
+    Serial.print("Hostname set to: ");
+    Serial.println(hostname);
+  }
 
   // Configure static IP if enabled
   if (useStaticIp && staticIp.length() > 0) {

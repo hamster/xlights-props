@@ -21,6 +21,7 @@ void handleSaveStepper();
 void handleSaveArtnet();
 void handleConnect();
 void handleReboot();
+void handleResetSettings();
 void handleHoming();
 void handleLocate();
 void handleStatusData();
