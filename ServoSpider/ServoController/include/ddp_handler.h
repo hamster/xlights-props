@@ -6,19 +6,10 @@
 #include <WiFiUdp.h>
 
 // DDP Configuration
-extern int ddpServoChannelConfig;
-extern bool ddpEnabled;
-extern bool ddpEnabledConfig;
-extern bool ddpDebugConfig;
-extern bool ddp16BitConfig;
-
-// DDP Data
-extern uint16_t ddpPositionRequest;
-extern uint16_t ddpLastReceivedPosition;
+// Stepper is always on channel 1 (8-bit) or channels 1-2 (16-bit)
 
 // DDP Statistics
 extern unsigned long ddpPacketsReceived;
-extern unsigned long ddpPacketsActedOn;
 
 // DDP Protocol Constants
 #define DDP_PORT 4048

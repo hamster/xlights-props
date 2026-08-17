@@ -1,0 +1,496 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Servo Controller</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='15' fill='%23333'/%3E%3Cellipse cx='45' cy='45' rx='3' ry='4' fill='%23ff0000'/%3E%3Cellipse cx='55' cy='45' rx='3' ry='4' fill='%23ff0000'/%3E%3Cline x1='35' y1='40' x2='15' y2='25' stroke='%23333' stroke-width='3'/%3E%3Cline x1='30' y1='50' x2='5' y2='45' stroke='%23333' stroke-width='3'/%3E%3Cline x1='32' y1='60' x2='10' y2='70' stroke='%23333' stroke-width='3'/%3E%3Cline x1='35' y1='68' x2='15' y2='85' stroke='%23333' stroke-width='3'/%3E%3Cline x1='65' y1='40' x2='85' y2='25' stroke='%23333' stroke-width='3'/%3E%3Cline x1='70' y1='50' x2='95' y2='45' stroke='%23333' stroke-width='3'/%3E%3Cline x1='68' y1='60' x2='90' y2='70' stroke='%23333' stroke-width='3'/%3E%3Cline x1='65' y1='68' x2='85' y2='85' stroke='%23333' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js"></script>
+</head>
+<body>
+  <!-- Full-Width Banner Header -->
+  <div class="banner-header">
+    <div class="banner-content">
+      <!-- Spider Icon (clickable for locate) -->
+      <div id="banner-spider" class="banner-spider" onclick="toggleLocate()" title="Click to locate this device (LED will blink SOS)">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="60" height="60" class="spider-svg">
+          <g transform="translate(50, 50)">
+            <!-- Body -->
+            <circle cx="0" cy="0" r="14" class="spider-body" fill="#00d4ff"/>
+            <circle cx="0" cy="-9" r="9" class="spider-head" fill="#00d4ff"/>
+            <!-- Legs (4 pairs) -->
+            <!-- Left legs -->
+            <path d="M -12,-8 L -25,-18 L -32,-15" class="spider-leg" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M -12,-2 L -28,-5 L -35,-2" class="spider-leg" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M -12,4 L -28,8 L -35,12" class="spider-leg" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M -12,10 L -25,18 L -32,22" class="spider-leg" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <!-- Right legs -->
+            <path d="M 12,-8 L 25,-18 L 32,-15" class="spider-leg" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M 12,-2 L 28,-5 L 35,-2" class="spider-leg" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M 12,4 L 28,8 L 35,12" class="spider-leg" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M 12,10 L 25,18 L 32,22" class="spider-leg" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <!-- Eyes -->
+            <circle cx="-4" cy="-12" r="2" class="spider-eyes" fill="#ff0000"/>
+            <circle cx="4" cy="-12" r="2" class="spider-eyes" fill="#ff0000"/>
+          </g>
+        </svg>
+      </div>
+
+      <div class="banner-title">
+        Servo Controller
+        <div class="banner-hostname" id="hostname-display">{{HOSTNAME}}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Blocky Tab Headers -->
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('status-tab')">Status</button>
+    <button class="tab" onclick="showTab('settings-tab')">Settings</button>
+    <button class="tab" onclick="showTab('update-tab')">OTA Update</button>
+  </div>
+
+  <div class="container">
+    <div class="content-wrapper">
+
+    <!-- Status Tab -->
+    <div id="status-tab" class="tab-content active">
+      <div class="status-grid">
+      <div class="status-box">
+        <h4>WiFi Status</h4>
+        <div id="wifi-status-text" class="status {{STATUS_CLASS}}">
+          {{STATUS_TEXT}}
+        </div>
+        <p><strong>Hostname:</strong> <span id="wifi-hostname">{{HOSTNAME}}</span></p>
+        <p><strong>Mode:</strong> <span id="wifi-mode">{{WIFI_MODE}}</span></p>
+        <p><strong>Network:</strong> <span id="wifi-network">{{WIFI_NETWORK}}</span></p>
+        <p><strong>IP Type:</strong> <span id="ip-type">N/A</span></p>
+        <p><strong>IP Address:</strong> <span id="wifi-ip">{{WIFI_IP}}</span></p>
+        <p><strong>Subnet Mask:</strong> <span id="wifi-subnet">N/A</span></p>
+        <p><strong>Gateway:</strong> <span id="wifi-gateway">N/A</span></p>
+        <p><strong>Uptime:</strong> <span id="uptime">0d 0h 0m 0s</span></p>
+      </div>
+
+      <div class="status-box">
+        <h4>Stepper Status</h4>
+        <div id="homed-status-text" class="status {{HOMED_CLASS}}">
+          {{HOMED_TEXT}}
+        </div>
+        <p><strong>Switch:</strong> <span id="homing-switch-status" class="status">Not Tripped</span></p>
+        <p><strong>Position Command:</strong> <span id="position-command">0</span> (<span id="position-command-percent">0.0</span>%)</p>
+        <p><strong>Current Position:</strong> <span id="current-position">{{CURRENT_POSITION}}</span> steps (<span id="position-percent">{{POSITION_PERCENT}}</span>%)</p>
+        <p><strong>Bottom Position:</strong> <span id="bottom-position">{{BOTTOM_POSITION}}</span> steps</p>
+        <p><strong>Auto Home on Boot:</strong> <span id="auto-home-on-boot">{{AUTO_HOME_STATUS}}</span></p>
+
+        <button class="collapsible" onclick="toggleCollapsible(this)">Manual Stepper Control</button>
+        <div class="collapsible-content">
+          <div class="collapsible-content-inner">
+            <h4 style="margin-top: 0;">Position Control</h4>
+
+            <div class="form-group">
+              <label for="setPositionInputStatus">Move to Position:</label>
+              <div class="position-input-group">
+                <input type="number" id="setPositionInputStatus" name="setPositionInputStatus" value="0" min="0">
+                <div class="position-controls">
+                  <div class="position-mode-selector">
+                    <label>
+                      <input type="radio" name="positionModeStatus" value="steps" checked>
+                      Steps
+                    </label>
+                    <label>
+                      <input type="radio" name="positionModeStatus" value="percent">
+                      Percent
+                    </label>
+                  </div>
+                  <button onclick="setPositionStatus()" class="btn-warning">Go</button>
+                </div>
+              </div>
+            </div>
+
+            <h4>Incremental Movement</h4>
+
+            <div class="form-group">
+              <label for="stepAmountStatus">Step Amount:</label>
+              <input type="number" id="stepAmountStatus" name="stepAmountStatus" value="50" min="1" max="10000">
+            </div>
+
+            <div class="button-row">
+              <button onclick="moveStepsStatus('backward')" class="btn-warning">&larr; Move Backward</button>
+              <button onclick="moveStepsStatus('forward')" class="btn-warning">Move Forward &rarr;</button>
+            </div>
+
+            <button onclick="homeServo()" class="btn-success">Home Servo</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="status-box">
+        <h4>Protocol Status</h4>
+        <p><strong>Protocol:</strong> <span id="protocol-type">{{PROTOCOL_TYPE}}</span></p>
+        <p><strong>Stepper Mode:</strong> <span id="protocol-mode">8-bit</span></p>
+        <p><strong>Total Channels:</strong> <span id="total-channels">0</span></p>
+        <p><strong>Packets Received:</strong> <span id="protocol-packets-received">0</span></p>
+      </div>
+
+      <div class="status-box">
+        <h4>LED Status</h4>
+        <div style="margin-bottom: 10px;">
+          <label style="font-size: 12px; cursor: pointer;">
+            <input type="checkbox" id="led-preview-enabled" onchange="toggleLedPreview()">
+            Show Pixels
+          </label>
+        </div>
+        <div id="led-preview-container" class="led-preview-box" style="margin-bottom: 10px; max-height: 300px; overflow-y: auto; overflow-x: hidden; display: none; padding: 5px; border-radius: 4px;">
+          <div id="led-preview" style="display: flex; flex-wrap: wrap; gap: 1px;"></div>
+        </div>
+        <p><strong>Configured Pixels:</strong> <span id="led-pixel-count">0</span></p>
+        <p><strong>Received Pixels:</strong> <span id="led-pixels-received">0</span></p>
+      </div>
+      </div>
+    </div>
+
+    <!-- Settings Tab -->
+    <div id="settings-tab" class="tab-content">
+      <div class="settings-grid">
+      <!-- WiFi & Access Point Configuration Box -->
+      <div class="status-box">
+        <h4>WiFi & Access Point Configuration</h4>
+
+        <form onsubmit="return handleFormSubmit(event, '/save-wifi')">
+          <h3>WiFi Client Settings</h3>
+          <div class="form-group">
+            <label for="hostname">Hostname:</label>
+            <input type="text" id="hostname" name="hostname" value="{{HOSTNAME}}" required pattern="[a-zA-Z0-9\-]+" title="Only letters, numbers, and hyphens allowed">
+          </div>
+
+          <div class="form-group">
+            <label for="ssid">WiFi Network (SSID):</label>
+            <input type="text" id="ssid" name="ssid" value="{{CURRENT_SSID}}" required>
+          </div>
+
+          <div class="form-group">
+            <label for="password">Password:</label>
+            <div class="password-wrapper">
+              <input type="password" id="password" name="password" placeholder="Enter WiFi password">
+              <button type="button" class="password-toggle" id="passwordToggle" onclick="togglePassword('password', 'passwordToggle')" title="Show password">
+                <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label style="display: block; margin-bottom: 8px;">
+              <input type="radio" id="useDhcp" name="ipMode" value="dhcp" {{DHCP_CHECKED}} onchange="toggleStaticIpFields()">
+              Use DHCP (Automatic)
+            </label>
+            <label style="display: block;">
+              <input type="radio" id="useStatic" name="ipMode" value="static" {{STATIC_CHECKED}} onchange="toggleStaticIpFields()">
+              Use Static IP
+            </label>
+          </div>
+
+          <div id="staticIpFields" style="display: none;">
+            <div class="form-group">
+              <label for="staticIp">IP Address:</label>
+              <input type="text" id="staticIp" name="staticIp" value="{{STATIC_IP}}" placeholder="192.168.1.100">
+            </div>
+
+            <div class="form-group">
+              <label for="staticGateway">Gateway:</label>
+              <input type="text" id="staticGateway" name="staticGateway" value="{{STATIC_GATEWAY}}" placeholder="192.168.1.1">
+            </div>
+
+            <div class="form-group">
+              <label for="staticSubnet">Subnet Mask:</label>
+              <input type="text" id="staticSubnet" name="staticSubnet" value="{{STATIC_SUBNET}}" placeholder="255.255.255.0">
+            </div>
+          </div>
+
+          <button type="submit" class="btn-primary">Save WiFi Settings</button>
+        </form>
+
+        <div style="margin: 10px 0;">
+          <button onclick="location.href='/connect'" class="btn-success">Connect Now</button>
+        </div>
+
+        <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;">
+
+        <form onsubmit="return handleFormSubmit(event, '/save-ap')">
+          <h3>Access Point Settings</h3>
+          <div class="form-group">
+            <label for="apSsid">AP Name:</label>
+            <input type="text" id="apSsid" name="apSsid" value="{{AP_SSID}}" required>
+          </div>
+
+          <div class="form-group">
+            <label for="apPassword">AP Password:</label>
+            <div class="password-wrapper">
+              <input type="password" id="apPassword" name="apPassword" value="{{AP_PASSWORD}}" required minlength="8">
+              <button type="button" class="password-toggle" id="apPasswordToggle" onclick="togglePassword('apPassword', 'apPasswordToggle')" title="Show password">
+                <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="apAppendMac">
+              <input type="checkbox" id="apAppendMac" name="apAppendMac" {{AP_APPEND_MAC_CHECKED}}>
+              Append MAC Address (last 4 digits)
+            </label>
+          </div>
+
+          <button type="submit" class="btn-primary">Save AP Settings</button>
+        </form>
+      </div>
+
+      <!-- Stepper Configuration Box -->
+      <div class="status-box">
+        <h4>Stepper Configuration</h4>
+
+        <form onsubmit="return handleFormSubmit(event, '/save-stepper')">
+          <div class="form-group">
+            <label for="stepperSpeed">Stepper Speed (Hz):</label>
+            <input type="number" id="stepperSpeed" name="stepperSpeed" value="{{STEPPER_SPEED}}" min="100" max="50000" required>
+          </div>
+
+          <div class="form-group">
+            <label for="stepperAccel">Stepper Acceleration (steps/s&sup2;):</label>
+            <input type="number" id="stepperAccel" name="stepperAccel" value="{{STEPPER_ACCEL}}" min="0" max="1000000" required>
+          </div>
+
+          <div class="form-group">
+            <label for="jumpStart">Jump Start (steps):</label>
+            <input type="number" id="jumpStart" name="jumpStart" value="{{JUMP_START}}" min="0" max="10000" required>
+          </div>
+
+          <div class="form-group">
+            <label for="autoHomeOnBoot">
+              <input type="checkbox" id="autoHomeOnBoot" name="autoHomeOnBoot" {{AUTO_HOME_ON_BOOT_CHECKED}}>
+              Auto Home on Bootup
+            </label>
+          </div>
+
+          <button type="submit" class="btn-primary">Save Stepper Settings</button>
+        </form>
+
+        <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;">
+
+        <h3>Stepper Control</h3>
+
+        <div class="form-group">
+          <label for="setPositionInput">Set Position:</label>
+          <div class="position-input-group">
+            <input type="number" id="setPositionInput" name="setPositionInput" value="0" min="0">
+            <div class="position-controls">
+              <div class="position-mode-selector">
+                <label>
+                  <input type="radio" name="positionMode" value="steps" checked>
+                  Steps
+                </label>
+                <label>
+                  <input type="radio" name="positionMode" value="percent">
+                  Percent
+                </label>
+              </div>
+              <button onclick="setPosition()" class="btn-warning">Go</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="stepAmount">Step Amount:</label>
+          <input type="number" id="stepAmount" name="stepAmount" value="50" min="1" max="10000">
+        </div>
+
+        <div class="button-row">
+          <button onclick="moveSteps('backward')" class="btn-warning">&larr; Move Backward</button>
+          <button onclick="moveSteps('forward')" class="btn-warning">Move Forward &rarr;</button>
+        </div>
+
+        <button onclick="homeServo()" class="btn-success">Home Servo</button>
+      </div>
+
+      <!-- Protocol Configuration Box -->
+      <div class="status-box">
+        <h4>Protocol Configuration</h4>
+
+        <form onsubmit="return handleFormSubmit(event, '/save-protocol')">
+          <div class="form-group">
+            <label for="protocol">Protocol:</label>
+            <select id="protocol" name="protocol" onchange="toggleProtocolConfig()" style="width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box; border: 2px solid #ddd; border-radius: 4px;">
+              <option value="ddp" {{DDP_SELECTED}}>DDP</option>
+              <option value="artnet" {{ARTNET_SELECTED}}>ArtNet</option>
+            </select>
+          </div>
+
+          <!-- DDP Configuration -->
+          <div id="ddpConfig" style="display: none;">
+            <h4 style="margin-top: 20px; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #ddd;">DDP Configuration</h4>
+            <p style="color: #666; font-style: italic;">No additional configuration required for DDP.</p>
+          </div>
+
+          <!-- ArtNet Configuration -->
+          <div id="artnetConfig" style="display: none;">
+            <h4 style="margin-top: 20px; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #ddd;">ArtNet Configuration</h4>
+
+            <div class="form-group">
+              <label for="artnetUniverse">Start Universe:</label>
+              <input type="number" id="artnetUniverse" name="artnetUniverse" value="{{ARTNET_UNIVERSE}}" min="0" max="32767" required>
+            </div>
+
+            <div class="form-group">
+              <label for="artnetChannelsPerUniverse">Channels per Universe:</label>
+              <input type="number" id="artnetChannelsPerUniverse" name="artnetChannelsPerUniverse" value="{{ARTNET_CHANNELS_PER_UNIVERSE}}" min="1" max="512" required>
+            </div>
+          </div>
+
+          <hr style="margin: 20px 0; border: none; border-top: 1px solid #ddd;">
+
+          <h4 style="margin-bottom: 15px;">Common Settings</h4>
+
+          <div class="form-group">
+            <label for="stepperControl">
+              <input type="checkbox" id="stepperControl" name="stepperControl" {{STEPPER_CONTROL_CHECKED}} onchange="toggleStepperOptions()">
+              Enable Stepper Control (uses channel 1)
+            </label>
+          </div>
+
+          <div class="form-group" id="control16BitGroup">
+            <label for="control16Bit">
+              <input type="checkbox" id="control16Bit" name="control16Bit" {{CONTROL_16BIT_CHECKED}}>
+              16-bit Stepper Control (uses channels 1-2)
+            </label>
+          </div>
+
+          <div class="form-group" id="stepperBlankTimeGroup">
+            <label for="stepperBlankTime">Stepper Blank Time (seconds, 0=disabled):</label>
+            <input type="number" id="stepperBlankTime" name="stepperBlankTime" value="{{STEPPER_BLANK_TIME}}" min="0" max="3600" required>
+          </div>
+
+          <div class="form-group">
+            <label for="protocolDebug">
+              <input type="checkbox" id="protocolDebug" name="protocolDebug" {{PROTOCOL_DEBUG_CHECKED}}>
+              Enable Serial Debug Output
+            </label>
+          </div>
+
+          <div class="form-group">
+            <label for="ledBlankTime">LED Blank Time (seconds, 0=disabled):</label>
+            <input type="number" id="ledBlankTime" name="ledBlankTime" value="{{LED_BLANK_TIME}}" min="0" max="3600" required>
+          </div>
+
+          <button type="submit" class="btn-primary">Save Protocol Settings</button>
+        </form>
+      </div>
+
+      <!-- LED Configuration Box -->
+      <div class="status-box">
+        <h4>LED Configuration</h4>
+
+        <form onsubmit="return handleFormSubmit(event, '/save-led')">
+          <div class="form-group">
+            <label for="ledPixelCount">Pixel Count:</label>
+            <input type="number" id="ledPixelCount" name="ledPixelCount" value="{{LED_PIXEL_COUNT}}" min="0" max="1000" required>
+          </div>
+
+          <div class="form-group">
+            <label for="ledColorOrder">Color Order:</label>
+            <select id="ledColorOrder" name="ledColorOrder" style="width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box; border: 2px solid #ddd; border-radius: 4px;">
+              <option value="RGB" {{LED_ORDER_RGB}}>RGB</option>
+              <option value="RBG" {{LED_ORDER_RBG}}>RBG</option>
+              <option value="GRB" {{LED_ORDER_GRB}}>GRB</option>
+              <option value="GBR" {{LED_ORDER_GBR}}>GBR</option>
+              <option value="BRG" {{LED_ORDER_BRG}}>BRG</option>
+              <option value="BGR" {{LED_ORDER_BGR}}>BGR</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="ledGamma">Gamma Value:</label>
+            <input type="number" id="ledGamma" name="ledGamma" value="{{LED_GAMMA}}" min="0.1" max="5.0" step="0.1" required>
+          </div>
+
+          <div class="form-group">
+            <label for="ledBrightness">Brightness (%):</label>
+            <input type="number" id="ledBrightness" name="ledBrightness" value="{{LED_BRIGHTNESS}}" min="0" max="100" required>
+          </div>
+
+          <div class="form-group">
+            <label for="ledStartNullPixels">Start Null Pixels:</label>
+            <input type="number" id="ledStartNullPixels" name="ledStartNullPixels" value="{{LED_START_NULL}}" min="0" max="100" required>
+          </div>
+
+          <div class="form-group">
+            <label for="ledEndNullPixels">End Null Pixels:</label>
+            <input type="number" id="ledEndNullPixels" name="ledEndNullPixels" value="{{LED_END_NULL}}" min="0" max="100" required>
+          </div>
+
+          <button type="submit" class="btn-primary">Save LED Settings</button>
+        </form>
+      </div>
+
+      <!-- System Control Box -->
+      <div class="status-box">
+        <h4>System Control</h4>
+        <button onclick="rebootDevice()" style="width: 100%; margin-bottom: 10px;" class="btn-danger">Reboot Device</button>
+        <button onclick="resetSettings()" style="width: 100%;" class="btn-danger">Reset Settings</button>
+      </div>
+      </div>
+    </div>
+
+    <!-- OTA Update Tab -->
+    <div id="update-tab" class="tab-content">
+      <div class="status-box" style="max-width: 600px; margin: 0 auto;">
+        <h4>Firmware Update (OTA)</h4>
+        <p style="color: #666; margin-bottom: 20px;">
+          Upload a new firmware.bin file to update the device. The device will automatically reboot after a successful update.
+        </p>
+
+        <div style="background-color: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 15px; margin-bottom: 20px;">
+          <strong style="color: #856404;">&#9888; Warning:</strong>
+          <ul style="margin: 10px 0 0 20px; color: #856404;">
+            <li>Do not disconnect power during the update</li>
+            <li>Make sure you are uploading a valid firmware.bin file</li>
+            <li>The update process may take up to 2 minutes</li>
+            <li>The device will reboot automatically when complete</li>
+          </ul>
+        </div>
+
+        <form id="otaForm" method="POST" action="/update" enctype="multipart/form-data">
+          <div class="form-group">
+            <label for="firmwareFile">Select Firmware File (.bin):</label>
+            <input type="file" id="firmwareFile" name="firmware" accept=".bin" required style="width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box; border: 2px solid #ddd; border-radius: 4px;">
+          </div>
+
+          <button type="submit" class="btn-primary" id="updateButton">Upload Firmware</button>
+        </form>
+
+        <div id="updateProgress" style="display: none; margin-top: 20px;">
+          <div style="background-color: #f0f0f0; border-radius: 4px; height: 30px; overflow: hidden;">
+            <div id="progressBar" style="background-color: #007bff; height: 100%; width: 0%; transition: width 0.3s; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">
+              <span id="progressText">0%</span>
+            </div>
+          </div>
+          <p id="updateStatus" style="text-align: center; margin-top: 10px; font-weight: bold;"></p>
+        </div>
+
+        <!-- Success Banner -->
+        <div id="successBanner" style="display: none; margin-top: 20px; padding: 20px; background: linear-gradient(135deg, #28a745 0%, #20c997 100%); border-radius: 8px; text-align: center; color: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <h3 style="margin: 0 0 10px 0; font-size: 24px;">&#x2713; Update Successful!</h3>
+          <p style="margin: 0 0 5px 0; font-size: 16px;">Device is rebooting with new firmware</p>
+          <p style="margin: 0; font-size: 14px; opacity: 0.9;">Page will refresh in <span id="countdown" style="font-weight: bold; font-size: 18px;">10</span> seconds...</p>
+        </div>
+      </div>
+    </div>
+
+    <p style="text-align: center; color: #6a7a8a; font-size: 12px; margin-top: 20px; padding-bottom: 10px;">
+      Version {{VERSION}} | Built: {{BUILD_DATE}} {{BUILD_TIME}}
+    </p>
+    </div>
+  </div>
+</body>
+</html>

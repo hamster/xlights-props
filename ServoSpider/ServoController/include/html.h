@@ -4,27 +4,29 @@ const char* htmlPage = R"rawliteral(
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>Servo Controller</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='15' fill='%23333'/%3E%3Cellipse cx='45' cy='45' rx='3' ry='4' fill='%23ff0000'/%3E%3Cellipse cx='55' cy='45' rx='3' ry='4' fill='%23ff0000'/%3E%3Cline x1='35' y1='40' x2='15' y2='25' stroke='%23333' stroke-width='3'/%3E%3Cline x1='30' y1='50' x2='5' y2='45' stroke='%23333' stroke-width='3'/%3E%3Cline x1='32' y1='60' x2='10' y2='70' stroke='%23333' stroke-width='3'/%3E%3Cline x1='35' y1='68' x2='15' y2='85' stroke='%23333' stroke-width='3'/%3E%3Cline x1='65' y1='40' x2='85' y2='25' stroke='%23333' stroke-width='3'/%3E%3Cline x1='70' y1='50' x2='95' y2='45' stroke='%23333' stroke-width='3'/%3E%3Cline x1='68' y1='60' x2='90' y2='70' stroke='%23333' stroke-width='3'/%3E%3Cline x1='65' y1='68' x2='85' y2='85' stroke='%23333' stroke-width='3'/%3E%3C/svg%3E">
   <style>
-    body {
+body {
       font-family: Arial, sans-serif;
-      max-width: 600px;
-      margin: 50px auto;
-      padding: 20px;
-      background-color: #f0f0f0;
+      margin: 0;
+      padding: 0;
+      background: linear-gradient(135deg, #0f1929 0%, #1a2332 100%);
+      min-height: 100vh;
+      color: #e0e0e0;
     }
     .container {
-      background-color: white;
-      padding: 30px;
-      border-radius: 10px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      background-color: transparent;
+      padding: 0;
+      border-radius: 0;
+      box-shadow: none;
+      max-width: 100%;
     }
     /* Desktop responsive layout */
     @media (min-width: 1024px) {
-      body {
-        max-width: 1400px;
-      }
       .status-grid {
         display: grid;
         grid-template-columns: repeat(4, 1fr);
@@ -43,48 +45,132 @@ const char* htmlPage = R"rawliteral(
         margin: 0;
       }
     }
+    .content-wrapper {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 20px;
+    }
     h1 {
-      color: #333;
+      color: #ffffff;
       text-align: center;
       margin: 0;
     }
     h3 {
-      color: #555;
+      color: #c0c0c0;
       margin-top: 0;
       margin-bottom: 15px;
     }
+    .banner-header {
+      width: 100%;
+      background: linear-gradient(90deg, #1a1a2e 0%, #16213e 100%);
+      border-bottom: 3px solid #00d4ff;
+      padding: 0;
+      margin: 0;
+      position: relative;
+      height: 100px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .banner-content {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      max-width: 1400px;
+      width: 100%;
+      padding: 0 40px;
+    }
+    .banner-title {
+      font-size: 32px;
+      font-weight: bold;
+      color: #ffffff;
+      margin: 0;
+      flex: 1;
+    }
+    .banner-hostname {
+      font-size: 16px;
+      color: #a0a0a0;
+      font-weight: normal;
+    }
+    .banner-spider {
+      cursor: pointer;
+      display: inline-block;
+      width: 60px;
+      height: 60px;
+    }
+    .banner-spider svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+      transition: transform 0.3s;
+      transform-origin: center center;
+    }
+    .banner-spider:hover svg {
+      transform: scale(1.15);
+    }
+    .banner-spider.active svg {
+      animation: spiderDance 0.3s infinite alternate;
+      transform-origin: center center;
+    }
+    .banner-spider .spider-body {
+      transition: fill 0.3s;
+    }
+    .banner-spider .spider-head {
+      transition: fill 0.3s;
+    }
+    .banner-spider .spider-eyes {
+      transition: fill 0.3s;
+    }
+    .banner-spider.active .spider-body,
+    .banner-spider.active .spider-head {
+      animation: colorFlash 0.5s infinite alternate;
+    }
+    .banner-spider.active .spider-eyes {
+      animation: eyeFlash 0.5s infinite alternate;
+    }
+    .banner-spider.active .spider-leg {
+      animation: legFlash 0.5s infinite alternate;
+    }
+    @keyframes legFlash {
+      0% {
+        stroke: #dc3545;
+      }
+      100% {
+        stroke: #28a745;
+      }
+    }
     .tabs {
       display: flex;
-      gap: 5px;
+      gap: 0;
       margin-bottom: 0;
-      border-bottom: 2px solid #007bff;
+      background: #0a0f1a;
+      padding: 0 20px;
+      max-width: 1400px;
+      margin: 0 auto;
     }
     .tab {
-      flex: 1;
-      padding: 12px 20px;
+      padding: 18px 30px;
       text-align: center;
       cursor: pointer;
-      background-color: #e9ecef;
-      border: 2px solid #ddd;
-      border-bottom: none;
-      border-radius: 8px 8px 0 0;
+      background-color: #1a2332;
+      border: none;
+      border-radius: 0;
       font-size: 16px;
       font-weight: bold;
-      color: #666;
-      transition: all 0.3s;
-      margin-bottom: -2px;
+      color: #8a9ba8;
+      transition: all 0.2s;
+      border-right: 1px solid #0a0f1a;
+      position: relative;
     }
     .tab:hover {
-      background-color: #dee2e6;
-      color: #333;
+      background-color: #243447;
+      color: #c0d0e0;
     }
     .tab.active {
-      background-color: white;
-      color: #007bff;
-      border: 2px solid #007bff;
-      border-bottom: 2px solid white;
+      background-color: #1e2d3d;
+      color: #00d4ff;
+      border-bottom: 3px solid #00d4ff;
       position: relative;
-      z-index: 1;
     }
     .tab-content {
       display: none;
@@ -93,26 +179,28 @@ const char* htmlPage = R"rawliteral(
       display: block;
     }
     .status-box {
-      padding: 15px;
+      padding: 20px;
       margin: 15px 0;
-      border-radius: 5px;
-      background-color: #f8f9fa;
-      border-left: 4px solid #007bff;
+      border-radius: 8px;
+      background-color: #1a2332;
+      border-left: 4px solid #00d4ff;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
     .status-box h4 {
       margin-top: 0;
-      color: #333;
+      color: #ffffff;
+      font-size: 18px;
     }
     .status-box p {
       margin: 8px 0;
-      color: #555;
+      color: #b0c0d0;
     }
     .status-box strong {
-      color: #333;
+      color: #e0e0e0;
     }
     .status {
-      padding: 10px;
-      margin: 20px 0;
+      padding: 8px 10px;
+      margin: 10px 0;
       border-radius: 5px;
       text-align: center;
       font-weight: bold;
@@ -138,8 +226,25 @@ const char* htmlPage = R"rawliteral(
       padding: 12px;
       margin: 8px 0;
       box-sizing: border-box;
-      border: 2px solid #ddd;
+      border: 2px solid #2a3a4a;
       border-radius: 4px;
+      background-color: #0f1929;
+      color: #e0e0e0;
+    }
+    input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:focus {
+      outline: none;
+      border-color: #00d4ff;
+      background-color: #152030;
+    }
+    select {
+      background-color: #0f1929;
+      color: #e0e0e0;
+      border: 2px solid #2a3a4a;
+    }
+    select:focus {
+      outline: none;
+      border-color: #00d4ff;
+      background-color: #152030;
     }
     input[type="checkbox"] {
       width: 20px;
@@ -225,8 +330,8 @@ const char* htmlPage = R"rawliteral(
       flex: 1;
     }
     .collapsible {
-      background-color: #f0f0f0;
-      color: #333;
+      background-color: #243447;
+      color: #e0e0e0;
       cursor: pointer;
       padding: 12px;
       width: 100%;
@@ -240,7 +345,7 @@ const char* htmlPage = R"rawliteral(
       transition: background-color 0.3s;
     }
     .collapsible:hover {
-      background-color: #e0e0e0;
+      background-color: #2d4158;
     }
     .collapsible:after {
       content: '\25BC';
@@ -255,12 +360,13 @@ const char* htmlPage = R"rawliteral(
       max-height: 0;
       overflow: hidden;
       transition: max-height 0.3s ease-out;
-      background-color: #f8f9fa;
+      background-color: #1a2332;
       border-radius: 4px;
       margin-top: 5px;
     }
     .collapsible-content-inner {
       padding: 15px;
+      color: #b0c0d0;
     }
     .notification {
       position: fixed;
@@ -331,42 +437,10 @@ const char* htmlPage = R"rawliteral(
     }
     label {
       font-weight: bold;
-      color: #555;
+      color: #b0c0d0;
     }
     .header-container {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 15px;
-      margin-bottom: 20px;
-    }
-    .locate-indicator {
-      width: 40px;
-      height: 40px;
-      cursor: pointer;
-      transition: transform 0.3s;
-    }
-    .locate-indicator:hover {
-      transform: scale(1.15);
-    }
-    .locate-indicator.active {
-      animation: spiderDance 0.3s infinite alternate;
-    }
-    .locate-indicator svg {
-      width: 100%;
-      height: 100%;
-    }
-    .locate-indicator .spider-body {
-      transition: fill 0.3s;
-    }
-    .locate-indicator .spider-eyes {
-      transition: fill 0.3s;
-    }
-    .locate-indicator.active .spider-body {
-      animation: colorFlash 0.5s infinite alternate;
-    }
-    .locate-indicator.active .spider-eyes {
-      animation: eyeFlash 0.5s infinite alternate;
+      display: none;
     }
     @keyframes spiderDance {
       0% {
@@ -392,9 +466,17 @@ const char* htmlPage = R"rawliteral(
         fill: #00ff00;
       }
     }
+    hr {
+      border: none;
+      border-top: 1px solid #2a3a4a;
+    }
+    .led-preview-box {
+      border: 1px solid #2a3a4a;
+      background: #0f1929;
+    }
   </style>
   <script>
-    function showNotification(message, isSuccess) {
+function showNotification(message, isSuccess) {
       var notification = document.createElement('div');
       notification.className = 'notification ' + (isSuccess ? 'success' : 'error');
       notification.textContent = message;
@@ -404,6 +486,54 @@ const char* htmlPage = R"rawliteral(
         notification.remove();
       }, 3000);
     }
+
+    function toggleStepperOptions() {
+      var stepperControlChecked = document.getElementById('stepperControl').checked;
+      document.getElementById('control16BitGroup').style.display = stepperControlChecked ? 'block' : 'none';
+      document.getElementById('stepperBlankTimeGroup').style.display = stepperControlChecked ? 'block' : 'none';
+    }
+
+    // LED preview toggle
+    var ledPreviewEnabled = false;
+    function toggleLedPreview() {
+      ledPreviewEnabled = document.getElementById('led-preview-enabled').checked;
+      document.getElementById('led-preview-container').style.display = ledPreviewEnabled ? 'block' : 'none';
+      if (!ledPreviewEnabled) {
+        document.getElementById('led-preview').innerHTML = '';
+      } else {
+        // Fetch immediately when enabled
+        fetchLedPreview();
+      }
+    }
+
+    function fetchLedPreview() {
+      fetch('/led-preview')
+        .then(response => response.json())
+        .then(data => {
+          var previewContainer = document.getElementById('led-preview');
+          // New compact format: hex string "RRGGBBRRGGBB..." (6 chars per pixel)
+          if (data.ledPreview && data.ledPreview.length > 0) {
+            var html = '';
+            var hexStr = data.ledPreview;
+            // Each pixel is 6 hex chars (RRGGBB)
+            for (var i = 0; i < hexStr.length; i += 6) {
+              var color = '#' + hexStr.substr(i, 6);
+              html += '<div style="width:6px;height:6px;background:' + color + ';"></div>';
+            }
+            previewContainer.innerHTML = html;
+          } else {
+            previewContainer.innerHTML = '<span style="color:#666;font-size:12px;">No LED data</span>';
+          }
+        })
+        .catch(error => {
+          console.log('LED preview fetch error:', error);
+        });
+    }
+
+    // Initialize stepper options visibility on page load
+    document.addEventListener('DOMContentLoaded', function() {
+      toggleStepperOptions();
+    });
 
     function handleFormSubmit(event, url) {
       event.preventDefault();
@@ -496,9 +626,24 @@ const char* htmlPage = R"rawliteral(
       staticIpFields.style.display = useStatic.checked ? "block" : "none";
     }
 
-    // Initialize static IP fields visibility on page load
+    function toggleProtocolConfig() {
+      var protocol = document.getElementById("protocol").value;
+      var ddpConfig = document.getElementById("ddpConfig");
+      var artnetConfig = document.getElementById("artnetConfig");
+
+      if (protocol === "ddp") {
+        ddpConfig.style.display = "block";
+        artnetConfig.style.display = "none";
+      } else {
+        ddpConfig.style.display = "none";
+        artnetConfig.style.display = "block";
+      }
+    }
+
+    // Initialize fields visibility on page load
     window.addEventListener('load', function() {
       toggleStaticIpFields();
+      toggleProtocolConfig();
     });
 
     function moveStepsStatus(direction) {
@@ -568,34 +713,36 @@ const char* htmlPage = R"rawliteral(
         .then(response => response.json())
         .then(data => {
           if (data.success) {
-            alert(data.message);
+            showNotification(data.message, true);
           } else {
-            alert('Homing failed: ' + data.message);
+            showNotification('Homing failed: ' + data.message, false);
           }
         })
         .catch(error => {
-          alert('Error starting homing: ' + error);
+          showNotification('Error starting homing: ' + error, false);
         });
     }
 
     var locateModeActive = false;
     function toggleLocate() {
       locateModeActive = !locateModeActive;
-      var indicator = document.getElementById('locate-indicator');
+      var bannerSpider = document.getElementById('banner-spider');
 
       fetch('/locate?enable=' + locateModeActive)
         .then(response => response.json())
         .then(data => {
           if (data.locateMode) {
-            indicator.classList.add('active');
+            bannerSpider.classList.add('active');
             console.log('Locate mode enabled - LED showing SOS');
           } else {
-            indicator.classList.remove('active');
+            bannerSpider.classList.remove('active');
             console.log('Locate mode disabled');
           }
         })
         .catch(error => {
+          // If fetch fails (e.g., in preview mode), just toggle the class for visual testing
           console.log('Error toggling locate mode: ' + error);
+          bannerSpider.classList.toggle('active');
         });
     }
 
@@ -699,9 +846,12 @@ const char* htmlPage = R"rawliteral(
           // Update WiFi status
           document.getElementById('wifi-status-text').textContent = data.wifiConnected ? 'Connected' : 'Not Connected';
           document.getElementById('wifi-status-text').className = 'status ' + (data.wifiConnected ? 'connected' : 'disconnected');
-          document.getElementById('wifi-mode').textContent = data.wifiMode;
+          // Decode wifiMode enum: 0=AP, 1=Client
+          document.getElementById('wifi-mode').textContent = data.wifiMode === 1 ? 'Client Mode' : 'Access Point Mode';
           document.getElementById('wifi-network').textContent = data.wifiNetwork;
-          document.getElementById('ip-type').textContent = data.ipType;
+          // Decode ipType enum: 0=N/A, 1=DHCP, 2=Static
+          var ipTypeStr = data.ipType === 2 ? 'Static IP' : (data.ipType === 1 ? 'DHCP' : 'N/A');
+          document.getElementById('ip-type').textContent = ipTypeStr;
           document.getElementById('wifi-ip').textContent = data.wifiIp;
           document.getElementById('wifi-subnet').textContent = data.wifiSubnet;
           document.getElementById('wifi-gateway').textContent = data.wifiGateway;
@@ -733,55 +883,53 @@ const char* htmlPage = R"rawliteral(
           document.getElementById('position-percent').textContent = data.positionPercent;
           document.getElementById('bottom-position').textContent = data.bottomPosition;
 
-          // Update ArtNet status
-          var artnetStatusElement = document.getElementById('artnet-processing-status');
-          if (!data.artnetEnabled) {
-            artnetStatusElement.textContent = 'ArtNet Disabled';
-            artnetStatusElement.className = 'status disconnected';
-          } else if (!data.homed) {
-            artnetStatusElement.textContent = 'ArtNet Enabled - Not Homed';
-            artnetStatusElement.className = 'status not-homed';
-          } else {
-            artnetStatusElement.textContent = 'ArtNet Enabled';
-            artnetStatusElement.className = 'status connected';
-          }
-          document.getElementById('artnet-universe').textContent = data.artnetUniverse;
-          document.getElementById('artnet-channel').textContent = data.artnetChannel;
-          document.getElementById('artnet-mode').textContent = data.artnet16Bit ? '16-bit' : '8-bit';
-          document.getElementById('artnet-packets-received').textContent = data.artnetPacketsReceived;
-          document.getElementById('artnet-packets-acted').textContent = data.artnetPacketsActedOn;
-          document.getElementById('artnet-last-command').textContent = data.artnetLastCommand;
-          document.getElementById('artnet-last-command-percent').textContent = data.artnetLastCommandPercent;
+          // Update Stepper position command
+          document.getElementById('position-command').textContent = data.protocolLastCommand;
+          document.getElementById('position-command-percent').textContent = data.protocolLastCommandPercent;
 
-          // Update DDP status
-          var ddpStatusElement = document.getElementById('ddp-processing-status');
-          if (!data.ddpEnabled) {
-            ddpStatusElement.textContent = 'DDP Disabled';
-            ddpStatusElement.className = 'status disconnected';
-          } else if (!data.homed) {
-            ddpStatusElement.textContent = 'DDP Enabled - Not Homed';
-            ddpStatusElement.className = 'status not-homed';
+          // Update Protocol status
+          // Decode protocol enum: 0=ArtNet, 1=DDP
+          document.getElementById('protocol-type').textContent = data.protocol === 1 ? 'DDP' : 'ArtNet';
+          document.getElementById('protocol-mode').textContent = data.control16Bit ? '16-bit' : '8-bit';
+          document.getElementById('total-channels').textContent = data.totalChannels;
+          document.getElementById('protocol-packets-received').textContent = data.protocolPacketsReceived;
+
+          // Update LED status
+          var ledMaxPixelsReceived = data.ledMaxPixelsReceived || 0;
+          var ledPixelCount = data.ledPixelCount || 0;
+          var ledsBlanked = data.ledsBlanked || false;
+
+          document.getElementById('led-pixel-count').textContent = ledPixelCount;
+
+          // Update received pixels display with combined status
+          var receivedElement = document.getElementById('led-pixels-received');
+
+          if (ledsBlanked) {
+            receivedElement.textContent = 'No recent data';
+            receivedElement.style.color = '#6c757d';  // Gray
+          } else if (ledMaxPixelsReceived === 0) {
+            receivedElement.textContent = '0';
+            receivedElement.style.color = 'inherit';
           } else {
-            ddpStatusElement.textContent = 'DDP Enabled';
-            ddpStatusElement.className = 'status connected';
+            receivedElement.textContent = ledMaxPixelsReceived;
+            receivedElement.style.color = (ledMaxPixelsReceived > ledPixelCount && ledPixelCount > 0) ? '#dc3545' : 'inherit';
           }
-          document.getElementById('ddp-servo-channel').textContent = data.ddpServoChannel;
-          document.getElementById('ddp-mode').textContent = data.ddp16Bit ? '16-bit' : '8-bit';
-          document.getElementById('ddp-packets-received').textContent = data.ddpPacketsReceived;
-          document.getElementById('ddp-packets-acted').textContent = data.ddpPacketsActedOn;
-          document.getElementById('ddp-last-command').textContent = data.ddpLastCommand;
-          document.getElementById('ddp-last-command-percent').textContent = data.ddpLastCommandPercent;
+
+          // Fetch LED preview separately (only if enabled to save bandwidth)
+          if (ledPreviewEnabled) {
+            fetchLedPreview();
+          }
 
           // Update locate mode indicator to sync across all clients
-          var indicator = document.getElementById('locate-indicator');
+          var bannerSpider = document.getElementById('banner-spider');
           if (data.locateMode) {
-            if (!indicator.classList.contains('active')) {
-              indicator.classList.add('active');
+            if (bannerSpider && !bannerSpider.classList.contains('active')) {
+              bannerSpider.classList.add('active');
               locateModeActive = true;
             }
           } else {
-            if (indicator.classList.contains('active')) {
-              indicator.classList.remove('active');
+            if (bannerSpider && bannerSpider.classList.contains('active')) {
+              bannerSpider.classList.remove('active');
               locateModeActive = false;
             }
           }
@@ -813,34 +961,155 @@ const char* htmlPage = R"rawliteral(
     window.statusUpdateInterval = setInterval(function() {
       updateStatus();
     }, 1000);
+
+// OTA Update JavaScript - wrap in DOMContentLoaded to ensure form exists
+    document.addEventListener('DOMContentLoaded', function() {
+      var otaForm = document.getElementById('otaForm');
+      if (!otaForm) {
+        return;
+      }
+
+      otaForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+
+      var fileInput = document.getElementById('firmwareFile');
+      if (fileInput.files.length === 0) {
+        alert('Please select a firmware file');
+        return;
+      }
+
+      var file = fileInput.files[0];
+      if (!file.name.endsWith('.bin')) {
+        alert('Please select a valid .bin file');
+        return;
+      }
+
+      // Reset and show progress
+      var progressBar = document.getElementById('progressBar');
+      var progressText = document.getElementById('progressText');
+      var updateProgress = document.getElementById('updateProgress');
+      var updateStatus = document.getElementById('updateStatus');
+      var successBanner = document.getElementById('successBanner');
+
+      // Reset progress
+      progressBar.style.width = '0%';
+      progressBar.style.backgroundColor = '#007bff';
+      progressText.textContent = '0%';
+      updateStatus.textContent = 'Uploading firmware...';
+      updateStatus.style.color = '#333';
+      successBanner.style.display = 'none';
+
+      // Show progress section
+      updateProgress.style.display = 'block';
+      document.getElementById('updateButton').disabled = true;
+
+      var formData = new FormData();
+      formData.append('firmware', file);
+
+      var xhr = new XMLHttpRequest();
+
+      // Progress handler
+      xhr.upload.addEventListener('progress', function(e) {
+        if (e.lengthComputable) {
+          var percentComplete = Math.round((e.loaded / e.total) * 100);
+          progressBar.style.width = percentComplete + '%';
+          progressText.textContent = percentComplete + '%';
+          updateStatus.textContent = 'Uploading: ' + percentComplete + '%';
+        }
+      });
+
+      // Completion handler
+      xhr.addEventListener('load', function() {
+        if (xhr.status === 200) {
+          document.getElementById('progressBar').style.width = '100%';
+          document.getElementById('progressText').textContent = '100%';
+          document.getElementById('progressBar').style.backgroundColor = '#28a745';
+
+          // Hide progress bar and show success banner
+          document.getElementById('updateProgress').style.display = 'none';
+          var successBanner = document.getElementById('successBanner');
+          successBanner.style.display = 'block';
+
+          // Start countdown
+          var countdown = 10;
+          var countdownEl = document.getElementById('countdown');
+          countdownEl.textContent = countdown;
+
+          var countdownInterval = setInterval(function() {
+            countdown--;
+            countdownEl.textContent = countdown;
+            if (countdown <= 0) {
+              clearInterval(countdownInterval);
+              window.location.reload();
+            }
+          }, 1000);
+        } else {
+          document.getElementById('progressBar').style.backgroundColor = '#dc3545';
+          document.getElementById('updateStatus').textContent = 'Update failed: ' + xhr.responseText;
+          document.getElementById('updateStatus').style.color = '#dc3545';
+          document.getElementById('updateButton').disabled = false;
+        }
+      });
+
+      // Error handler
+      xhr.addEventListener('error', function() {
+        document.getElementById('progressBar').style.backgroundColor = '#dc3545';
+        document.getElementById('updateStatus').textContent = 'Upload error - please try again';
+        document.getElementById('updateStatus').style.color = '#dc3545';
+        document.getElementById('updateButton').disabled = false;
+      });
+
+      xhr.open('POST', '/update');
+      xhr.send(formData);
+      });
+    }); // End DOMContentLoaded
   </script>
 </head>
 <body>
-  <div class="container">
-    <div class="header-container">
-      <h1>Servo Controller<br><span style="font-size: 0.5em; font-style: italic; font-weight: normal;" id="hostname-display">{{HOSTNAME}}</span></h1>
-      <div id="locate-indicator" class="locate-indicator" onclick="toggleLocate()" title="Click to locate this device (LED will blink SOS)">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="15" class="spider-body" fill="#333"/>
-          <ellipse cx="45" cy="45" rx="3" ry="4" class="spider-eyes" fill="#ff0000"/>
-          <ellipse cx="55" cy="45" rx="3" ry="4" class="spider-eyes" fill="#ff0000"/>
-          <line x1="35" y1="40" x2="15" y2="25" stroke="#333" stroke-width="3"/>
-          <line x1="30" y1="50" x2="5" y2="45" stroke="#333" stroke-width="3"/>
-          <line x1="32" y1="60" x2="10" y2="70" stroke="#333" stroke-width="3"/>
-          <line x1="35" y1="68" x2="15" y2="85" stroke="#333" stroke-width="3"/>
-          <line x1="65" y1="40" x2="85" y2="25" stroke="#333" stroke-width="3"/>
-          <line x1="70" y1="50" x2="95" y2="45" stroke="#333" stroke-width="3"/>
-          <line x1="68" y1="60" x2="90" y2="70" stroke="#333" stroke-width="3"/>
-          <line x1="65" y1="68" x2="85" y2="85" stroke="#333" stroke-width="3"/>
+  <!-- Full-Width Banner Header -->
+  <div class="banner-header">
+    <div class="banner-content">
+      <!-- Spider Icon (clickable for locate) -->
+      <div id="banner-spider" class="banner-spider" onclick="toggleLocate()" title="Click to locate this device (LED will blink SOS)">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="60" height="60" class="spider-svg">
+          <g transform="translate(50, 50)">
+            <!-- Body -->
+            <circle cx="0" cy="0" r="14" class="spider-body" fill="#00d4ff"/>
+            <circle cx="0" cy="-9" r="9" class="spider-head" fill="#00d4ff"/>
+            <!-- Legs (4 pairs) -->
+            <!-- Left legs -->
+            <path d="M -12,-8 L -25,-18 L -32,-15" class="spider-leg" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M -12,-2 L -28,-5 L -35,-2" class="spider-leg" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M -12,4 L -28,8 L -35,12" class="spider-leg" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M -12,10 L -25,18 L -32,22" class="spider-leg" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <!-- Right legs -->
+            <path d="M 12,-8 L 25,-18 L 32,-15" class="spider-leg" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M 12,-2 L 28,-5 L 35,-2" class="spider-leg" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M 12,4 L 28,8 L 35,12" class="spider-leg" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M 12,10 L 25,18 L 32,22" class="spider-leg" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <!-- Eyes -->
+            <circle cx="-4" cy="-12" r="2" class="spider-eyes" fill="#ff0000"/>
+            <circle cx="4" cy="-12" r="2" class="spider-eyes" fill="#ff0000"/>
+          </g>
         </svg>
       </div>
-    </div>
 
-    <div class="tabs">
-      <button class="tab active" onclick="showTab('status-tab')">Status</button>
-      <button class="tab" onclick="showTab('settings-tab')">Settings</button>
-      <button class="tab" onclick="showTab('update-tab')">OTA Update</button>
+      <div class="banner-title">
+        Servo Controller
+        <div class="banner-hostname" id="hostname-display">{{HOSTNAME}}</div>
+      </div>
     </div>
+  </div>
+
+  <!-- Blocky Tab Headers -->
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('status-tab')">Status</button>
+    <button class="tab" onclick="showTab('settings-tab')">Settings</button>
+    <button class="tab" onclick="showTab('update-tab')">OTA Update</button>
+  </div>
+
+  <div class="container">
+    <div class="content-wrapper">
 
     <!-- Status Tab -->
     <div id="status-tab" class="tab-content active">
@@ -865,9 +1134,9 @@ const char* htmlPage = R"rawliteral(
         <div id="homed-status-text" class="status {{HOMED_CLASS}}">
           {{HOMED_TEXT}}
         </div>
-        <p><strong>Homing Switch:</strong> <span id="homing-switch-status" class="status">Not Tripped</span></p>
-        <p><strong>Current Position:</strong> <span id="current-position">{{CURRENT_POSITION}}</span> steps</p>
-        <p><strong>Position (%):</strong> <span id="position-percent">{{POSITION_PERCENT}}</span>%</p>
+        <p><strong>Switch:</strong> <span id="homing-switch-status" class="status">Not Tripped</span></p>
+        <p><strong>Position Command:</strong> <span id="position-command">0</span> (<span id="position-command-percent">0.0</span>%)</p>
+        <p><strong>Current Position:</strong> <span id="current-position">{{CURRENT_POSITION}}</span> steps (<span id="position-percent">{{POSITION_PERCENT}}</span>%)</p>
         <p><strong>Bottom Position:</strong> <span id="bottom-position">{{BOTTOM_POSITION}}</span> steps</p>
         <p><strong>Auto Home on Boot:</strong> <span id="auto-home-on-boot">{{AUTO_HOME_STATUS}}</span></p>
 
@@ -914,28 +1183,26 @@ const char* htmlPage = R"rawliteral(
       </div>
 
       <div class="status-box">
-        <h4>ArtNet Status</h4>
-        <div id="artnet-processing-status" class="status not-homed" style="margin-bottom: 10px;">
-          ArtNet Disabled - Not Homed
-        </div>
-        <p><strong>Universe:</strong> <span id="artnet-universe">{{ARTNET_UNIVERSE}}</span></p>
-        <p><strong>Channel:</strong> <span id="artnet-channel">{{ARTNET_CHANNEL}}</span></p>
-        <p><strong>Mode:</strong> <span id="artnet-mode">8-bit</span></p>
-        <p><strong>Packets Received:</strong> <span id="artnet-packets-received">0</span></p>
-        <p><strong>Packets for this Channel:</strong> <span id="artnet-packets-acted">0</span></p>
-        <p><strong>Last Command:</strong> <span id="artnet-last-command">0</span> (<span id="artnet-last-command-percent">0.0</span>%)</p>
+        <h4>Protocol Status</h4>
+        <p><strong>Protocol:</strong> <span id="protocol-type">{{PROTOCOL_TYPE}}</span></p>
+        <p><strong>Stepper Mode:</strong> <span id="protocol-mode">8-bit</span></p>
+        <p><strong>Total Channels:</strong> <span id="total-channels">0</span></p>
+        <p><strong>Packets Received:</strong> <span id="protocol-packets-received">0</span></p>
       </div>
 
       <div class="status-box">
-        <h4>DDP Status</h4>
-        <div id="ddp-processing-status" class="status not-homed" style="margin-bottom: 10px;">
-          DDP Disabled - Not Homed
+        <h4>LED Status</h4>
+        <div style="margin-bottom: 10px;">
+          <label style="font-size: 12px; cursor: pointer;">
+            <input type="checkbox" id="led-preview-enabled" onchange="toggleLedPreview()">
+            Show Pixels
+          </label>
         </div>
-        <p><strong>Servo Channel:</strong> <span id="ddp-servo-channel">{{DDP_SERVO_CHANNEL}}</span></p>
-        <p><strong>Mode:</strong> <span id="ddp-mode">8-bit</span></p>
-        <p><strong>Packets Received:</strong> <span id="ddp-packets-received">0</span></p>
-        <p><strong>Packets for this Channel:</strong> <span id="ddp-packets-acted">0</span></p>
-        <p><strong>Last Command:</strong> <span id="ddp-last-command">0</span> (<span id="ddp-last-command-percent">0.0</span>%)</p>
+        <div id="led-preview-container" class="led-preview-box" style="margin-bottom: 10px; max-height: 300px; overflow-y: auto; overflow-x: hidden; display: none; padding: 5px; border-radius: 4px;">
+          <div id="led-preview" style="display: flex; flex-wrap: wrap; gap: 1px;"></div>
+        </div>
+        <p><strong>Configured Pixels:</strong> <span id="led-pixel-count">0</span></p>
+        <p><strong>Received Pixels:</strong> <span id="led-pixels-received">0</span></p>
       </div>
       </div>
     </div>
@@ -1101,77 +1368,122 @@ const char* htmlPage = R"rawliteral(
         <button onclick="homeServo()" class="btn-success">Home Servo</button>
       </div>
 
-      <!-- ArtNet & DDP Configuration Box -->
+      <!-- Protocol Configuration Box -->
       <div class="status-box">
-        <h4>ArtNet Configuration</h4>
+        <h4>Protocol Configuration</h4>
 
-        <form onsubmit="return handleFormSubmit(event, '/save-artnet')">
+        <form onsubmit="return handleFormSubmit(event, '/save-protocol')">
           <div class="form-group">
-            <label for="artnetEnabled">
-              <input type="checkbox" id="artnetEnabled" name="artnetEnabled" {{ARTNET_ENABLED_CHECKED}}>
-              Enable ArtNet Control
+            <label for="protocol">Protocol:</label>
+            <select id="protocol" name="protocol" onchange="toggleProtocolConfig()" style="width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box; border: 2px solid #ddd; border-radius: 4px;">
+              <option value="ddp" {{DDP_SELECTED}}>DDP</option>
+              <option value="artnet" {{ARTNET_SELECTED}}>ArtNet</option>
+            </select>
+          </div>
+
+          <!-- DDP Configuration -->
+          <div id="ddpConfig" style="display: none;">
+            <h4 style="margin-top: 20px; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #ddd;">DDP Configuration</h4>
+            <p style="color: #666; font-style: italic;">No additional configuration required for DDP.</p>
+          </div>
+
+          <!-- ArtNet Configuration -->
+          <div id="artnetConfig" style="display: none;">
+            <h4 style="margin-top: 20px; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #ddd;">ArtNet Configuration</h4>
+
+            <div class="form-group">
+              <label for="artnetUniverse">Start Universe:</label>
+              <input type="number" id="artnetUniverse" name="artnetUniverse" value="{{ARTNET_UNIVERSE}}" min="0" max="32767" required>
+            </div>
+
+            <div class="form-group">
+              <label for="artnetChannelsPerUniverse">Channels per Universe:</label>
+              <input type="number" id="artnetChannelsPerUniverse" name="artnetChannelsPerUniverse" value="{{ARTNET_CHANNELS_PER_UNIVERSE}}" min="1" max="512" required>
+            </div>
+          </div>
+
+          <hr style="margin: 20px 0; border: none; border-top: 1px solid #ddd;">
+
+          <h4 style="margin-bottom: 15px;">Common Settings</h4>
+
+          <div class="form-group">
+            <label for="stepperControl">
+              <input type="checkbox" id="stepperControl" name="stepperControl" {{STEPPER_CONTROL_CHECKED}} onchange="toggleStepperOptions()">
+              Enable Stepper Control (uses channel 1)
             </label>
           </div>
 
-          <div class="form-group">
-            <label for="artnetUniverse">ArtNet Universe:</label>
-            <input type="number" id="artnetUniverse" name="artnetUniverse" value="{{ARTNET_UNIVERSE}}" min="0" max="32767" required>
-          </div>
-
-          <div class="form-group">
-            <label for="artnetChannel">DMX Channel (1-512):</label>
-            <input type="number" id="artnetChannel" name="artnetChannel" value="{{ARTNET_CHANNEL}}" min="1" max="512" required>
-          </div>
-
-          <div class="form-group">
-            <label for="artnet16Bit">
-              <input type="checkbox" id="artnet16Bit" name="artnet16Bit" {{ARTNET_16BIT_CHECKED}}>
-              16-bit Mode (uses 2 channels)
+          <div class="form-group" id="control16BitGroup">
+            <label for="control16Bit">
+              <input type="checkbox" id="control16Bit" name="control16Bit" {{CONTROL_16BIT_CHECKED}}>
+              16-bit Stepper Control (uses channels 1-2)
             </label>
           </div>
 
+          <div class="form-group" id="stepperBlankTimeGroup">
+            <label for="stepperBlankTime">Stepper Blank Time (seconds, 0=disabled):</label>
+            <input type="number" id="stepperBlankTime" name="stepperBlankTime" value="{{STEPPER_BLANK_TIME}}" min="0" max="3600" required>
+          </div>
+
           <div class="form-group">
-            <label for="artnetDebug">
-              <input type="checkbox" id="artnetDebug" name="artnetDebug" {{ARTNET_DEBUG_CHECKED}}>
+            <label for="protocolDebug">
+              <input type="checkbox" id="protocolDebug" name="protocolDebug" {{PROTOCOL_DEBUG_CHECKED}}>
               Enable Serial Debug Output
             </label>
           </div>
 
-          <button type="submit" class="btn-primary">Save ArtNet Settings</button>
+          <div class="form-group">
+            <label for="ledBlankTime">LED Blank Time (seconds, 0=disabled):</label>
+            <input type="number" id="ledBlankTime" name="ledBlankTime" value="{{LED_BLANK_TIME}}" min="0" max="3600" required>
+          </div>
+
+          <button type="submit" class="btn-primary">Save Protocol Settings</button>
         </form>
+      </div>
 
-        <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;">
+      <!-- LED Configuration Box -->
+      <div class="status-box">
+        <h4>LED Configuration</h4>
 
-        <h4>DDP Configuration</h4>
-
-        <form onsubmit="return handleFormSubmit(event, '/save-ddp')">
+        <form onsubmit="return handleFormSubmit(event, '/save-led')">
           <div class="form-group">
-            <label for="ddpEnabled">
-              <input type="checkbox" id="ddpEnabled" name="ddpEnabled" {{DDP_ENABLED_CHECKED}}>
-              Enable DDP Control
-            </label>
+            <label for="ledPixelCount">Pixel Count:</label>
+            <input type="number" id="ledPixelCount" name="ledPixelCount" value="{{LED_PIXEL_COUNT}}" min="0" max="1000" required>
           </div>
 
           <div class="form-group">
-            <label for="ddpServoChannel">Servo Channel (1-512):</label>
-            <input type="number" id="ddpServoChannel" name="ddpServoChannel" value="{{DDP_SERVO_CHANNEL}}" min="1" max="512" required>
+            <label for="ledColorOrder">Color Order:</label>
+            <select id="ledColorOrder" name="ledColorOrder" style="width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box; border: 2px solid #ddd; border-radius: 4px;">
+              <option value="RGB" {{LED_ORDER_RGB}}>RGB</option>
+              <option value="RBG" {{LED_ORDER_RBG}}>RBG</option>
+              <option value="GRB" {{LED_ORDER_GRB}}>GRB</option>
+              <option value="GBR" {{LED_ORDER_GBR}}>GBR</option>
+              <option value="BRG" {{LED_ORDER_BRG}}>BRG</option>
+              <option value="BGR" {{LED_ORDER_BGR}}>BGR</option>
+            </select>
           </div>
 
           <div class="form-group">
-            <label for="ddp16Bit">
-              <input type="checkbox" id="ddp16Bit" name="ddp16Bit" {{DDP_16BIT_CHECKED}}>
-              16-bit Mode (uses 2 channels)
-            </label>
+            <label for="ledGamma">Gamma Value:</label>
+            <input type="number" id="ledGamma" name="ledGamma" value="{{LED_GAMMA}}" min="0.1" max="5.0" step="0.1" required>
           </div>
 
           <div class="form-group">
-            <label for="ddpDebug">
-              <input type="checkbox" id="ddpDebug" name="ddpDebug" {{DDP_DEBUG_CHECKED}}>
-              Enable Serial Debug Output
-            </label>
+            <label for="ledBrightness">Brightness (%):</label>
+            <input type="number" id="ledBrightness" name="ledBrightness" value="{{LED_BRIGHTNESS}}" min="0" max="100" required>
           </div>
 
-          <button type="submit" class="btn-primary">Save DDP Settings</button>
+          <div class="form-group">
+            <label for="ledStartNullPixels">Start Null Pixels:</label>
+            <input type="number" id="ledStartNullPixels" name="ledStartNullPixels" value="{{LED_START_NULL}}" min="0" max="100" required>
+          </div>
+
+          <div class="form-group">
+            <label for="ledEndNullPixels">End Null Pixels:</label>
+            <input type="number" id="ledEndNullPixels" name="ledEndNullPixels" value="{{LED_END_NULL}}" min="0" max="100" required>
+          </div>
+
+          <button type="submit" class="btn-primary">Save LED Settings</button>
         </form>
       </div>
 
@@ -1219,82 +1531,21 @@ const char* htmlPage = R"rawliteral(
           </div>
           <p id="updateStatus" style="text-align: center; margin-top: 10px; font-weight: bold;"></p>
         </div>
+
+        <!-- Success Banner -->
+        <div id="successBanner" style="display: none; margin-top: 20px; padding: 20px; background: linear-gradient(135deg, #28a745 0%, #20c997 100%); border-radius: 8px; text-align: center; color: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <h3 style="margin: 0 0 10px 0; font-size: 24px;">&#x2713; Update Successful!</h3>
+          <p style="margin: 0 0 5px 0; font-size: 16px;">Device is rebooting with new firmware</p>
+          <p style="margin: 0; font-size: 14px; opacity: 0.9;">Page will refresh in <span id="countdown" style="font-weight: bold; font-size: 18px;">10</span> seconds...</p>
+        </div>
       </div>
     </div>
 
-    <p style="text-align: center; color: #888; font-size: 12px; margin-top: 20px; padding-bottom: 10px;">
+    <p style="text-align: center; color: #6a7a8a; font-size: 12px; margin-top: 20px; padding-bottom: 10px;">
       Version {{VERSION}} | Built: {{BUILD_DATE}} {{BUILD_TIME}}
     </p>
+    </div>
   </div>
-  <script>
-    // OTA Update JavaScript
-    document.getElementById('otaForm').addEventListener('submit', function(e) {
-      e.preventDefault();
-
-      var fileInput = document.getElementById('firmwareFile');
-      if (fileInput.files.length === 0) {
-        alert('Please select a firmware file');
-        return;
-      }
-
-      var file = fileInput.files[0];
-      if (!file.name.endsWith('.bin')) {
-        alert('Please select a valid .bin file');
-        return;
-      }
-
-      // Show progress
-      document.getElementById('updateProgress').style.display = 'block';
-      document.getElementById('updateButton').disabled = true;
-      document.getElementById('updateStatus').textContent = 'Uploading firmware...';
-
-      var formData = new FormData();
-      formData.append('firmware', file);
-
-      var xhr = new XMLHttpRequest();
-
-      // Progress handler
-      xhr.upload.addEventListener('progress', function(e) {
-        if (e.lengthComputable) {
-          var percentComplete = Math.round((e.loaded / e.total) * 100);
-          document.getElementById('progressBar').style.width = percentComplete + '%';
-          document.getElementById('progressText').textContent = percentComplete + '%';
-        }
-      });
-
-      // Completion handler
-      xhr.addEventListener('load', function() {
-        if (xhr.status === 200) {
-          document.getElementById('progressBar').style.width = '100%';
-          document.getElementById('progressText').textContent = '100%';
-          document.getElementById('progressBar').style.backgroundColor = '#28a745';
-          document.getElementById('updateStatus').textContent = 'Update successful! Device is rebooting...';
-          document.getElementById('updateStatus').style.color = '#28a745';
-
-          // Redirect to home page after 5 seconds
-          setTimeout(function() {
-            window.location.href = '/';
-          }, 5000);
-        } else {
-          document.getElementById('progressBar').style.backgroundColor = '#dc3545';
-          document.getElementById('updateStatus').textContent = 'Update failed: ' + xhr.responseText;
-          document.getElementById('updateStatus').style.color = '#dc3545';
-          document.getElementById('updateButton').disabled = false;
-        }
-      });
-
-      // Error handler
-      xhr.addEventListener('error', function() {
-        document.getElementById('progressBar').style.backgroundColor = '#dc3545';
-        document.getElementById('updateStatus').textContent = 'Upload error - please try again';
-        document.getElementById('updateStatus').style.color = '#dc3545';
-        document.getElementById('updateButton').disabled = false;
-      });
-
-      xhr.open('POST', '/update');
-      xhr.send(formData);
-    });
-  </script>
 </body>
 </html>
 )rawliteral";

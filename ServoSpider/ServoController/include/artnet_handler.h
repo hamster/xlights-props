@@ -8,18 +8,11 @@
 extern ArtnetWiFiReceiver artnet;
 extern const int startUniverse;
 extern int artnetUniverseConfig;
-extern bool artnetDebugConfig;
-extern int artnetChannelConfig;
-extern bool artnetEnabledConfig;
-extern bool artnet16BitConfig;
-
-// ArtNet data
-extern uint16_t positionRequest;
-extern uint16_t lastReceivedPosition;
+extern int artnetChannelsPerUniverseConfig;
+// Stepper is always on channel 1 (8-bit) or channels 1-2 (16-bit)
 
 // ArtNet statistics
 extern unsigned long artnetPacketsReceived;
-extern unsigned long artnetPacketsActedOn;
 
 // ArtNet functions
 void onDmxFrame(const uint8_t* data, uint16_t size, const ArtDmxMetadata& metadata, const ArtNetRemoteInfo& remote);

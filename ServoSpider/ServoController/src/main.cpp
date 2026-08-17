@@ -10,7 +10,9 @@
 #include "html_handlers.h"
 #include "artnet_handler.h"
 #include "ddp_handler.h"
+#include "led_handler.h"
 #include "partition_utils.h"
+#include "protocol_common.h"
 
 // Watchdog timeout in seconds
 #define WDT_TIMEOUT 10
@@ -20,71 +22,13 @@ Preferences preferences;
 
 // Variables for position tracking
 uint16_t oldPositionRequest = 0;
-uint16_t oldDdpPositionRequest = 0;
 float position = 0;
 
 // Uptime tracking
 unsigned long bootTime = 0;
 
-// LED state tracking
-bool ledState = false;
-unsigned long ledBlinkInterval = 1000;  // Default 1 second for connected state (in milliseconds)
-bool locateMode = false;
-
-// Timer for LED blinking
-hw_timer_t *ledTimer = NULL;
-volatile unsigned long timerCounter = 0;
-
-// Morse code SOS pattern: ... --- ...
-// Using simple on/off states, each element is 50ms (5 ticks of 10ms timer)
-// Dot = 1 unit on, 1 unit off
-// Dash = 3 units on, 1 unit off
-// Letter gap = 3 units off
-// Word gap = 7 units off
-const bool morsePattern[] = {
-  // S (...)
-  1,0,  1,0,  1,0,     // 3 dots
-  0,0,0,               // letter gap
-  // O (---)
-  1,1,1,0,  1,1,1,0,  1,1,1,0,  // 3 dashes
-  0,0,0,               // letter gap
-  // S (...)
-  1,0,  1,0,  1,0,     // 3 dots
-  0,0,0,0,0,0,0        // word gap
-};
-const int morsePatternLength = sizeof(morsePattern) / sizeof(morsePattern[0]);
-volatile int morseIndex = 0;
-volatile int morseUnitCounter = 0;
-
-// LED timer interrupt handler
-void IRAM_ATTR onLedTimer() {
-  if (locateMode) {
-    // Morse code SOS pattern
-    // Each unit is 100ms (10 ticks of 10ms timer)
-    morseUnitCounter++;
-    if (morseUnitCounter >= 10) {  // 100ms elapsed
-      morseUnitCounter = 0;
-
-      // Set LED based on current pattern
-      digitalWrite(statusLedPin, morsePattern[morseIndex] ? HIGH : LOW);
-
-      // Move to next element
-      morseIndex++;
-      if (morseIndex >= morsePatternLength) {
-        morseIndex = 0;
-      }
-    }
-  } else {
-    // Normal blinking mode
-    timerCounter++;
-    unsigned long ticksPerInterval = ledBlinkInterval / 10;
-    if (timerCounter >= ticksPerInterval) {
-      ledState = !ledState;
-      digitalWrite(statusLedPin, ledState ? HIGH : LOW);
-      timerCounter = 0;
-    }
-  }
-}
+// Blank time tracking
+bool stepperBlanked = false;  // Track if stepper has been blanked
 
 void setup() {
   Serial.begin(115200);
@@ -101,15 +45,7 @@ void setup() {
   bootTime = millis();
 
   // Initialize status LED
-  pinMode(statusLedPin, OUTPUT);
-  digitalWrite(statusLedPin, LOW);
-  ledState = false;
-
-  // Configure timer for LED blinking (Timer 0, prescaler 80 for 1MHz, interrupt every 10ms)
-  ledTimer = timerBegin(0, 80, true);  // Timer 0, prescaler 80, count up
-  timerAttachInterrupt(ledTimer, &onLedTimer, true);  // Attach interrupt handler
-  timerAlarmWrite(ledTimer, 10000, true);  // Trigger every 10ms (10000 microseconds)
-  timerAlarmEnable(ledTimer);  // Enable the timer
+  initStatusLed();
 
   Serial.println("\n=== Servo Controller Bootup ===");
   Serial.print("Version: ");
@@ -156,15 +92,25 @@ void setup() {
   jumpStartConfig = preferences.getInt("jumpStart", 0);
   autoHomeOnBootConfig = preferences.getBool("autoHomeOnBoot", true);
 
+  // Load protocol configuration
+  protocolConfig = (protocolType)preferences.getInt("protocol", PROTOCOL_DDP);
+  stepperControlEnabled = preferences.getBool("stepperControl", true);
+  control16BitConfig = preferences.getBool("control16Bit", false);
+  protocolDebugConfig = preferences.getBool("protocolDebug", false);
+
   // Load saved ArtNet configuration
   artnetUniverseConfig = preferences.getInt("artnetUniverse", startUniverse);
-  artnetChannelConfig = preferences.getInt("artnetChannel", 0);
-  artnetEnabledConfig = preferences.getBool("artnetEnabled", true);
-  artnetDebugConfig = preferences.getBool("artnetDebug", false);
-  artnet16BitConfig = preferences.getBool("artnet16Bit", false);
+  artnetChannelsPerUniverseConfig = preferences.getInt("artnetChansPerUni", 512);
+
+  // Load blank time configuration
+  ledBlankTimeConfig = preferences.getInt("ledBlankTime", 0);
+  stepperBlankTimeConfig = preferences.getInt("stepperBlankTime", 0);
 
   // Initialize stepper
   initializeStepper();
+
+  // Initialize pixel LEDs (loads config from preferences)
+  initPixelLeds();
 
   // Determine if we should connect to wifi or start a host access point
   if(ssid.length() > 0) {
@@ -208,22 +154,29 @@ void setup() {
   } else {
     Serial.println("Auto-homing disabled, skipping homing sequence");
   }
-
 }
 
 void loop() {
   // Feed the watchdog timer to prevent reset during normal operation
   esp_task_wdt_reset();
 
+  // Check WiFi connection and reconnect if needed
+  checkWifiConnection();
+
   // Update non-blocking homing state machine
   updateHoming();
 
   server.handleClient();
+  handleSerialCommands();
 
   // Skip ArtNet, DDP, and DNS handling during OTA update to prevent interference
   if (!otaInProgress) {
-    artnet.parse();
-    handleDDP();
+    if(protocolConfig == PROTOCOL_ARTNET){
+      artnet.parse();
+    }
+    else if(protocolConfig == PROTOCOL_DDP){
+      handleDDP();
+    }
     
     // Process DNS requests for captive portal (only in AP mode)
     if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
@@ -231,81 +184,59 @@ void loop() {
     }
   }
 
-  handleSerialCommands();
+  // Handle position requests from active protocol (ArtNet or DDP)
+  uint16_t currentPositionRequest;
+  currentPositionRequest = positionRequest;
 
-  if(positionRequest != oldPositionRequest) {
-    // New position requested from ArtNet!
-    oldPositionRequest = positionRequest;
+  if (currentPositionRequest != oldPositionRequest) {
+    oldPositionRequest = currentPositionRequest;
 
-    // Only act on ArtNet commands if enabled, homed, and not currently homing
-    if (!artnetEnabledConfig) {
-      // ArtNet disabled by user
-      if (artnetDebugConfig) {
-        Serial.println("Ignoring ArtNet command - ArtNet disabled");
-      }
-    } else if (!homed) {
-      // Not homed, ignore the command
-      if (artnetDebugConfig) {
-        Serial.println("Ignoring ArtNet command - system not homed");
+    // Only move stepper if homed and not currently homing
+    if (!homed) {
+      if (protocolDebugConfig) {
+        Serial.print("Ignoring position command - system not homed");
       }
     } else if (isHoming()) {
-      // Currently homing, ignore the command
-      if (artnetDebugConfig) {
-        Serial.println("Ignoring ArtNet command - homing in progress");
+      if (protocolDebugConfig) {
+        Serial.print("Ignoring command - homing in progress");
       }
     } else {
-      // Enabled, homed and not homing, execute the command
-      artnetPacketsActedOn++;
+      position = calcPosition(currentPositionRequest, control16BitConfig);
 
-      position = calcPosition(positionRequest, artnet16BitConfig);
-
-      Serial.print("ArtNet: Moving to new position ");
-      Serial.print(positionRequest);
-      Serial.print(" - ");
-      float maxValue = artnet16BitConfig ? 65535.0 : 255.0;
-      Serial.print(int((float)((float)positionRequest / maxValue) * 100));
-      Serial.print("% - ");
-      Serial.println((int)position);
+      // Only print position changes if protocol debug is enabled
+      if (protocolDebugConfig) {
+        float maxValue = control16BitConfig ? 65535.0 : 255.0;
+        Serial.print("Moving to position ");
+        Serial.print(currentPositionRequest);
+        Serial.print(" (");
+        Serial.print(int((float)((float)currentPositionRequest / maxValue) * 100));
+        Serial.print("%) -> ");
+        Serial.println((int)position);
+      }
 
       stepper->moveTo((int)position);
+      stepperBlanked = false;  // Reset blank state when we receive a command
     }
   }
 
-  if(ddpPositionRequest != oldDdpPositionRequest) {
-    // New position requested from DDP!
-    oldDdpPositionRequest = ddpPositionRequest;
+  // Handle blank time timeouts
+  if (lastProtocolUpdateTime > 0 && !otaInProgress) {
+    unsigned long timeSinceUpdate = millis() - lastProtocolUpdateTime;
 
-    // Only act on DDP commands if enabled, homed, and not currently homing
-    if (!ddpEnabledConfig) {
-      // DDP disabled by user
-      if (ddpDebugConfig) {
-        Serial.println("Ignoring DDP command - DDP disabled");
+    // LED blank timeout
+    if (ledBlankTimeConfig > 0 && timeSinceUpdate > (unsigned long)ledBlankTimeConfig * 1000) {
+      blankPixelLeds();
+    }
+
+    // Stepper blank timeout (only if homed and not currently homing)
+    if (stepperBlankTimeConfig > 0 && homed && !isHoming() && !stepperBlanked) {
+      if (timeSinceUpdate > (unsigned long)stepperBlankTimeConfig * 1000) {
+        if (protocolDebugConfig) {
+          Serial.println("Stepper blank timeout - moving to position 0");
+        }
+        stepper->moveTo(0);
+        stepperBlanked = true;
       }
-    } else if (!homed) {
-      // Not homed, ignore the command
-      if (ddpDebugConfig) {
-        Serial.println("Ignoring DDP command - system not homed");
-      }
-    } else if (isHoming()) {
-      // Currently homing, ignore the command
-      if (ddpDebugConfig) {
-        Serial.println("Ignoring DDP command - homing in progress");
-      }
-    } else {
-      // Enabled, homed and not homing, execute the command
-      ddpPacketsActedOn++;
-
-      position = calcPosition(ddpPositionRequest, ddp16BitConfig);
-
-      Serial.print("DDP: Moving to new position ");
-      Serial.print(ddpPositionRequest);
-      Serial.print(" - ");
-      float maxValue = ddp16BitConfig ? 65535.0 : 255.0;
-      Serial.print(int((float)((float)ddpPositionRequest / maxValue) * 100));
-      Serial.print("% - ");
-      Serial.println((int)position);
-
-      stepper->moveTo((int)position);
     }
   }
 }
@@ -320,12 +251,14 @@ void handleSerialCommands() {
   if (Serial.available() > 0) {
     char c = Serial.read();
     switch (c) {
+    case '\r':
     case '?':
       Serial.println("\n=== Available Serial Commands ===");
       Serial.println("?  - Show this help menu");
       Serial.println("h  - Start homing sequence");
       Serial.println("r  - Reboot device");
       Serial.println("s  - Print connection status");
+      Serial.println("n  - Network diagnostics (detailed)");
       Serial.println("w  - Attempt WiFi reconnection");
       Serial.println("a  - Switch to Access Point mode");
       Serial.println("p  - Print current stepper position");
@@ -343,6 +276,9 @@ void handleSerialCommands() {
       break;
     case 's':
       printStatus();
+      break;
+    case 'n':
+      printNetworkDiagnostics();
       break;
     case 'w':
       Serial.println("Attempting to reconnect to WiFi...");
@@ -442,4 +378,132 @@ void printStatus() {
   }
 
   Serial.println("========================\n");
+}
+
+void printNetworkDiagnostics() {
+  Serial.println("\n=== Network Diagnostics ===");
+
+  // WiFi Status
+  Serial.println("\n--- WiFi Status ---");
+  Serial.print("WiFi Status Code: ");
+  Serial.print(WiFi.status());
+  Serial.print(" (");
+  switch(WiFi.status()) {
+    case WL_IDLE_STATUS: Serial.print("IDLE"); break;
+    case WL_NO_SSID_AVAIL: Serial.print("NO_SSID_AVAIL"); break;
+    case WL_SCAN_COMPLETED: Serial.print("SCAN_COMPLETED"); break;
+    case WL_CONNECTED: Serial.print("CONNECTED"); break;
+    case WL_CONNECT_FAILED: Serial.print("CONNECT_FAILED"); break;
+    case WL_CONNECTION_LOST: Serial.print("CONNECTION_LOST"); break;
+    case WL_DISCONNECTED: Serial.print("DISCONNECTED"); break;
+    default: Serial.print("UNKNOWN"); break;
+  }
+  Serial.println(")");
+
+  Serial.print("WiFi Mode: ");
+  switch(WiFi.getMode()) {
+    case WIFI_OFF: Serial.println("OFF"); break;
+    case WIFI_STA: Serial.println("STATION"); break;
+    case WIFI_AP: Serial.println("ACCESS_POINT"); break;
+    case WIFI_AP_STA: Serial.println("AP+STATION"); break;
+    default: Serial.println("UNKNOWN"); break;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("SSID: ");
+    Serial.println(WiFi.SSID());
+    Serial.print("BSSID: ");
+    Serial.println(WiFi.BSSIDstr());
+    Serial.print("Channel: ");
+    Serial.println(WiFi.channel());
+    Serial.print("RSSI: ");
+    Serial.print(WiFi.RSSI());
+    Serial.println(" dBm");
+
+    Serial.print("Local IP: ");
+    Serial.println(WiFi.localIP());
+    Serial.print("Gateway: ");
+    Serial.println(WiFi.gatewayIP());
+    Serial.print("Subnet: ");
+    Serial.println(WiFi.subnetMask());
+    Serial.print("DNS: ");
+    Serial.println(WiFi.dnsIP());
+
+    Serial.print("MAC Address: ");
+    Serial.println(WiFi.macAddress());
+    Serial.print("Hostname: ");
+    Serial.println(WiFi.getHostname());
+  }
+
+  if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
+    Serial.println("\n--- AP Mode Info ---");
+    Serial.print("AP SSID: ");
+    Serial.println(getAPName());
+    Serial.print("AP IP: ");
+    Serial.println(WiFi.softAPIP());
+    Serial.print("Connected Clients: ");
+    Serial.println(WiFi.softAPgetStationNum());
+  }
+
+  // Memory and system info
+  Serial.println("\n--- System Resources ---");
+  Serial.print("Free Heap: ");
+  Serial.print(ESP.getFreeHeap());
+  Serial.println(" bytes");
+  Serial.print("Heap Size: ");
+  Serial.print(ESP.getHeapSize());
+  Serial.println(" bytes");
+  Serial.print("Min Free Heap: ");
+  Serial.print(ESP.getMinFreeHeap());
+  Serial.println(" bytes");
+
+  // Protocol info
+  Serial.println("\n--- Protocol Status ---");
+  Serial.print("Active Protocol: ");
+  Serial.println(protocolConfig == PROTOCOL_DDP ? "DDP" : "ArtNet");
+  Serial.print("Last Protocol Update: ");
+  if (lastProtocolUpdateTime > 0) {
+    Serial.print(millis() - lastProtocolUpdateTime);
+    Serial.println(" ms ago");
+  } else {
+    Serial.println("Never");
+  }
+
+  if (protocolConfig == PROTOCOL_DDP) {
+    Serial.print("DDP Packets Received: ");
+    Serial.println(ddpPacketsReceived);
+  } else {
+    Serial.print("ArtNet Packets Received: ");
+    Serial.println(artnetPacketsReceived);
+  }
+
+  // LED info
+  Serial.println("\n--- LED Status ---");
+  Serial.print("LEDs Initialized: ");
+  Serial.println(ledsInitialized ? "Yes" : "No");
+  Serial.print("LEDs Blanked: ");
+  Serial.println(ledsBlanked ? "Yes" : "No");
+  Serial.print("Configured Pixels: ");
+  Serial.println(ledPixelCount);
+  Serial.print("Max Pixels Received: ");
+  Serial.println(ledMaxPixelsReceived);
+
+  // Timer info
+  Serial.println("\n--- Interrupt Status ---");
+  Serial.print("LED Timer Active: ");
+  Serial.println(ledTimer != NULL ? "Yes" : "No");
+  Serial.print("Homing Interrupt Triggered: ");
+  Serial.println(interruptTriggered ? "Yes" : "No");
+
+  // Uptime
+  Serial.println("\n--- Uptime ---");
+  unsigned long uptimeMs = millis() - bootTime;
+  unsigned long uptimeSecs = uptimeMs / 1000;
+  unsigned long days = uptimeSecs / 86400;
+  unsigned long hours = (uptimeSecs % 86400) / 3600;
+  unsigned long minutes = (uptimeSecs % 3600) / 60;
+  unsigned long seconds = uptimeSecs % 60;
+  Serial.printf("Uptime: %lu days, %02lu:%02lu:%02lu\n", days, hours, minutes, seconds);
+
+  Serial.println("\n========================\n");
 }

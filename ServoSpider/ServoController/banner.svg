@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 120" width="600" height="120">
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1a1a2e;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#16213e;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="600" height="120" fill="url(#bgGradient)" rx="8"/>
+
+  <!-- Spider Icon -->
+  <g id="spider-icon" transform="translate(40, 60)">
+    <!-- Body -->
+    <circle cx="0" cy="0" r="14" fill="#00d4ff"/>
+    <circle cx="0" cy="-9" r="9" fill="#00d4ff"/>
+
+    <!-- Legs (4 pairs) -->
+    <!-- Left legs -->
+    <path d="M -12,-8 L -25,-18 L -32,-15" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <path d="M -12,-2 L -28,-5 L -35,-2" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <path d="M -12,4 L -28,8 L -35,12" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <path d="M -12,10 L -25,18 L -32,22" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+
+    <!-- Right legs -->
+    <path d="M 12,-8 L 25,-18 L 32,-15" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <path d="M 12,-2 L 28,-5 L 35,-2" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <path d="M 12,4 L 28,8 L 35,12" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <path d="M 12,10 L 25,18 L 32,22" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+
+    <!-- Eyes -->
+    <circle cx="-4" cy="-12" r="2" fill="#1a1a2e"/>
+    <circle cx="4" cy="-12" r="2" fill="#1a1a2e"/>
+  </g>
+
+  <!-- Text -->
+  <text x="100" y="55" font-family="'Segoe UI', 'Roboto', Arial, sans-serif" font-size="32" font-weight="bold" fill="#ffffff">
+    Servo Controller
+  </text>
+  <text x="100" y="80" font-family="'Segoe UI', 'Roboto', Arial, sans-serif" font-size="16" fill="#a0a0a0">
+    ESP32 Lighting Prop Control
+  </text>
+
+  <!-- Decorative circuit traces -->
+  <path d="M 560,20 L 580,20 L 580,40" stroke="#00d4ff" stroke-width="1" fill="none" opacity="0.3"/>
+  <circle cx="580" cy="40" r="2" fill="#00d4ff" opacity="0.3"/>
+  <path d="M 560,100 L 580,100 L 580,80" stroke="#00d4ff" stroke-width="1" fill="none" opacity="0.3"/>
+  <circle cx="580" cy="80" r="2" fill="#00d4ff" opacity="0.3"/>
+</svg>

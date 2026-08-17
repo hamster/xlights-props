@@ -37,5 +37,6 @@ extern const byte DNS_PORT;
 boolean connectToWifi();
 String getAPName();
 void startAccessPoint();
+void checkWifiConnection();
 
 #endif

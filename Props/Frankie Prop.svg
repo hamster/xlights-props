@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1458.25mm" height="770.57mm" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 4133.62 2184.29">
+  <defs>
+    <style>
+      .cls-1, .cls-2 {
+        fill: #231f20;
+      }
+
+      .cls-3 {
+        stroke-width: .5px;
+      }
+
+      .cls-3, .cls-4 {
+        fill: none;
+        stroke: #231f20;
+        stroke-miterlimit: 10;
+      }
+
+      .cls-2 {
+        font-family: MyriadPro-Regular, 'Myriad Pro';
+        font-size: 14px;
+      }
+    </style>
+  </defs>
+  <g id="Layer_1" data-name="Layer 1">
+    <image width="48" height="48" transform="translate(2004.32) scale(42.16 42.02)" xlink:href="../xlights/Photos/pixel-frankie-white.png"/>
+  </g>
+  <g id="Dimensions">
+    <g id="Manual_Dimension" data-name="Manual Dimension">
+      <line class="cls-3" x1="4042.87" y1="1239.84" x2="4046.54" y2="2167.33"/>
+      <line class="cls-3" x1="1983.49" y1="1247.97" x2="1987.16" y2="2175.46"/>
+      <text class="cls-2" transform="translate(2981.35 2180.79) rotate(-.23)"><tspan x="0" y="0" xml:space="preserve"> 726.51 mm </tspan></text>
+      <g>
+        <line class="cls-4" x1="1994.3" y1="2166.44" x2="4039.32" y2="2158.36"/>
+        <polygon class="cls-1" points="1995.78 2171.42 1987.12 2166.46 1995.74 2161.44 1995.78 2171.42"/>
+        <polygon class="cls-1" points="4037.89 2163.35 4046.5 2158.33 4037.85 2153.38 4037.89 2163.35"/>
+      </g>
+    </g>
+    <g id="Manual_Dimension-2" data-name="Manual Dimension">
+      <line class="cls-3" x1="4074.69" y1="1853.51" x2="4119.47" y2="1853.58"/>
+      <line class="cls-3" x1="4077.37" y1="116.12" x2="4122.16" y2="116.19"/>
+      <text class="cls-2" transform="translate(4130.01 1020.43) rotate(-89.91)"><tspan x="0" y="0" xml:space="preserve"> 612.91 mm </tspan></text>
+      <g>
+        <line class="cls-4" x1="4113.15" y1="123.35" x2="4110.49" y2="1846.39"/>
+        <polygon class="cls-1" points="4108.16 124.8 4113.16 116.17 4118.13 124.82 4108.16 124.8"/>
+        <polygon class="cls-1" points="4105.5 1844.92 4110.47 1853.57 4115.47 1844.94 4105.5 1844.92"/>
+      </g>
+    </g>
+  </g>
+</svg>

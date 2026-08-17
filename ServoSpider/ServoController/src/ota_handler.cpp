@@ -138,12 +138,14 @@ void handleOTAUpdate() {
 
 void handleOTAUpdateComplete() {
   if (Update.hasError()) {
-    String error = "Update Failed: ";
+    String error = "{\"success\":false,\"message\":\"Update Failed: ";
     error += Update.errorString();
-    server.send(500, "text/plain", error);
-    Serial.println(error);
+    error += "\"}";
+    server.send(500, "application/json", error);
+    Serial.print("Update failed: ");
+    Serial.println(Update.errorString());
   } else {
-    server.send(200, "text/plain", "Update Successful! Rebooting...");
+    server.send(200, "application/json", "{\"success\":true,\"message\":\"Update Successful! Rebooting...\"}");
     Serial.println("Update completed successfully, rebooting...");
     delay(1000);
     ESP.restart();

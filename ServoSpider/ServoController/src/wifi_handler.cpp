@@ -1,6 +1,7 @@
 #include <WiFi.h>
+#include <esp_task_wdt.h>
 #include "wifi_handler.h"
-#include "main.h"
+#include "led_handler.h"
 #include "partition_utils.h"
 
 // DNS server for captive portal
@@ -55,9 +56,12 @@ boolean connectToWifi() {
   WiFi.begin(ssid.c_str(), password.c_str());
 
   unsigned long startTime = millis();
-  ledBlinkInterval = 100;  // Rapid blink during connection attempt (timer interrupt handles it)
+  statusLedBlinkInterval = 100;  // Rapid blink during connection attempt (timer interrupt handles it)
 
   while (WiFi.status() != WL_CONNECTED) {
+    // Feed watchdog to prevent reset during connection
+    esp_task_wdt_reset();
+
     if (millis() - startTime > WIFI_TIMEOUT) {
       Serial.println("WiFi connection timeout!");
       return false;
@@ -71,7 +75,7 @@ boolean connectToWifi() {
   Serial.println(WiFi.localIP());
 
   // Set to slow blink for connected state (timer interrupt handles it)
-  ledBlinkInterval = 1000;
+  statusLedBlinkInterval = 1000;
 
   return true;
 }
@@ -101,11 +105,66 @@ void startAccessPoint() {
   Serial.println(IP);
 
   // Set rapid blink for AP mode
-  ledBlinkInterval = 100;
+  statusLedBlinkInterval = 100;
 
   // Start DNS server for captive portal
   dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
   Serial.println("DNS server started for captive portal");
 }
 
+// Check WiFi connection and attempt reconnect if needed
+// Call this periodically from main loop
+void checkWifiConnection() {
+  static unsigned long lastCheckTime = 0;
+  static int disconnectCount = 0;
+  const unsigned long CHECK_INTERVAL = 30000;  // Check every 30 seconds
+  const int MAX_DISCONNECT_COUNT = 3;  // Reconnect after 3 failed checks
+
+  unsigned long currentTime = millis();
+
+  // Only check periodically
+  if (currentTime - lastCheckTime < CHECK_INTERVAL) {
+    return;
+  }
+
+  lastCheckTime = currentTime;
+
+  // Only monitor if we're supposed to be in station mode with saved credentials
+  if (ssid.length() == 0 || WiFi.getMode() == WIFI_AP) {
+    return;
+  }
+
+  // Check connection status
+  if (WiFi.status() != WL_CONNECTED) {
+    disconnectCount++;
+    Serial.print("WiFi disconnected (count: ");
+    Serial.print(disconnectCount);
+    Serial.print(", status: ");
+    Serial.print(WiFi.status());
+    Serial.print(", free heap: ");
+    Serial.print(ESP.getFreeHeap());
+    Serial.println(" bytes)");
+
+    if (disconnectCount >= MAX_DISCONNECT_COUNT) {
+      Serial.println("Multiple disconnect detections, attempting reconnect...");
+
+      // Reset the WiFi connection
+      WiFi.disconnect();
+      delay(100);
+
+      if (connectToWifi()) {
+        Serial.println("WiFi reconnected successfully");
+        disconnectCount = 0;
+      } else {
+        Serial.println("WiFi reconnect failed, will retry in 30 seconds");
+      }
+    }
+  } else {
+    // Connected, reset disconnect counter
+    if (disconnectCount > 0) {
+      Serial.println("WiFi connection restored");
+      disconnectCount = 0;
+    }
+  }
+}
 

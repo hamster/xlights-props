@@ -1,63 +1,45 @@
 #include "ddp_handler.h"
+#include "artnet_handler.h"
+#include "led_handler.h"
 #include <Preferences.h>
+#include "protocol_common.h"
 
-// DDP Configuration variables
-int ddpServoChannelConfig = 0;
-bool ddpEnabled = false;
-bool ddpEnabledConfig = true;
-bool ddpDebugConfig = false;
-bool ddp16BitConfig = false;
-
-// DDP Data
-uint16_t ddpPositionRequest = 0;
-uint16_t ddpLastReceivedPosition = 0;
+// DDP Configuration
+// Stepper is always on channel 1 (8-bit) or channels 1-2 (16-bit)
 
 // DDP Statistics
 unsigned long ddpPacketsReceived = 0;
-unsigned long ddpPacketsActedOn = 0;
 
 // UDP object
 WiFiUDP ddpUdp;
+bool ddpServerStarted = false;
 
 // External preferences object
 extern Preferences preferences;
 
 void initDDP() {
-  // Load configuration from preferences (stored as 1-based)
-  ddpServoChannelConfig = preferences.getInt("ddpServoChannel", 1);
-  ddpEnabledConfig = preferences.getBool("ddpEnabled", true);
-  ddpDebugConfig = preferences.getBool("ddpDebug", false);
-  ddp16BitConfig = preferences.getBool("ddp16Bit", false);
-  ddpEnabled = ddpEnabledConfig && (ddpServoChannelConfig >= 1);
-
   Serial.println("DDP Configuration:");
-  Serial.print("  Servo Channel: ");
-  Serial.println(ddpServoChannelConfig);  // Already 1-based
-  Serial.print("  Debug: ");
-  Serial.println(ddpDebugConfig ? "Enabled" : "Disabled");
-  Serial.print("  User Enabled: ");
-  Serial.println(ddpEnabledConfig ? "Yes" : "No");
-  Serial.print("  Active: ");
-  Serial.println(ddpEnabled ? "Yes" : "No");
-
-  if (ddpEnabled) {
-    // Start or restart UDP listener
-    ddpUdp.stop();
-    if (ddpUdp.begin(DDP_PORT)) {
-      Serial.print("DDP server started on port ");
-      Serial.println(DDP_PORT);
-    } else {
-      Serial.println("Failed to start DDP server");
-      ddpEnabled = false;
-    }
+  if (stepperControlEnabled) {
+    Serial.println("  Stepper on channel 1" + String(control16BitConfig ? "-2 (16-bit)" : " (8-bit)"));
   } else {
-    Serial.println("DDP is disabled");
-    ddpUdp.stop();
+    Serial.println("  Stepper control disabled");
+  }
+  Serial.println("  LED data starts at channel 3 (RGB aligned)");
+
+  // Always start DDP server (we check protocol in handleDDP)
+  ddpUdp.stop();
+  if (ddpUdp.begin(DDP_PORT)) {
+    Serial.print("DDP server started on port ");
+    Serial.println(DDP_PORT);
+    ddpServerStarted = true;
+  } else {
+    Serial.println("Failed to start DDP server");
+    ddpServerStarted = false;
   }
 }
 
 void handleDDP() {
-  if (!ddpEnabled) {
+  if (!ddpServerStarted) {
     return;
   }
 
@@ -85,7 +67,7 @@ void handleDDP() {
   header.dataLen = (uint16_t)headerBytes[8] << 8 | (uint16_t)headerBytes[9];
 
   // Debug output header
-  if (ddpDebugConfig) {
+  if (protocolDebugConfig) {
     Serial.print("DDP: seq ");
     Serial.print(header.sequenceNum);
     Serial.print(", size: ");
@@ -105,89 +87,115 @@ void handleDDP() {
     channelData[bytesRead++] = ddpUdp.read();
   }
 
-  // Debug output - print all channel data
-  if (ddpDebugConfig && bytesRead > 0) {
-    Serial.print("  Channel data [");
-    Serial.print(header.dataOffset);
-    Serial.print("-");
-    Serial.print(header.dataOffset + bytesRead - 1);
-    Serial.print("]: ");
-    for (uint16_t i = 0; i < bytesRead; i++) {
-      if (i > 0) Serial.print(",");
-      Serial.print(channelData[i]);
-    }
-    Serial.println();
+  // // Debug output - print all channel data
+  // if (protocolDebugConfig && bytesRead > 0) {
+  //   Serial.print("  Channel data [");
+  //   Serial.print(header.dataOffset);
+  //   Serial.print("-");
+  //   Serial.print(header.dataOffset + bytesRead - 1);
+  //   Serial.print("]: ");
+  //   for (uint16_t i = 0; i < bytesRead; i++) {
+  //     if (i > 0) Serial.print(",");
+  //     Serial.print(channelData[i]);
+  //   }
+  //   Serial.println();
+  // }
+
+
+  while (ddpUdp.available()) {
+    ddpUdp.read();
   }
 
-  // Calculate if our servo channel is in this packet
-  // Servo channel is stored as 1-based, convert to 0-based byte offset
-  uint32_t byteOffset = ddpServoChannelConfig - 1;
+
+  // Update the protocol timestamp for blank time tracking
+  lastProtocolUpdateTime = millis();
+
+  // LED data always starts at channel 3 for RGB alignment
+  const int LED_START_OFFSET = 3;
+
+  // Process stepper control if enabled
+  if (stepperControlEnabled) {
+    // Calculate if our servo channel is in this packet
+    // Stepper is always on channel 1 (byte offset 0)
+    uint32_t byteOffset = 0;
+    uint32_t startByte = header.dataOffset;
+    uint32_t endByte = startByte + bytesRead - 1;
+
+    if (control16BitConfig) {
+      // 16-bit mode: check if both bytes are in this packet
+      if (byteOffset >= startByte && (byteOffset + 1) <= endByte) {
+        // Calculate offset within this packet's data
+        uint32_t byteOffsetInPacket = byteOffset - startByte;
+
+        // Extract the servo position (MSB first)
+        positionRequest = ((uint16_t)channelData[byteOffsetInPacket] << 8) | channelData[byteOffsetInPacket + 1];
+
+        if (protocolDebugConfig) {
+          Serial.print("  -> Stepper (16-bit, byte offset 0-1) value: ");
+          Serial.println(positionRequest);
+        }
+      } else {
+        if (protocolDebugConfig) {
+          Serial.println("  -> Stepper (16-bit, byte offset 0-1) not in this packet");
+        }
+      }
+    } else {
+      // 8-bit mode: check if our servo channel falls within this packet's data range
+      if (byteOffset >= startByte && byteOffset <= endByte) {
+        // Calculate offset within this packet's data
+        uint32_t byteOffsetInPacket = byteOffset - startByte;
+
+        // Extract the servo position byte
+        positionRequest = channelData[byteOffsetInPacket];
+
+        if (protocolDebugConfig) {
+          Serial.print("  -> Stepper (8-bit, byte offset 0) value: ");
+          Serial.println(positionRequest);
+        }
+      } else {
+        if (protocolDebugConfig) {
+          Serial.println("  -> Stepper (8-bit, byte offset 0) not in this packet");
+        }
+      }
+    }
+  }
+
+  // Update LEDs with channel data from this packet
+  // LED data starts at channel 3 for RGB pixel alignment
   uint32_t startByte = header.dataOffset;
-  uint32_t endByte = startByte + bytesRead - 1;
+  uint32_t endByte = startByte + bytesRead;
 
-  if(ddp16BitConfig) {
-    // 16-bit mode: check if both bytes are in this packet
-    if (byteOffset >= startByte && (byteOffset + 1) <= endByte) {
-      // Calculate offset within this packet's data
-      uint32_t byteOffsetInPacket = byteOffset - startByte;
+  // Check if this packet contains any LED data
+  if (endByte >= LED_START_OFFSET && bytesRead > 0) {
+    // Calculate where in the packet's data the LED data begins
+    uint32_t ledDataStartInPacket = 0;
+    uint32_t ledStartChannel = LED_START_OFFSET;
 
-      // Extract the servo position (MSB first)
-      ddpPositionRequest = ((uint16_t)channelData[byteOffsetInPacket] << 8) | channelData[byteOffsetInPacket + 1];
-      ddpLastReceivedPosition = ddpPositionRequest;
-      ddpPacketsActedOn++;
-
-      if (ddpDebugConfig) {
-        Serial.print("  -> Servo channel ");
-        Serial.print(ddpServoChannelConfig);
-        Serial.print(" (16-bit, byte offset ");
-        Serial.print(byteOffset);
-        Serial.print("-");
-        Serial.print(byteOffset + 1);
-        Serial.print(") value: ");
-        Serial.println(ddpPositionRequest);
-      }
+    if (startByte <= ledStartChannel) {
+      // Packet starts before or at LED start, LED data begins at offset within packet
+      ledDataStartInPacket = ledStartChannel - startByte;
+    } else {
+      // Packet starts after LED start, all data is LED data
+      ledDataStartInPacket = 0;
     }
-    else {
-      if (ddpDebugConfig) {
-        Serial.print("  -> Servo channel ");
-        Serial.print(ddpServoChannelConfig);
-        Serial.print(" (16-bit, byte offset ");
-        Serial.print(byteOffset);
-        Serial.print("-");
-        Serial.print(byteOffset + 1);
-        Serial.println(") not in this packet");
-      }
-    }
-  }
-  else {
-    // 8-bit mode: check if our servo channel falls within this packet's data range
-    if (byteOffset >= startByte && byteOffset <= endByte) {
-      // Calculate offset within this packet's data
-      uint32_t byteOffsetInPacket = byteOffset - startByte;
 
-      // Extract the servo position byte
-      ddpPositionRequest = channelData[byteOffsetInPacket];
-      ddpLastReceivedPosition = ddpPositionRequest;
-      ddpPacketsActedOn++;
+    // Calculate which LED pixel this packet starts at
+    uint32_t ledByteOffset = (startByte > ledStartChannel) ? (startByte - ledStartChannel) : 0;
+    uint32_t ledPixelOffset = ledByteOffset / 3;
 
-      if (ddpDebugConfig) {
-        Serial.print("  -> Servo channel ");
-        Serial.print(ddpServoChannelConfig);
-        Serial.print(" (8-bit, byte offset ");
-        Serial.print(byteOffset);
-        Serial.print(") value: ");
-        Serial.println(ddpPositionRequest);
-      }
+    if (protocolDebugConfig) {
+      Serial.print("  -> LED data: packet offset ");
+      Serial.print(ledDataStartInPacket);
+      Serial.print(", LED pixel offset ");
+      Serial.print(ledPixelOffset);
+      Serial.print(", bytes ");
+      Serial.println(bytesRead - ledDataStartInPacket);
     }
-    else {
-      if (ddpDebugConfig) {
-        Serial.print("  -> Servo channel ");
-        Serial.print(ddpServoChannelConfig);
-        Serial.print(" (8-bit, byte offset ");
-        Serial.print(byteOffset);
-        Serial.println(") not in this packet");
-      }
-    }
+
+    // Update LEDs starting from the correct pixel offset
+    updatePixelLedsFragmented(&channelData[ledDataStartInPacket],
+                              bytesRead - ledDataStartInPacket,
+                              ledPixelOffset);
   }
 
   // Flush any remaining packet data to ensure the buffer is clear for the next packet

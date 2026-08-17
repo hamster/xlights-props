@@ -1,26 +1,21 @@
 #include "artnet_handler.h"
+#include "led_handler.h"
+#include "protocol_common.h"
 
 // ArtNet objects and settings
 ArtnetWiFiReceiver artnet;
 const int startUniverse = 0;
 int artnetUniverseConfig = startUniverse;
-bool artnetDebugConfig = false;
-int artnetChannelConfig = 0;
-bool artnetEnabledConfig = true;
-bool artnet16BitConfig = false;
-
-// ArtNet data
-uint16_t positionRequest = 0;
-uint16_t lastReceivedPosition = 0;
+int artnetChannelsPerUniverseConfig = 512;
+// Stepper is always on channel 1 (8-bit) or channels 1-2 (16-bit)
 
 // ArtNet statistics
 unsigned long artnetPacketsReceived = 0;
-unsigned long artnetPacketsActedOn = 0;
 
 void onDmxFrame(const uint8_t* data, uint16_t size, const ArtDmxMetadata& metadata, const ArtNetRemoteInfo& remote) {
   artnetPacketsReceived++;
 
-  if(artnetDebugConfig) {
+  if (protocolDebugConfig) {
     Serial.print("Artnet: src ");
     Serial.print(remote.ip);
     Serial.print(":");
@@ -41,19 +36,32 @@ void onDmxFrame(const uint8_t* data, uint16_t size, const ArtDmxMetadata& metada
     Serial.println();
   }
 
-  if(artnet16BitConfig) {
-    // 16-bit mode: read two consecutive channels (MSB first)
-    if(size > artnetChannelConfig + 1) {
-      positionRequest = ((uint16_t)data[artnetChannelConfig] << 8) | data[artnetChannelConfig + 1];
-      lastReceivedPosition = positionRequest;
+  // Update the protocol timestamp for blank time tracking
+  lastProtocolUpdateTime = millis();
+
+  // LED data always starts at channel 3 (byte offset 2) for RGB alignment
+  const int LED_START_OFFSET = 2;
+
+  // Process stepper control if enabled
+  if (stepperControlEnabled) {
+    // Stepper is always on channel 1 (index 0) for 8-bit, or channels 1-2 (index 0-1) for 16-bit
+    if (control16BitConfig) {
+      // 16-bit mode: read two consecutive channels (MSB first)
+      if (size > 1) {
+        positionRequest = ((uint16_t)data[0] << 8) | data[1];
+      }
+    } else {
+      // 8-bit mode: read single channel
+      if (size > 0) {
+        positionRequest = data[0];
+      }
     }
   }
-  else {
-    // 8-bit mode: read single channel
-    if(size > artnetChannelConfig) {
-      positionRequest = data[artnetChannelConfig];
-      lastReceivedPosition = positionRequest;
-    }
+
+  // Update LEDs with channel data
+  // LED data starts at channel 3 (byte offset 2) for RGB pixel alignment
+  if (size > LED_START_OFFSET) {
+    updatePixelLeds((uint8_t*)data, size, LED_START_OFFSET);
   }
 }
 

@@ -6,6 +6,8 @@
 #include "artnet_handler.h"
 #include "ddp_handler.h"
 #include "ota_handler.h"
+#include "led_handler.h"
+#include "protocol_common.h"
 #include "main.h"
 #include <WiFi.h>
 #include <Preferences.h>
@@ -67,18 +69,32 @@ void handleRoot() {
   page.replace("{{JUMP_START}}", String(jumpStartConfig));
   page.replace("{{AUTO_HOME_ON_BOOT_CHECKED}}", autoHomeOnBootConfig ? "checked" : "");
 
-  // ArtNet configuration values
-  page.replace("{{ARTNET_ENABLED_CHECKED}}", artnetEnabledConfig ? "checked" : "");
+  // Protocol configuration values
+  page.replace("{{DDP_SELECTED}}", protocolConfig == PROTOCOL_DDP ? "selected" : "");
+  page.replace("{{ARTNET_SELECTED}}", protocolConfig == PROTOCOL_ARTNET ? "selected" : "");
   page.replace("{{ARTNET_UNIVERSE}}", String(artnetUniverseConfig));
-  page.replace("{{ARTNET_CHANNEL}}", String(artnetChannelConfig + 1));  // Display as 1-based
-  page.replace("{{ARTNET_DEBUG_CHECKED}}", artnetDebugConfig ? "checked" : "");
-  page.replace("{{ARTNET_16BIT_CHECKED}}", artnet16BitConfig ? "checked" : "");
+  page.replace("{{ARTNET_CHANNELS_PER_UNIVERSE}}", String(artnetChannelsPerUniverseConfig));
+  page.replace("{{STEPPER_CONTROL_CHECKED}}", stepperControlEnabled ? "checked" : "");
+  page.replace("{{CONTROL_16BIT_CHECKED}}", control16BitConfig ? "checked" : "");
+  page.replace("{{PROTOCOL_DEBUG_CHECKED}}", protocolDebugConfig ? "checked" : "");
+  page.replace("{{LED_BLANK_TIME}}", String(ledBlankTimeConfig));
+  page.replace("{{STEPPER_BLANK_TIME}}", String(stepperBlankTimeConfig));
 
-  // DDP configuration values
-  page.replace("{{DDP_ENABLED_CHECKED}}", ddpEnabledConfig ? "checked" : "");
-  page.replace("{{DDP_SERVO_CHANNEL}}", String(ddpServoChannelConfig));  // Already 1-based
-  page.replace("{{DDP_DEBUG_CHECKED}}", ddpDebugConfig ? "checked" : "");
-  page.replace("{{DDP_16BIT_CHECKED}}", ddp16BitConfig ? "checked" : "");
+  // Status page protocol values
+  page.replace("{{PROTOCOL_TYPE}}", protocolConfig == PROTOCOL_DDP ? "DDP" : "ArtNet");
+
+  // LED configuration values
+  page.replace("{{LED_PIXEL_COUNT}}", String(ledPixelCount));
+  page.replace("{{LED_ORDER_RGB}}", ledColorOrder == "RGB" ? "selected" : "");
+  page.replace("{{LED_ORDER_RBG}}", ledColorOrder == "RBG" ? "selected" : "");
+  page.replace("{{LED_ORDER_GRB}}", ledColorOrder == "GRB" ? "selected" : "");
+  page.replace("{{LED_ORDER_GBR}}", ledColorOrder == "GBR" ? "selected" : "");
+  page.replace("{{LED_ORDER_BRG}}", ledColorOrder == "BRG" ? "selected" : "");
+  page.replace("{{LED_ORDER_BGR}}", ledColorOrder == "BGR" ? "selected" : "");
+  page.replace("{{LED_GAMMA}}", String(ledGamma, 1));
+  page.replace("{{LED_BRIGHTNESS}}", String(ledBrightness));
+  page.replace("{{LED_START_NULL}}", String(ledStartNullPixels));
+  page.replace("{{LED_END_NULL}}", String(ledEndNullPixels));
 
   // Version information
   page.replace("{{VERSION}}", VERSION_STRING);
@@ -136,11 +152,9 @@ void handleSaveWifi() {
     }
 
     // Send JSON response
-    String response = "{\"success\":true,\"message\":\"WiFi settings saved! Click 'Connect Now' to connect.\"}";
-    server.send(200, "application/json", response);
+    server.send(200, "application/json", "{\"success\":true,\"message\":\"WiFi settings saved! Click 'Connect Now' to connect.\"}");
   } else {
-    String response = "{\"success\":false,\"message\":\"Error: Missing SSID\"}";
-    server.send(400, "application/json", response);
+    server.send(400, "application/json", "{\"success\":false,\"message\":\"Error: Missing SSID\"}");
   }
 }
 
@@ -162,11 +176,9 @@ void handleSaveAP() {
     Serial.println(ap_append_mac ? "Yes" : "No");
 
     // Send JSON response
-    String response = "{\"success\":true,\"message\":\"Access Point settings saved! Changes will take effect after reboot.\"}";
-    server.send(200, "application/json", response);
+    server.send(200, "application/json", "{\"success\":true,\"message\":\"Access Point settings saved! Changes will take effect after reboot.\"}");
   } else {
-    String response = "{\"success\":false,\"message\":\"Error: Missing AP SSID or password\"}";
-    server.send(400, "application/json", response);
+    server.send(400, "application/json", "{\"success\":false,\"message\":\"Error: Missing AP SSID or password\"}");
   }
 }
 
@@ -198,113 +210,146 @@ void handleSaveStepper() {
     Serial.println(autoHomeOnBootConfig ? "Enabled" : "Disabled");
 
     // Send JSON response
-    String response = "{\"success\":true,\"message\":\"Stepper settings saved and applied immediately!\"}";
-    server.send(200, "application/json", response);
+    server.send(200, "application/json", "{\"success\":true,\"message\":\"Stepper settings saved and applied immediately!\"}");
   } else {
-    String response = "{\"success\":false,\"message\":\"Error: Missing stepper parameters\"}";
-    server.send(400, "application/json", response);
+    server.send(400, "application/json", "{\"success\":false,\"message\":\"Error: Missing stepper parameters\"}");
   }
 }
 
-void handleSaveArtnet() {
-  if (server.hasArg("artnetUniverse") && server.hasArg("artnetChannel")) {
-    int newUniverse = server.arg("artnetUniverse").toInt();
-    int newChannel = server.arg("artnetChannel").toInt();
-    bool newEnabled = server.hasArg("artnetEnabled");
-    bool newDebug = server.hasArg("artnetDebug");
-    bool new16Bit = server.hasArg("artnet16Bit");
+void handleSaveProtocol() {
+  if (server.hasArg("protocol")) {
+    String newProtocol = server.arg("protocol");
+    bool newStepperControl = server.hasArg("stepperControl");
+    bool new16Bit = server.hasArg("control16Bit");
+    bool newDebug = server.hasArg("protocolDebug");
 
-    // Convert from 1-based (user) to 0-based (internal)
-    artnetUniverseConfig = newUniverse;
-    artnetChannelConfig = newChannel - 1;  // User enters 1-512, we store 0-511
-    artnetEnabledConfig = newEnabled;
-    artnetDebugConfig = newDebug;
-    artnet16BitConfig = new16Bit;
+    // Save protocol selection
+    stepperControlEnabled = newStepperControl;
+    control16BitConfig = new16Bit;
+    protocolDebugConfig = newDebug;
 
-    preferences.putInt("artnetUniverse", artnetUniverseConfig);
-    preferences.putInt("artnetChannel", artnetChannelConfig);
-    preferences.putBool("artnetEnabled", artnetEnabledConfig);
-    preferences.putBool("artnetDebug", artnetDebugConfig);
-    preferences.putBool("artnet16Bit", artnet16BitConfig);
-
-    Serial.println("ArtNet configuration saved!");
-    Serial.print("Enabled: ");
-    Serial.println(artnetEnabledConfig ? "Yes" : "No");
-    Serial.print("Universe: ");
-    Serial.println(artnetUniverseConfig);
-    Serial.print("Channel: ");
-    Serial.print(artnetChannelConfig + 1);  // Display as 1-based
-    Serial.print(" (internal: ");
-    Serial.print(artnetChannelConfig);
-    Serial.println(")");
-    Serial.print("16-bit: ");
-    Serial.println(artnet16BitConfig ? "Yes" : "No");
-    Serial.print("Debug: ");
-    Serial.println(artnetDebugConfig ? "Enabled" : "Disabled");
-
-    // Send JSON response
-    String response = "{\"success\":true,\"message\":\"ArtNet settings saved! NOTE: Reboot required for universe change.\"}";
-    server.send(200, "application/json", response);
-  } else {
-    String response = "{\"success\":false,\"message\":\"Error: Missing required parameters\"}";
-    server.send(400, "application/json", response);
-  }
-}
-
-void handleSaveDDP() {
-  if (server.hasArg("ddpServoChannel")) {
-    int newServoChannel = server.arg("ddpServoChannel").toInt();
-    bool newEnabled = server.hasArg("ddpEnabled");
-    bool newDebug = server.hasArg("ddpDebug");
-    bool new16Bit = server.hasArg("ddp16Bit");
-
-    // Validate values (1-based input, store as 1-based)
-    if (newServoChannel < 1 || newServoChannel > 512) {
-      String response = "{\"success\":false,\"message\":\"Servo channel must be between 1 and 512\"}";
-      server.send(400, "application/json", response);
-      return;
+    if(newProtocol == "artnet") {
+      preferences.putInt("protocol", PROTOCOL_ARTNET);
+    } else {
+      preferences.putInt("protocol", PROTOCOL_DDP);
     }
 
-    // Store as 1-based internally
-    ddpServoChannelConfig = newServoChannel;
-    ddpEnabledConfig = newEnabled;
-    ddpDebugConfig = newDebug;
-    ddp16BitConfig = new16Bit;
+    preferences.putBool("stepperControl", stepperControlEnabled);
+    preferences.putBool("control16Bit", control16BitConfig);
+    preferences.putBool("protocolDebug", protocolDebugConfig);
 
-    preferences.putInt("ddpServoChannel", ddpServoChannelConfig);
-    preferences.putBool("ddpEnabled", ddpEnabledConfig);
-    preferences.putBool("ddpDebug", ddpDebugConfig);
-    preferences.putBool("ddp16Bit", ddp16BitConfig);
+    // Save ArtNet-specific settings if present
+    if (server.hasArg("artnetUniverse")) {
+      artnetUniverseConfig = server.arg("artnetUniverse").toInt();
+      preferences.putInt("artnetUniverse", artnetUniverseConfig);
+    }
+    if (server.hasArg("artnetChannelsPerUniverse")) {
+      artnetChannelsPerUniverseConfig = server.arg("artnetChannelsPerUniverse").toInt();
+      preferences.putInt("artnetChansPerUni", artnetChannelsPerUniverseConfig);
+    }
 
-    // Send JSON response FIRST before reinitializing DDP
-    String response = "{\"success\":true,\"message\":\"DDP settings saved and applied!\"}";
-    server.send(200, "application/json", response);
+    // Save blank time settings
+    if (server.hasArg("ledBlankTime")) {
+      ledBlankTimeConfig = server.arg("ledBlankTime").toInt();
+      preferences.putInt("ledBlankTime", ledBlankTimeConfig);
+    }
+    if (server.hasArg("stepperBlankTime")) {
+      stepperBlankTimeConfig = server.arg("stepperBlankTime").toInt();
+      preferences.putInt("stepperBlankTime", stepperBlankTimeConfig);
+    }
 
-    Serial.println("DDP configuration saved!");
-    Serial.print("Enabled: ");
-    Serial.println(ddpEnabledConfig ? "Yes" : "No");
-    Serial.print("Servo Channel: ");
-    Serial.println(ddpServoChannelConfig);  // Already 1-based
-    Serial.print("16-bit: ");
-    Serial.println(ddp16BitConfig ? "Yes" : "No");
+    Serial.println("Protocol configuration saved!");
+    Serial.print("Protocol: ");
+    if( protocolConfig == PROTOCOL_DDP ) {
+      Serial.println("DDP");
+    } else {
+      Serial.println("ArtNet");
+    }
+    Serial.print("Stepper Control: ");
+    Serial.println(stepperControlEnabled ? "Enabled" : "Disabled");
+    if (stepperControlEnabled) {
+      Serial.print("16-bit Control: ");
+      Serial.println(control16BitConfig ? "Yes" : "No");
+    }
     Serial.print("Debug: ");
-    Serial.println(ddpDebugConfig ? "Enabled" : "Disabled");
+    Serial.println(protocolDebugConfig ? "Enabled" : "Disabled");
+    Serial.print("LED Blank Time: ");
+    Serial.print(ledBlankTimeConfig);
+    Serial.println(" seconds");
+    Serial.print("Stepper Blank Time: ");
+    Serial.print(stepperBlankTimeConfig);
+    Serial.println(" seconds");
 
-    // Reinitialize DDP with new settings AFTER sending response
+    if (protocolConfig == PROTOCOL_ARTNET) {
+      Serial.print("ArtNet Universe: ");
+      Serial.println(artnetUniverseConfig);
+      Serial.print("Channels per Universe: ");
+      Serial.println(artnetChannelsPerUniverseConfig);
+    }
+
+    // Send JSON response
+    server.send(200, "application/json", "{\"success\":true,\"message\":\"Protocol settings saved! Reboot may be required for changes to take effect.\"}");
+
+    // Reinitialize protocols
     initDDP();
+    initializeArtNet();
   } else {
-    String response = "{\"success\":false,\"message\":\"Error: Missing required parameters\"}";
-    server.send(400, "application/json", response);
+    server.send(400, "application/json", "{\"success\":false,\"message\":\"Error: Missing protocol parameter\"}");
+  }
+}
+
+void handleSaveLed() {
+  if (server.hasArg("ledPixelCount")) {
+    // Blank LEDs with old configuration before changing settings
+    // This ensures we clear all pixels that may be beyond the new pixel count
+    blankPixelLeds();
+
+    ledPixelCount = server.arg("ledPixelCount").toInt();
+    ledColorOrder = server.arg("ledColorOrder");
+    ledGamma = server.arg("ledGamma").toFloat();
+    ledBrightness = server.arg("ledBrightness").toInt();
+    ledStartNullPixels = server.arg("ledStartNullPixels").toInt();
+    ledEndNullPixels = server.arg("ledEndNullPixels").toInt();
+
+    preferences.putInt("ledPixelCount", ledPixelCount);
+    preferences.putString("ledColorOrder", ledColorOrder);
+    preferences.putFloat("ledGamma", ledGamma);
+    preferences.putInt("ledBrightness", ledBrightness);
+    preferences.putInt("ledStartNull", ledStartNullPixels);
+    preferences.putInt("ledEndNull", ledEndNullPixels);
+
+    Serial.println("LED configuration saved!");
+    Serial.print("Pixel Count: ");
+    Serial.println(ledPixelCount);
+    Serial.print("Color Order: ");
+    Serial.println(ledColorOrder);
+    Serial.print("Gamma: ");
+    Serial.println(ledGamma);
+    Serial.print("Brightness: ");
+    Serial.print(ledBrightness);
+    Serial.println("%");
+    Serial.print("Start Null Pixels: ");
+    Serial.println(ledStartNullPixels);
+    Serial.print("End Null Pixels: ");
+    Serial.println(ledEndNullPixels);
+
+    // Reinitialize LEDs with new settings immediately
+    initPixelLeds();
+    Serial.println("LEDs reinitialized with new settings");
+
+    // Send JSON response
+    server.send(200, "application/json", "{\"success\":true,\"message\":\"LED settings saved and applied immediately!\"}");
+  } else {
+    server.send(400, "application/json", "{\"success\":false,\"message\":\"Error: Missing LED parameters\"}");
   }
 }
 
 void handleConnect() {
-  String response = "<html><body><h1>Attempting to connect...</h1>";
-  response += "<p>Please wait...</p>";
-  response += "<script>setTimeout(function(){ window.location.href='/'; }, 5000);</script>";
-  response += "</body></html>";
-
-  server.send(200, "text/html", response);
+  server.send(200, "text/html",
+    "<html><body><h1>Attempting to connect...</h1>"
+    "<p>Please wait...</p>"
+    "<script>setTimeout(function(){ window.location.href='/'; }, 5000);</script>"
+    "</body></html>");
 
   delay(1000);
 
@@ -320,11 +365,10 @@ void handleConnect() {
 }
 
 void handleReboot() {
-  String response = "<html><body><h1>Rebooting...</h1>";
-  response += "<p>Device will restart in 1 second.</p>";
-  response += "</body></html>";
-
-  server.send(200, "text/html", response);
+  server.send(200, "text/html",
+    "<html><body><h1>Rebooting...</h1>"
+    "<p>Device will restart in 1 second.</p>"
+    "</body></html>");
 
   Serial.println("Rebooting device...");
 
@@ -341,8 +385,7 @@ void handleReboot() {
 }
 
 void handleResetSettings() {
-  String response = "Settings reset to defaults. Rebooting...";
-  server.send(200, "text/plain", response);
+  server.send(200, "text/plain", "Settings reset to defaults. Rebooting...");
 
   Serial.println("Resetting all settings to defaults...");
 
@@ -367,14 +410,14 @@ void handleHoming() {
   startHoming();
 
   // Return immediately so browser doesn't wait
-  String response = "{\"success\":true,\"message\":\"Homing started. Check status for progress.\"}";
-  server.send(200, "application/json", response);
+  server.send(200, "application/json", "{\"success\":true,\"message\":\"Homing started. Check status for progress.\"}");
 }
 
 void handleLocate() {
   if (server.hasArg("enable")) {
-    String enableArg = server.arg("enable");
-    if (enableArg == "true") {
+    // Check first character of enable argument to avoid String allocation
+    const String& enableArg = server.arg("enable");
+    if (enableArg.length() > 0 && enableArg[0] == 't') {  // "true"
       locateMode = true;
       Serial.println("Locate mode enabled - LED showing SOS pattern");
       server.send(200, "application/json", "{\"success\":true,\"locateMode\":true}");
@@ -385,22 +428,17 @@ void handleLocate() {
     }
   } else {
     // Return current locate mode state
-    String response = "{\"locateMode\":";
-    response += locateMode ? "true" : "false";
-    response += "}";
-    server.send(200, "application/json", response);
+    server.send(200, "application/json", locateMode ? "{\"locateMode\":true}" : "{\"locateMode\":false}");
   }
 }
 
+// Static buffer for status data response (avoids heap allocation)
+static char statusDataBuffer[1200];
+
 void handleStatusData() {
+
   // WiFi status
   bool wifiConnected = (WiFi.status() == WL_CONNECTED);
-  String wifiMode = wifiConnected ? "Client Mode" : "Access Point Mode";
-  String wifiNetwork = wifiConnected ? WiFi.SSID() : String(ap_ssid);
-  String wifiIp = wifiConnected ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
-  String wifiGateway = wifiConnected ? WiFi.gatewayIP().toString() : WiFi.softAPIP().toString();
-  String wifiSubnet = wifiConnected ? WiFi.subnetMask().toString() : "255.255.255.0";
-  String ipType = wifiConnected ? (useStaticIp ? "Static IP" : "DHCP") : "N/A";
 
   // Calculate uptime
   unsigned long uptimeSeconds = (millis() - bootTime) / 1000;
@@ -411,55 +449,127 @@ void handleStatusData() {
 
   // Stepper status
   int currentPosition = stepper->getCurrentPosition();
-  float positionPercent = (bottomPosition > 0) ? ((float)currentPosition / (float)bottomPosition * 100.0) : 0;
+  int positionPercent = (bottomPosition > 0) ? ((currentPosition * 100) / bottomPosition) : 0;
   bool homingSwitchTripped = isHomingSwitchTripped();
 
-  // ArtNet last command
-  float artnetMaxValue = artnet16BitConfig ? 65535.0 : 255.0;
-  float artnetPercent = (lastReceivedPosition / artnetMaxValue) * 100.0;
+  // Protocol status
+  float maxValue = control16BitConfig ? 65535.0 : 255.0;
 
-  // DDP last command
-  float ddpMaxValue = ddp16BitConfig ? 65535.0 : 255.0;
-  float ddpPercent = (ddpLastReceivedPosition / ddpMaxValue) * 100.0;
+  // Read positionRequest safely with critical section
+  uint16_t currentPositionRequest;
+  currentPositionRequest = positionRequest;
 
-  String json = "{";
-  json += "\"wifiConnected\":" + String(wifiConnected ? "true" : "false") + ",";
-  json += "\"wifiMode\":\"" + wifiMode + "\",";
-  json += "\"wifiNetwork\":\"" + wifiNetwork + "\",";
-  json += "\"wifiIp\":\"" + wifiIp + "\",";
-  json += "\"wifiGateway\":\"" + wifiGateway + "\",";
-  json += "\"wifiSubnet\":\"" + wifiSubnet + "\",";
-  json += "\"ipType\":\"" + ipType + "\",";
-  json += "\"uptimeDays\":" + String(uptimeDays) + ",";
-  json += "\"uptimeHours\":" + String(uptimeHours) + ",";
-  json += "\"uptimeMins\":" + String(uptimeMins) + ",";
-  json += "\"uptimeSecs\":" + String(uptimeSecs) + ",";
-  json += "\"homed\":" + String(homed ? "true" : "false") + ",";
-  json += "\"isHoming\":" + String(isHoming() ? "true" : "false") + ",";
-  json += "\"homingSwitchTripped\":" + String(homingSwitchTripped ? "true" : "false") + ",";
-  json += "\"position\":" + String(currentPosition) + ",";
-  json += "\"positionPercent\":" + String(positionPercent, 1) + ",";
-  json += "\"bottomPosition\":" + String(bottomPosition) + ",";
-  json += "\"artnetEnabled\":" + String(artnetEnabledConfig ? "true" : "false") + ",";
-  json += "\"artnetUniverse\":" + String(artnetUniverseConfig) + ",";
-  json += "\"artnetChannel\":" + String(artnetChannelConfig + 1) + ",";  // Display as 1-based
-  json += "\"artnetPacketsReceived\":" + String(artnetPacketsReceived) + ",";
-  json += "\"artnetPacketsActedOn\":" + String(artnetPacketsActedOn) + ",";
-  json += "\"artnetLastCommand\":" + String(lastReceivedPosition) + ",";
-  json += "\"artnetLastCommandPercent\":" + String(artnetPercent, 1) + ",";
-  json += "\"artnet16Bit\":" + String(artnet16BitConfig ? "true" : "false") + ",";
-  json += "\"ddpEnabled\":" + String(ddpEnabledConfig ? "true" : "false") + ",";
-  json += "\"ddpServoChannel\":" + String(ddpServoChannelConfig) + ",";  // Already 1-based
-  json += "\"ddpPacketsReceived\":" + String(ddpPacketsReceived) + ",";
-  json += "\"ddpPacketsActedOn\":" + String(ddpPacketsActedOn) + ",";
-  json += "\"ddpLastCommand\":" + String(ddpLastReceivedPosition) + ",";
-  json += "\"ddpLastCommandPercent\":" + String(ddpPercent, 1) + ",";
-  json += "\"ddp16Bit\":" + String(ddp16BitConfig ? "true" : "false") + ",";
-  json += "\"locateMode\":" + String(locateMode ? "true" : "false") + ",";
-  json += "\"autoHomeOnBoot\":" + String(autoHomeOnBootConfig ? "true" : "false");
-  json += "}";
+  int lastCommandPercent = (int)((currentPositionRequest / maxValue) * 100.0);
+  unsigned long packetsReceived = (protocolConfig == PROTOCOL_DDP) ? ddpPacketsReceived : artnetPacketsReceived;
+  int totalChannels = 2 + (ledPixelCount * 3) + 1;
 
-  server.send(200, "application/json", json);
+  // Get IP addresses as strings
+  char ipStr[16], gatewayStr[16], subnetStr[16];
+  IPAddress ip = wifiConnected ? WiFi.localIP() : WiFi.softAPIP();
+  IPAddress gateway = wifiConnected ? WiFi.gatewayIP() : WiFi.softAPIP();
+  IPAddress subnet = wifiConnected ? WiFi.subnetMask() : IPAddress(255, 255, 255, 0);
+
+  snprintf(ipStr, sizeof(ipStr), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+  snprintf(gatewayStr, sizeof(gatewayStr), "%d.%d.%d.%d", gateway[0], gateway[1], gateway[2], gateway[3]);
+  snprintf(subnetStr, sizeof(subnetStr), "%d.%d.%d.%d", subnet[0], subnet[1], subnet[2], subnet[3]);
+
+  // Get SSID (safe copy to avoid String allocation issues)
+  // Use saved ssid string instead of WiFi.SSID() to avoid String allocation every second
+  char ssidStr[33];  // Max SSID length is 32 + null terminator
+  const char* ssidSource = wifiConnected ? ssid.c_str() : ap_ssid.c_str();
+  strncpy(ssidStr, ssidSource, sizeof(ssidStr) - 1);
+  ssidStr[sizeof(ssidStr) - 1] = '\0';
+
+  // Build JSON using snprintf in static buffer (no heap allocation)
+  // Use enums: wifiMode: 0=AP, 1=Client, ipType: 0=N/A, 1=DHCP, 2=Static, protocol: 0=ArtNet, 1=DDP
+  snprintf(statusDataBuffer, sizeof(statusDataBuffer),
+    "{"
+    "\"wifiConnected\":%s,"
+    "\"wifiMode\":%d,"
+    "\"wifiNetwork\":\"%s\","
+    "\"wifiIp\":\"%s\","
+    "\"wifiGateway\":\"%s\","
+    "\"wifiSubnet\":\"%s\","
+    "\"ipType\":%d,"
+    "\"uptimeDays\":%lu,"
+    "\"uptimeHours\":%lu,"
+    "\"uptimeMins\":%lu,"
+    "\"uptimeSecs\":%lu,"
+    "\"homed\":%s,"
+    "\"isHoming\":%s,"
+    "\"homingSwitchTripped\":%s,"
+    "\"position\":%d,"
+    "\"positionPercent\":%d,"
+    "\"bottomPosition\":%d,"
+    "\"protocol\":%d,"
+    "\"control16Bit\":%s,"
+    "\"protocolPacketsReceived\":%lu,"
+    "\"protocolLastCommand\":%u,"
+    "\"protocolLastCommandPercent\":%d,"
+    "\"totalChannels\":%d,"
+    "\"locateMode\":%s,"
+    "\"autoHomeOnBoot\":%s,"
+    "\"ledPixelCount\":%d,"
+    "\"ledMaxPixelsReceived\":%d,"
+    "\"ledsBlanked\":%s"
+    "}",
+    wifiConnected ? "true" : "false",
+    wifiConnected ? 1 : 0,  // wifiMode: 0=AP, 1=Client
+    ssidStr,
+    ipStr,
+    gatewayStr,
+    subnetStr,
+    wifiConnected ? (useStaticIp ? 2 : 1) : 0,  // ipType: 0=N/A, 1=DHCP, 2=Static
+    uptimeDays, uptimeHours, uptimeMins, uptimeSecs,
+    homed ? "true" : "false",
+    isHoming() ? "true" : "false",
+    homingSwitchTripped ? "true" : "false",
+    currentPosition,
+    positionPercent,
+    bottomPosition,
+    protocolConfig == PROTOCOL_DDP ? 1 : 0,  // protocol: 0=ArtNet, 1=DDP
+    control16BitConfig ? "true" : "false",
+    packetsReceived,
+    currentPositionRequest,
+    lastCommandPercent,
+    totalChannels,
+    locateMode ? "true" : "false",
+    autoHomeOnBootConfig ? "true" : "false",
+    ledPixelCount,
+    ledMaxPixelsReceived,
+    ledsBlanked ? "true" : "false"
+  );
+
+  server.send(200, "application/json", statusDataBuffer);
+
+}
+
+// Static buffer for LED preview response (avoids heap allocation)
+static char ledPreviewResponseBuffer[MAX_LEDS * 6 + 200];
+
+void handleLedPreview() {
+
+  // Show all configured LEDs (up to MAX_LEDS to prevent overflow)
+  int maxPixels = min(ledPixelCount, MAX_LEDS);
+
+  // Sanity check - refuse if pixel count is unreasonable
+  if (maxPixels > MAX_LEDS || maxPixels < 0) {
+    Serial.print("[ERROR] handleLedPreview: Invalid maxPixels = ");
+    Serial.println(maxPixels);
+    server.send(500, "application/json", "{\"error\":\"Invalid pixel count\"}");
+    return;
+  }
+
+  // Build response directly in static buffer to avoid heap allocation
+  const char* ledData = getLedPreviewJson(maxPixels);
+
+  // Use snprintf to safely build JSON response in static buffer
+  snprintf(ledPreviewResponseBuffer, sizeof(ledPreviewResponseBuffer),
+           "{\"ledPreview\":%s,\"count\":%d}",
+           ledData, maxPixels);
+
+  server.send(200, "application/json", ledPreviewResponseBuffer);
+
 }
 
 void handleMove() {
@@ -509,11 +619,12 @@ void startWebServer() {
   server.on("/save-wifi", HTTP_POST, handleSaveWifi);     // WiFi settings
   server.on("/save-ap", HTTP_POST, handleSaveAP);         // AP settings
   server.on("/save-stepper", HTTP_POST, handleSaveStepper); // Stepper settings
-  server.on("/save-artnet", HTTP_POST, handleSaveArtnet);  // ArtNet settings
-  server.on("/save-ddp", HTTP_POST, handleSaveDDP);       // DDP settings
+  server.on("/save-protocol", HTTP_POST, handleSaveProtocol);  // Protocol settings
+  server.on("/save-led", HTTP_POST, handleSaveLed);            // LED settings
 
   // Status and control endpoints
   server.on("/status-data", HTTP_GET, handleStatusData);  // JSON status data
+  server.on("/led-preview", HTTP_GET, handleLedPreview);  // LED preview data (separate to save bandwidth)
   server.on("/move", HTTP_GET, handleMove);               // Move relative steps
   server.on("/set-position", HTTP_GET, handleSetPosition); // Move to absolute position
 

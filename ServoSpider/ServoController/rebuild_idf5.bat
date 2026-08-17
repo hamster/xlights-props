@@ -1,0 +1,6 @@
+@echo off
+echo Cleaning build directory...
+rmdir /s /q .pio\build\seeed_xiao_esp32s3 2>nul
+echo.
+echo Rebuilding with ESP-IDF 5.x...
+pio run
