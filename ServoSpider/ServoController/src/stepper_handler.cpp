@@ -5,6 +5,11 @@
 FastAccelStepperEngine engine = FastAccelStepperEngine();
 FastAccelStepper *stepper = NULL;
 volatile bool interruptTriggered = false;
+// Set alongside interruptTriggered, but consumed separately (see
+// handleHomingInterrupt/updateHoming) so the deferred forceStop() fires
+// exactly once per switch edge instead of on every loop() iteration for as
+// long as interruptTriggered happens to stay set.
+volatile bool pendingForceStop = false;
 int bottomPosition = 0;
 bool homed = false;
 HomingState homingState = HOMING_IDLE;
@@ -21,19 +26,28 @@ int stepperAccelHomingConfig = stepperAccelHoming;
 
 // Homing switch interrupt
 //
-// Deliberately does nothing but set a flag. FastAccelStepper::forceStop()
+// Deliberately does nothing but set flags. FastAccelStepper::forceStop()
 // is a regular (non-IRAM) function; calling it directly from here used to
 // work in practice, but crashes ("Cache disabled but cached memory region
 // accessed") if this ISR fires while flash cache happens to be disabled -
 // which any Preferences.putX() write briefly does. updateHoming() (called
 // every loop() iteration, always in normal task context, never from an
-// ISR) checks this flag first and calls forceStop() from there instead,
-// which is always cache-safe. This does mean the actual stop can lag the
-// switch trip by however long the current loop() iteration takes to
-// return - normally sub-millisecond, but potentially longer if loop() is
-// blocked in a slow HTTP handler when the switch trips.
+// ISR) calls forceStop() from there instead, which is always cache-safe.
+//
+// pendingForceStop is separate from interruptTriggered, and deliberately
+// consumed (cleared) the instant updateHoming() acts on it, regardless of
+// homing state - this replicates the original "stop exactly once, right
+// when the switch trips" behavior. interruptTriggered stays a level flag
+// that only the specific HOMING_* state waiting for this edge clears, once
+// it's actually ready to react to it. Without this split, a stray edge
+// during a state that doesn't touch interruptTriggered (e.g. the initial
+// small-step move off the switch) would leave it stuck true, and a naive
+// "if (interruptTriggered) forceStop()" at the top of updateHoming() would
+// then force-stop every subsequent move - including the very next
+// clear-the-switch move - before it can actually get clear.
 void IRAM_ATTR handleHomingInterrupt() {
   interruptTriggered = true;
+  pendingForceStop = true;
 }
 
 // Find the home.  We run in one direction until we hit the homing switch.
@@ -105,10 +119,13 @@ void updateHoming() {
 
   // Deferred from the ISR (see handleHomingInterrupt) - forceStop() isn't
   // IRAM-safe, so it's issued here instead, in normal task context, as soon
-  // as we notice the flag. Harmless to call repeatedly while it stays set;
-  // the HOMING_* states below still consume/clear interruptTriggered
-  // themselves for their own transition logic.
-  if (interruptTriggered) {
+  // as we notice the flag. Cleared immediately so this fires exactly once
+  // per switch edge, not on every loop() iteration for as long as
+  // interruptTriggered (a separate flag - see handleHomingInterrupt) stays
+  // set; the HOMING_* states below consume/clear interruptTriggered
+  // themselves, on their own schedule, for their own transition logic.
+  if (pendingForceStop) {
+    pendingForceStop = false;
     stepper->forceStop();
   }
 
