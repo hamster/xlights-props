@@ -12,6 +12,7 @@
 #include "led_handler.h"
 #include "partition_utils.h"
 #include "protocol_common.h"
+#include "tmc_handler.h"
 
 // Watchdog timeout in seconds
 #define WDT_TIMEOUT 10
@@ -101,8 +102,21 @@ void setup() {
   ledBlankTimeConfig = preferences.getInt("ledBlankTime", 0);
   stepperBlankTimeConfig = preferences.getInt("stepperBlankTime", 0);
 
+  // Load TMC2209 UART configuration
+  tmcEnabledConfig = preferences.getBool("tmcEnabled", false);
+  tmcRSenseConfig = preferences.getFloat("tmcRSense", 0.11f);
+  tmcAddressConfig = (uint8_t)preferences.getInt("tmcAddress", 0);
+  tmcRunCurrentConfig = (uint16_t)preferences.getInt("tmcRunCurrent", 800);
+  tmcHoldPercentConfig = (uint8_t)preferences.getInt("tmcHoldPercent", 50);
+  tmcStealthChopConfig = preferences.getBool("tmcStealthChop", true);
+  tmcStallEnabledConfig = preferences.getBool("tmcStallEnabled", false);
+  tmcStallThresholdConfig = (uint16_t)preferences.getInt("tmcStallThresh", 50);
+
   // Initialize stepper
   initializeStepper();
+
+  // Initialize TMC2209 UART link (no-op if tmcEnabledConfig is false)
+  initTmc();
 
   // Initialize pixel LEDs (loads config from preferences)
   initPixelLeds();
@@ -159,6 +173,9 @@ void loop() {
 
   // Update non-blocking homing state machine
   updateHoming();
+
+  // Poll TMC2209 diagnostics / stall detection (no-op if not enabled)
+  updateTmc();
 
   server.handleClient();
   handleSerialCommands();
@@ -462,6 +479,50 @@ void printNetworkDiagnostics() {
 
   Serial.print("DDP Packets Received: ");
   Serial.println(ddpPacketsReceived);
+
+  // TMC2209 driver info
+  Serial.println("\n--- TMC2209 Driver Status ---");
+  if (!tmcEnabledConfig) {
+    Serial.println("UART control: Disabled");
+  } else if (!tmcConnected) {
+    Serial.println("UART control: Enabled, but link FAILED (check wiring/RSense/address)");
+  } else {
+    Serial.println("UART control: Connected");
+    Serial.print("Run Current: ");
+    Serial.print(tmcRunCurrentConfig);
+    Serial.print(" mA, Hold: ");
+    Serial.print(tmcHoldPercentConfig);
+    Serial.println("%");
+    Serial.print("Chopper Mode: ");
+    Serial.println(tmcStealthChopConfig ? "StealthChop" : "SpreadCycle");
+    Serial.print("Over-Temp Warning: ");
+    Serial.println(tmcStatus.overTempWarning ? "YES" : "No");
+    Serial.print("Over-Temp Shutdown: ");
+    Serial.println(tmcStatus.overTempShutdown ? "YES" : "No");
+    Serial.print("Short to Ground (A/B): ");
+    Serial.print(tmcStatus.shortToGroundA ? "YES" : "No");
+    Serial.print(" / ");
+    Serial.println(tmcStatus.shortToGroundB ? "YES" : "No");
+    Serial.print("Open Load (A/B): ");
+    Serial.print(tmcStatus.openLoadA ? "YES" : "No");
+    Serial.print(" / ");
+    Serial.println(tmcStatus.openLoadB ? "YES" : "No");
+    Serial.print("UART CRC Errors: ");
+    Serial.println(tmcStatus.uartCrcError ? "YES" : "No");
+    Serial.print("Stall Detection: ");
+    if (tmcStallEnabledConfig) {
+      Serial.print("Enabled (threshold ");
+      Serial.print(tmcStallThresholdConfig);
+      Serial.print(", live SG_RESULT ");
+      Serial.print(tmcStatus.stallGuardResult);
+      Serial.println(")");
+      if (tmcStatus.stalled) {
+        Serial.println("*** STALL LATCHED - clear from the Status page ***");
+      }
+    } else {
+      Serial.println("Disabled");
+    }
+  }
 
   // LED info
   Serial.println("\n--- LED Status ---");

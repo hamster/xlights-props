@@ -15,6 +15,22 @@ function showNotification(message, isSuccess) {
       document.getElementById('stepperBlankTimeGroup').style.display = stepperControlChecked ? 'block' : 'none';
     }
 
+    function toggleTmcOptions() {
+      var tmcEnabled = document.getElementById('tmcEnabled').checked;
+      document.getElementById('tmcOptionsGroup').style.display = tmcEnabled ? 'block' : 'none';
+    }
+
+    function clearTmcStall() {
+      fetch('/clear-tmc-stall')
+        .then(response => response.json())
+        .then(data => {
+          showNotification('Stall fault cleared', true);
+        })
+        .catch(error => {
+          showNotification('Error clearing stall: ' + error, false);
+        });
+    }
+
     // LED preview toggle
     var ledPreviewEnabled = false;
     function toggleLedPreview() {
@@ -55,6 +71,7 @@ function showNotification(message, isSuccess) {
     // Initialize stepper options visibility on page load
     document.addEventListener('DOMContentLoaded', function() {
       toggleStepperOptions();
+      toggleTmcOptions();
     });
 
     function handleFormSubmit(event, url) {
@@ -437,6 +454,44 @@ function showNotification(message, isSuccess) {
               bannerSpider.classList.remove('active');
               locateModeActive = false;
             }
+          }
+
+          // Update TMC2209 driver status
+          var tmcBox = document.getElementById('tmc-status-box');
+          if (data.tmcEnabled) {
+            tmcBox.style.display = 'block';
+
+            var tmcConnEl = document.getElementById('tmc-connected-status');
+            tmcConnEl.textContent = data.tmcConnected ? 'Connected' : 'Not Connected';
+            tmcConnEl.className = 'status ' + (data.tmcConnected ? 'homed' : 'not-homed');
+
+            var diagEl = document.getElementById('tmc-diag-status');
+            var diagIssues = [];
+            if (data.tmcOverTempShutdown) diagIssues.push('OVER-TEMP SHUTDOWN');
+            if (data.tmcOverTempWarning) diagIssues.push('over-temp warning');
+            if (data.tmcShortToGroundA || data.tmcShortToGroundB) diagIssues.push('short to ground');
+            if (data.tmcOpenLoadA || data.tmcOpenLoadB) diagIssues.push('open load');
+            if (data.tmcUartCrcError) diagIssues.push('UART CRC errors');
+            diagEl.textContent = diagIssues.length > 0 ? diagIssues.join(', ') : 'OK';
+            diagEl.style.color = diagIssues.length > 0 ? '#dc3545' : 'inherit';
+
+            var stallEl = document.getElementById('tmc-stall-status');
+            var clearStallBtn = document.getElementById('tmc-clear-stall-btn');
+            if (!data.tmcStallEnabled) {
+              stallEl.textContent = 'Disabled';
+              stallEl.style.color = 'inherit';
+              clearStallBtn.style.display = 'none';
+            } else if (data.tmcStalled) {
+              stallEl.textContent = 'STALLED (SG_RESULT ' + data.tmcStallGuardResult + ')';
+              stallEl.style.color = '#dc3545';
+              clearStallBtn.style.display = 'inline-block';
+            } else {
+              stallEl.textContent = 'OK (live SG_RESULT ' + data.tmcStallGuardResult + ')';
+              stallEl.style.color = 'inherit';
+              clearStallBtn.style.display = 'none';
+            }
+          } else {
+            tmcBox.style.display = 'none';
           }
 
           // Update auto home on boot status (text on status page only, not checkbox on settings page)

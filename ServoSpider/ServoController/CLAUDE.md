@@ -10,6 +10,8 @@ Target hardware: Seeed XIAO ESP32-S3. The board was originally prototyped on the
 
 ArtNet support was deliberately removed (previously in `artnet_handler`/`ArtnetWiFiReceiver`) — DDP already scales to the project's ~500-pixel goal via its fragmented-packet handling, while ArtNet would have needed multi-universe support to get there, and wasn't worth the added surface area for this device. DDP is the only supported protocol now.
 
+The stepper driver is a TMC2209, with its UART link (RX/TX, separate from STEP/DIR/EN) optionally used for digital current control, StallGuard-based jam detection, and driver diagnostics — see `tmc_handler` below. This is independent of FastAccelStepper, which only ever drives STEP/DIR/EN and has no awareness of the driver chip.
+
 ## Build Commands
 
 ```bash
@@ -54,6 +56,7 @@ DDP packet → ddp_handler → positionRequest (shared variable) → main loop �
 | `ddp_handler` | DDP receiver on port 4048, handles fragmented packets (the only supported protocol) |
 | `led_handler` | FastLED direct updates, gamma correction, color order mapping |
 | `stepper_handler` | FastAccelStepper control, non-blocking homing state machine |
+| `tmc_handler` | TMC2209 UART link (current control, StealthChop/SpreadCycle, StallGuard cutoff, diagnostics) - optional, disabled unless enabled in Settings |
 | `wifi_handler` | WiFi client/AP modes, captive portal DNS, mDNS |
 | `html_handler` | Web API endpoints, serves HTML from `html.h` |
 | `ota_handler` | HTTP OTA firmware updates with chunked upload |
@@ -64,7 +67,7 @@ The stepper uses a non-blocking state machine (`HomingState` enum) that finds bo
 ### Configuration Storage
 All settings stored in ESP32 Preferences (NVS flash):
 - `wifi-config` namespace
-- Keys: `ssid`, `password`, `hostname`, `protocol`, `stepperControl`, `control16Bit`, etc.
+- Keys: `ssid`, `password`, `hostname`, `protocol`, `stepperControl`, `control16Bit`, `tmcEnabled`, `tmcRSense`, `tmcAddress`, `tmcRunCurrent`, `tmcHoldPercent`, `tmcStealthChop`, `tmcStallEnabled`, `tmcStallThresh`, etc.
 
 ## Pin Configuration
 
@@ -74,6 +77,8 @@ All settings stored in ESP32 Preferences (NVS flash):
 | D2 | Stepper Direction |
 | D3 | Stepper Enable |
 | D4 | WS2812 LED Data |
+| D6 | TMC2209 UART TX |
+| D7 | TMC2209 UART RX |
 | D8 | Status LED |
 | D10 | Homing Switch |
 

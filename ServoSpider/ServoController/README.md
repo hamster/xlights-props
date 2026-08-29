@@ -14,6 +14,8 @@ DDP is the only supported protocol — ArtNet was deliberately dropped (see [TOD
 | D2  | Stepper Direction |
 | D3  | Stepper Enable |
 | D4  | WS2812 LED Data |
+| D6  | TMC2209 UART TX |
+| D7  | TMC2209 UART RX |
 | D8  | Status LED |
 | D10 | Homing Switch |
 
@@ -93,6 +95,7 @@ Access the device via its IP address (or `http://<hostname>.local`) in a web bro
 - Stepper motor parameters
 - Channel settings, including 8-bit/16-bit stepper mode
 - LED/pixel configuration (count, color order, gamma, brightness, null pixels)
+- Stepper driver (TMC2209 UART): current control, StealthChop/SpreadCycle, StallGuard jam-detection cutoff, diagnostics — optional, off by default
 - Blank-time timeouts (turn off LEDs / return stepper to zero after N seconds without a command)
 - Firmware update (OTA)
 - Reset all settings to defaults
@@ -148,6 +151,13 @@ The controller uses a non-blocking state machine for homing. The hardware design
 - **Debug mode**: Verbose serial logging of incoming DDP data
 - **LED Blank Time**: Seconds of no DDP traffic before pixels turn off (0 = disabled)
 - **Stepper Blank Time**: Seconds of no DDP traffic before the stepper returns to position 0 (0 = disabled)
+
+### Stepper Driver Settings (TMC2209 UART, optional)
+Requires the driver's UART (PDN_UART) wired to D6 (TX) / D7 (RX); leave "Enable UART Driver Control" off if it isn't.
+- **Run Current** (mA) / **Hold Current** (% of run) — replaces the board's physical Vref trimpot once enabled
+- **StealthChop / SpreadCycle** — quiet vs. higher-torque chopper mode (under Advanced)
+- **Stall Detection** — a firmware-side safety cutoff that watches the driver's live StallGuard reading (`SG_RESULT`) and force-stops the motor if it drops below a configured threshold while moving, e.g. a jammed rope. This needs bench tuning: watch the live `SG_RESULT` value on the Status tab under normal moves vs. a deliberately blocked one to pick a threshold, then enable the cutoff. It's independent of the physical homing switch and doesn't affect homing.
+- **Sense Resistor** / **Driver Address** (under Advanced) — match your TMC2209 module's actual sense resistor (commonly 0.11Ω) and MS1/MS2 address strapping (0 for a single-driver setup)
 
 ### LED/Pixel Settings
 - **Pixel Count**: 0-1000 (typical props are 50-150; designed to comfortably handle up to ~500)

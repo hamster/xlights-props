@@ -7,6 +7,7 @@
 #include "ota_handler.h"
 #include "led_handler.h"
 #include "protocol_common.h"
+#include "tmc_handler.h"
 #include "main.h"
 #include <WiFi.h>
 #include <Preferences.h>
@@ -76,6 +77,16 @@ void handleRoot() {
   page.replace("{{LED_BLANK_TIME}}", String(ledBlankTimeConfig));
   page.replace("{{STEPPER_BLANK_TIME}}", String(stepperBlankTimeConfig));
 
+  // TMC2209 configuration values
+  page.replace("{{TMC_ENABLED_CHECKED}}", tmcEnabledConfig ? "checked" : "");
+  page.replace("{{TMC_RSENSE}}", String(tmcRSenseConfig, 3));
+  page.replace("{{TMC_ADDRESS}}", String(tmcAddressConfig));
+  page.replace("{{TMC_RUN_CURRENT}}", String(tmcRunCurrentConfig));
+  page.replace("{{TMC_HOLD_PERCENT}}", String(tmcHoldPercentConfig));
+  page.replace("{{TMC_STEALTHCHOP_CHECKED}}", tmcStealthChopConfig ? "checked" : "");
+  page.replace("{{TMC_SPREADCYCLE_CHECKED}}", tmcStealthChopConfig ? "" : "checked");
+  page.replace("{{TMC_STALL_ENABLED_CHECKED}}", tmcStallEnabledConfig ? "checked" : "");
+  page.replace("{{TMC_STALL_THRESHOLD}}", String(tmcStallThresholdConfig));
 
   // LED configuration values
   page.replace("{{LED_PIXEL_COUNT}}", String(ledPixelCount));
@@ -303,6 +314,59 @@ void handleSaveLed() {
   }
 }
 
+void handleSaveTmc() {
+  bool newEnabled = server.hasArg("tmcEnabled");
+  float newRSense = server.hasArg("tmcRSense") ? server.arg("tmcRSense").toFloat() : tmcRSenseConfig;
+  uint8_t newAddress = server.hasArg("tmcAddress") ? (uint8_t)server.arg("tmcAddress").toInt() : tmcAddressConfig;
+  uint16_t newRunCurrent = server.hasArg("tmcRunCurrent") ? (uint16_t)server.arg("tmcRunCurrent").toInt() : tmcRunCurrentConfig;
+  uint8_t newHoldPercent = server.hasArg("tmcHoldPercent") ? (uint8_t)server.arg("tmcHoldPercent").toInt() : tmcHoldPercentConfig;
+  bool newStealthChop = server.hasArg("tmcChopperMode") ? (server.arg("tmcChopperMode") == "stealthchop") : tmcStealthChopConfig;
+  bool newStallEnabled = server.hasArg("tmcStallEnabled");
+  uint16_t newStallThreshold = server.hasArg("tmcStallThreshold") ? (uint16_t)server.arg("tmcStallThreshold").toInt() : tmcStallThresholdConfig;
+
+  bool linkSettingsChanged = (newEnabled != tmcEnabledConfig) || (newRSense != tmcRSenseConfig) || (newAddress != tmcAddressConfig);
+
+  tmcEnabledConfig = newEnabled;
+  tmcRSenseConfig = newRSense;
+  tmcAddressConfig = newAddress;
+  tmcRunCurrentConfig = newRunCurrent;
+  tmcHoldPercentConfig = newHoldPercent;
+  tmcStealthChopConfig = newStealthChop;
+  tmcStallEnabledConfig = newStallEnabled;
+  tmcStallThresholdConfig = newStallThreshold;
+
+  preferences.putBool("tmcEnabled", tmcEnabledConfig);
+  preferences.putFloat("tmcRSense", tmcRSenseConfig);
+  preferences.putInt("tmcAddress", tmcAddressConfig);
+  preferences.putInt("tmcRunCurrent", tmcRunCurrentConfig);
+  preferences.putInt("tmcHoldPercent", tmcHoldPercentConfig);
+  preferences.putBool("tmcStealthChop", tmcStealthChopConfig);
+  preferences.putBool("tmcStallEnabled", tmcStallEnabledConfig);
+  preferences.putInt("tmcStallThresh", tmcStallThresholdConfig);
+
+  Serial.println("TMC2209 configuration saved!");
+
+  if (linkSettingsChanged) {
+    // Enable/disable, RSense, or address changed - the UART link itself
+    // needs to be (re)established rather than just re-applying registers.
+    tmcConnected = false;
+    if (tmcEnabledConfig) {
+      initTmc();
+    } else {
+      Serial.println("TMC2209 UART control disabled");
+    }
+  } else {
+    applyTmcSettings();
+  }
+
+  server.send(200, "application/json", "{\"success\":true,\"message\":\"TMC2209 settings saved and applied immediately!\"}");
+}
+
+void handleClearTmcStall() {
+  clearTmcStall();
+  server.send(200, "application/json", "{\"success\":true}");
+}
+
 void handleConnect() {
   server.send(200, "text/html",
     "<html><body><h1>Attempting to connect...</h1>"
@@ -392,7 +456,7 @@ void handleLocate() {
 }
 
 // Static buffer for status data response (avoids heap allocation)
-static char statusDataBuffer[1200];
+static char statusDataBuffer[1600];
 
 void handleStatusData() {
 
@@ -469,7 +533,19 @@ void handleStatusData() {
     "\"autoHomeOnBoot\":%s,"
     "\"ledPixelCount\":%d,"
     "\"ledMaxPixelsReceived\":%d,"
-    "\"ledsBlanked\":%s"
+    "\"ledsBlanked\":%s,"
+    "\"tmcEnabled\":%s,"
+    "\"tmcConnected\":%s,"
+    "\"tmcOverTempWarning\":%s,"
+    "\"tmcOverTempShutdown\":%s,"
+    "\"tmcShortToGroundA\":%s,"
+    "\"tmcShortToGroundB\":%s,"
+    "\"tmcOpenLoadA\":%s,"
+    "\"tmcOpenLoadB\":%s,"
+    "\"tmcUartCrcError\":%s,"
+    "\"tmcStallEnabled\":%s,"
+    "\"tmcStallGuardResult\":%u,"
+    "\"tmcStalled\":%s"
     "}",
     wifiConnected ? "true" : "false",
     wifiConnected ? 1 : 0,  // wifiMode: 0=AP, 1=Client
@@ -494,7 +570,19 @@ void handleStatusData() {
     autoHomeOnBootConfig ? "true" : "false",
     ledPixelCount,
     ledMaxPixelsReceived,
-    ledsBlanked ? "true" : "false"
+    ledsBlanked ? "true" : "false",
+    tmcEnabledConfig ? "true" : "false",
+    tmcConnected ? "true" : "false",
+    tmcStatus.overTempWarning ? "true" : "false",
+    tmcStatus.overTempShutdown ? "true" : "false",
+    tmcStatus.shortToGroundA ? "true" : "false",
+    tmcStatus.shortToGroundB ? "true" : "false",
+    tmcStatus.openLoadA ? "true" : "false",
+    tmcStatus.openLoadB ? "true" : "false",
+    tmcStatus.uartCrcError ? "true" : "false",
+    tmcStallEnabledConfig ? "true" : "false",
+    tmcStatus.stallGuardResult,
+    tmcStatus.stalled ? "true" : "false"
   );
 
   server.send(200, "application/json", statusDataBuffer);
@@ -578,6 +666,7 @@ void startWebServer() {
   server.on("/save-stepper", HTTP_POST, handleSaveStepper); // Stepper settings
   server.on("/save-protocol", HTTP_POST, handleSaveProtocol);  // Protocol settings
   server.on("/save-led", HTTP_POST, handleSaveLed);            // LED settings
+  server.on("/save-tmc", HTTP_POST, handleSaveTmc);             // TMC2209 driver settings
 
   // Status and control endpoints
   server.on("/status-data", HTTP_GET, handleStatusData);  // JSON status data
@@ -599,6 +688,9 @@ void startWebServer() {
 
   // Locate mode
   server.on("/locate", HTTP_GET, handleLocate);
+
+  // TMC2209 stall fault acknowledgement
+  server.on("/clear-tmc-stall", HTTP_GET, handleClearTmcStall);
 
   // OTA Update endpoint
   server.on("/update", HTTP_POST, handleOTAUpdateComplete, handleOTAUpdate);

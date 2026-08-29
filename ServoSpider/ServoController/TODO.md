@@ -38,6 +38,20 @@ This is explicitly an open question, not an assumption. Before investing further
 - Check whether `WiFiUDP`'s default receive buffering is enough at higher sustained packet rates, or whether packets get dropped silently before `ddpUdp.parsePacket()` even sees them.
 - This will tell you whether Priority 1 is sufficient, or whether frame-rate/pixel-count guidance needs to be added to the docs (e.g. "500 pixels works but cap update rate to X Hz over WiFi").
 
+## TMC2209 UART driver control (added this session)
+
+Added `tmc_handler` (new module, `teemuatlut/TMCStepper` dependency) using the driver's UART link — wired to D6 (TX) / D7 (RX), separate from the STEP/DIR/EN pins FastAccelStepper drives. Disabled by default (`tmcEnabled` preference); enable it in Settings once the wiring is confirmed. Covers:
+- Digital run/hold current control (replaces the board's Vref trimpot once enabled)
+- StealthChop/SpreadCycle chopper mode toggle (under Advanced in the UI)
+- A firmware-side stall-detection safety cutoff, polling live `SG_RESULT` and force-stopping the motor if it stays below a configured threshold while moving — deliberately *not* using the chip's internal SGTHRS/DIAG-pin comparator, since DIAG isn't wired; this is a simpler, firmware-side comparison so the live value is directly visible on the Status tab while tuning
+- Diagnostics (over-temp, short-to-ground, open-load, UART CRC errors) surfaced on both the Status tab and the `n` serial command
+
+**Needs bench validation before relying on it**, same spirit as Priority 2 below:
+- [ ] Confirm the actual sense-resistor value and MS1/MS2 address strapping for the specific TMC2209 module in use match the defaults (0.11Ω, address 0) — adjust in Settings under Advanced if not.
+- [ ] Tune the stall-detection threshold: watch live `SG_RESULT` on the Status tab during normal moves vs. a deliberately blocked/jammed trolley, then pick a threshold with margin, before enabling the cutoff for real use.
+- [ ] Verify digital current control actually takes effect as expected — if the board's Vref pot was previously providing the real current reference (rather than being tied off for full UART control), enabling this could change motor current/torque from what's currently tuned.
+- [ ] Confirm StealthChop doesn't introduce mid-range resonance/lost-step issues at this project's typical speed range — TMC2209 StealthChop can be less robust than SpreadCycle at higher step rates; SpreadCycle is there as a fallback under Advanced.
+
 ## Smaller/follow-up items
 
 - [ ] Web UI: pixel count input already allows up to 1000 (`MAX_LEDS`), no change needed there, but consider adding a hint/warning in the LED settings section once Priority 2 establishes real practical limits over WiFi.

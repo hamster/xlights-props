@@ -493,6 +493,22 @@ function showNotification(message, isSuccess) {
       document.getElementById('stepperBlankTimeGroup').style.display = stepperControlChecked ? 'block' : 'none';
     }
 
+    function toggleTmcOptions() {
+      var tmcEnabled = document.getElementById('tmcEnabled').checked;
+      document.getElementById('tmcOptionsGroup').style.display = tmcEnabled ? 'block' : 'none';
+    }
+
+    function clearTmcStall() {
+      fetch('/clear-tmc-stall')
+        .then(response => response.json())
+        .then(data => {
+          showNotification('Stall fault cleared', true);
+        })
+        .catch(error => {
+          showNotification('Error clearing stall: ' + error, false);
+        });
+    }
+
     // LED preview toggle
     var ledPreviewEnabled = false;
     function toggleLedPreview() {
@@ -533,6 +549,7 @@ function showNotification(message, isSuccess) {
     // Initialize stepper options visibility on page load
     document.addEventListener('DOMContentLoaded', function() {
       toggleStepperOptions();
+      toggleTmcOptions();
     });
 
     function handleFormSubmit(event, url) {
@@ -917,6 +934,44 @@ function showNotification(message, isSuccess) {
             }
           }
 
+          // Update TMC2209 driver status
+          var tmcBox = document.getElementById('tmc-status-box');
+          if (data.tmcEnabled) {
+            tmcBox.style.display = 'block';
+
+            var tmcConnEl = document.getElementById('tmc-connected-status');
+            tmcConnEl.textContent = data.tmcConnected ? 'Connected' : 'Not Connected';
+            tmcConnEl.className = 'status ' + (data.tmcConnected ? 'homed' : 'not-homed');
+
+            var diagEl = document.getElementById('tmc-diag-status');
+            var diagIssues = [];
+            if (data.tmcOverTempShutdown) diagIssues.push('OVER-TEMP SHUTDOWN');
+            if (data.tmcOverTempWarning) diagIssues.push('over-temp warning');
+            if (data.tmcShortToGroundA || data.tmcShortToGroundB) diagIssues.push('short to ground');
+            if (data.tmcOpenLoadA || data.tmcOpenLoadB) diagIssues.push('open load');
+            if (data.tmcUartCrcError) diagIssues.push('UART CRC errors');
+            diagEl.textContent = diagIssues.length > 0 ? diagIssues.join(', ') : 'OK';
+            diagEl.style.color = diagIssues.length > 0 ? '#dc3545' : 'inherit';
+
+            var stallEl = document.getElementById('tmc-stall-status');
+            var clearStallBtn = document.getElementById('tmc-clear-stall-btn');
+            if (!data.tmcStallEnabled) {
+              stallEl.textContent = 'Disabled';
+              stallEl.style.color = 'inherit';
+              clearStallBtn.style.display = 'none';
+            } else if (data.tmcStalled) {
+              stallEl.textContent = 'STALLED (SG_RESULT ' + data.tmcStallGuardResult + ')';
+              stallEl.style.color = '#dc3545';
+              clearStallBtn.style.display = 'inline-block';
+            } else {
+              stallEl.textContent = 'OK (live SG_RESULT ' + data.tmcStallGuardResult + ')';
+              stallEl.style.color = 'inherit';
+              clearStallBtn.style.display = 'none';
+            }
+          } else {
+            tmcBox.style.display = 'none';
+          }
+
           // Update auto home on boot status (text on status page only, not checkbox on settings page)
           var autoHomeStatus = document.getElementById('auto-home-on-boot');
           if (autoHomeStatus) {
@@ -1172,6 +1227,14 @@ function showNotification(message, isSuccess) {
         <p><strong>Packets Received:</strong> <span id="protocol-packets-received">0</span></p>
       </div>
 
+      <div class="status-box" id="tmc-status-box" style="display: none;">
+        <h4>Driver Status (TMC2209)</h4>
+        <p><strong>UART Link:</strong> <span id="tmc-connected-status" class="status">Not Connected</span></p>
+        <p><strong>Diagnostics:</strong> <span id="tmc-diag-status">OK</span></p>
+        <p><strong>Stall Guard:</strong> <span id="tmc-stall-status">Disabled</span></p>
+        <button id="tmc-clear-stall-btn" class="btn-warning" style="display: none;" onclick="clearTmcStall()">Clear Stall Fault</button>
+      </div>
+
       <div class="status-box">
         <h4>LED Status</h4>
         <div style="margin-bottom: 10px;">
@@ -1348,6 +1411,73 @@ function showNotification(message, isSuccess) {
         </div>
 
         <button onclick="homeServo()" class="btn-success">Home Servo</button>
+      </div>
+
+      <!-- TMC2209 Driver Configuration Box -->
+      <div class="status-box">
+        <h4>Stepper Driver (TMC2209 UART)</h4>
+        <p style="color: #666; font-style: italic;">Optional: digital current control, StallGuard-based jam detection, and driver diagnostics over the UART link on D6/D7. Leave disabled if the driver isn't wired for UART.</p>
+
+        <form onsubmit="return handleFormSubmit(event, '/save-tmc')">
+          <div class="form-group">
+            <label for="tmcEnabled">
+              <input type="checkbox" id="tmcEnabled" name="tmcEnabled" {{TMC_ENABLED_CHECKED}} onchange="toggleTmcOptions()">
+              Enable UART Driver Control
+            </label>
+          </div>
+
+          <div id="tmcOptionsGroup">
+            <div class="form-group">
+              <label for="tmcRunCurrent">Run Current (mA):</label>
+              <input type="number" id="tmcRunCurrent" name="tmcRunCurrent" value="{{TMC_RUN_CURRENT}}" min="0" max="2000" required>
+            </div>
+
+            <div class="form-group">
+              <label for="tmcHoldPercent">Hold Current (% of run):</label>
+              <input type="number" id="tmcHoldPercent" name="tmcHoldPercent" value="{{TMC_HOLD_PERCENT}}" min="0" max="100" required>
+            </div>
+
+            <div class="form-group">
+              <label for="tmcStallEnabled">
+                <input type="checkbox" id="tmcStallEnabled" name="tmcStallEnabled" {{TMC_STALL_ENABLED_CHECKED}}>
+                Enable Stall Detection Safety Cutoff
+              </label>
+            </div>
+
+            <div class="form-group">
+              <label for="tmcStallThreshold">Stall Threshold (live SG_RESULT below this = stalled; tune on the bench, watch the live value on the Status tab):</label>
+              <input type="number" id="tmcStallThreshold" name="tmcStallThreshold" value="{{TMC_STALL_THRESHOLD}}" min="0" max="1023" required>
+            </div>
+
+            <button type="button" class="collapsible" onclick="toggleCollapsible(this)">Advanced</button>
+            <div class="collapsible-content">
+              <div class="collapsible-content-inner">
+                <div class="form-group">
+                  <label style="display: block; margin-bottom: 8px;">
+                    <input type="radio" name="tmcChopperMode" value="stealthchop" {{TMC_STEALTHCHOP_CHECKED}}>
+                    StealthChop (quiet)
+                  </label>
+                  <label style="display: block; margin-bottom: 8px;">
+                    <input type="radio" name="tmcChopperMode" value="spreadcycle" {{TMC_SPREADCYCLE_CHECKED}}>
+                    SpreadCycle (louder, more torque headroom)
+                  </label>
+                </div>
+
+                <div class="form-group">
+                  <label for="tmcRSense">Sense Resistor (&Omega;):</label>
+                  <input type="number" id="tmcRSense" name="tmcRSense" value="{{TMC_RSENSE}}" min="0.01" max="1" step="0.001" required>
+                </div>
+
+                <div class="form-group">
+                  <label for="tmcAddress">Driver UART Address (MS1/MS2 strap):</label>
+                  <input type="number" id="tmcAddress" name="tmcAddress" value="{{TMC_ADDRESS}}" min="0" max="3" required>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <button type="submit" class="btn-primary">Save Driver Settings</button>
+        </form>
       </div>
 
       <!-- Channel Configuration Box -->
