@@ -324,6 +324,20 @@ void handleSaveLed() {
 }
 
 void handleSaveTmc() {
+  if (isHoming()) {
+    // Two independent reasons to refuse this while homing is in progress:
+    // 1) Changing microsteps/current mid-search corrupts the step-count
+    //    math homing depends on (it assumes a constant distance per step
+    //    throughout the whole search).
+    // 2) This handler makes several Preferences.putX() flash writes plus
+    //    TMC UART round-trips; flash writes briefly disable cache, and
+    //    doing that repeatedly while the homing-switch interrupt is live
+    //    widens the window for a cache-disabled-access crash if the
+    //    switch trips at the wrong moment (see handleHomingInterrupt).
+    server.send(409, "application/json", "{\"success\":false,\"message\":\"Cannot change driver settings while homing is in progress - wait for it to finish.\"}");
+    return;
+  }
+
   bool newEnabled = server.hasArg("tmcEnabled");
   float newRSense = server.hasArg("tmcRSense") ? server.arg("tmcRSense").toFloat() : tmcRSenseConfig;
   uint8_t newAddress = server.hasArg("tmcAddress") ? (uint8_t)server.arg("tmcAddress").toInt() : tmcAddressConfig;

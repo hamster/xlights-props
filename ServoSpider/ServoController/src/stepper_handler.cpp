@@ -18,9 +18,19 @@ int jumpStartConfig = 0;
 bool autoHomeOnBootConfig = true;
 
 // Homing switch interrupt
+//
+// Deliberately does nothing but set a flag. FastAccelStepper::forceStop()
+// is a regular (non-IRAM) function; calling it directly from here used to
+// work in practice, but crashes ("Cache disabled but cached memory region
+// accessed") if this ISR fires while flash cache happens to be disabled -
+// which any Preferences.putX() write briefly does. updateHoming() (called
+// every loop() iteration, always in normal task context, never from an
+// ISR) checks this flag first and calls forceStop() from there instead,
+// which is always cache-safe. This does mean the actual stop can lag the
+// switch trip by however long the current loop() iteration takes to
+// return - normally sub-millisecond, but potentially longer if loop() is
+// blocked in a slow HTTP handler when the switch trips.
 void IRAM_ATTR handleHomingInterrupt() {
-  // Safety: Stop the motor immediately to prevent damage to the string
-  stepper->forceStop();
   interruptTriggered = true;
 }
 
@@ -89,6 +99,15 @@ bool isHomingSwitchTripped() {
 void updateHoming() {
   if (!isHoming() && homingState != HOMING_COMPLETE && homingState != HOMING_ERROR) {
     return;  // Not homing
+  }
+
+  // Deferred from the ISR (see handleHomingInterrupt) - forceStop() isn't
+  // IRAM-safe, so it's issued here instead, in normal task context, as soon
+  // as we notice the flag. Harmless to call repeatedly while it stays set;
+  // the HOMING_* states below still consume/clear interruptTriggered
+  // themselves for their own transition logic.
+  if (interruptTriggered) {
+    stepper->forceStop();
   }
 
   unsigned long currentTime = millis();
