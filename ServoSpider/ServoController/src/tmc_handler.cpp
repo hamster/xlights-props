@@ -53,7 +53,18 @@ void initTmc() {
   tmcDriver = new TMC2209Stepper(&Serial1, tmcRSenseConfig, tmcAddressConfig);
   tmcDriver->begin();
 
-  tmcConnected = (tmcDriver->test_connection() == 0);
+  Serial.print("TMC2209: opening UART on RX=D7(GPIO");
+  Serial.print(tmcUartRxPin);
+  Serial.print(") TX=D6(GPIO");
+  Serial.print(tmcUartTxPin);
+  Serial.print("), address ");
+  Serial.print(tmcAddressConfig);
+  Serial.print(", RSense ");
+  Serial.println(tmcRSenseConfig, 3);
+
+  uint8_t connResult = tmcDriver->test_connection();
+  uint32_t rawDrvStatus = tmcDriver->DRV_STATUS();
+  tmcConnected = (connResult == 0);
   tmcStatus.commOk = tmcConnected;
 
   if (tmcConnected) {
@@ -62,7 +73,11 @@ void initTmc() {
     // Clear the power-on-reset flag now that we've taken over configuration
     tmcDriver->GSTAT(GSTAT_ALL_BITS);
   } else {
-    Serial.println("TMC2209 UART link FAILED - check RX/TX wiring to PDN_UART, and the RSense/address settings");
+    Serial.print("TMC2209 UART link FAILED - test_connection()=");
+    Serial.print(connResult);
+    Serial.print(" (1=no reply/read-all-1s, 2=read-all-0s), raw DRV_STATUS=0x");
+    Serial.println(rawDrvStatus, HEX);
+    Serial.println("Check: RX/TX both land on the driver's single PDN_UART pad (not two separate pins), driver is powered (VCC_IO/VM present), and MS1/MS2 give the expected address.");
   }
 }
 
