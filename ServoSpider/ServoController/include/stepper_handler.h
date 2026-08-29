@@ -47,6 +47,8 @@ extern int stepperSpeedConfig;
 extern int stepperAccelConfig;
 extern int jumpStartConfig;
 extern bool autoHomeOnBootConfig;
+extern int stepperSpeedHomingConfig;   // Homing speed, Hz - tune per microstep setting (6000 tuned for 16 microsteps)
+extern int stepperAccelHomingConfig;   // Homing acceleration, steps/s^2
 
 // Stepper functions
 void IRAM_ATTR handleHomingInterrupt();

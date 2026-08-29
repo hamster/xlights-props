@@ -38,6 +38,12 @@ This is explicitly an open question, not an assumption. Before investing further
 - Check whether `WiFiUDP`'s default receive buffering is enough at higher sustained packet rates, or whether packets get dropped silently before `ddpUdp.parsePacket()` even sees them.
 - This will tell you whether Priority 1 is sufficient, or whether frame-rate/pixel-count guidance needs to be added to the docs (e.g. "500 pixels works but cap update rate to X Hz over WiFi").
 
+## Homing speed is now independently configurable (added this session)
+
+Homing speed/acceleration (`stepperSpeedHomingConfig`/`stepperAccelHomingConfig`, in Stepper Configuration) used to be hardcoded (`stepperSpeedHoming`/`stepperAccelHoming`, 6000 Hz / 1000000 steps/s²) and only ever tuned against 16 microsteps. Found when dropping to 4 microsteps to speed up movement made homing 4x physically faster for the same Hz - fast enough that the motor slammed past the switch and stalled/buzzed against the mechanical end-stop before it could stop in time. Homing speed is a step-pulse rate, not a physical velocity, so it doesn't automatically scale with microstep resolution; deliberately made this a manual setting rather than auto-deriving it from `tmcMicrostepsConfig`, since `stepper_handler` has no dependency on `tmc_handler` (and shouldn't - TMC UART control is optional/independent) and homing needs to work correctly whether or not UART control is even enabled. Re-tune Homing Speed/Acceleration whenever the microstep setting changes.
+
+While touching every `stepperAccelHoming`/`stepperSpeedHoming` call site, also fixed a small pre-existing bug: several homing-error/timeout recovery paths (and the `f`/`b` serial commands) reset speed/acceleration to the hardcoded defaults (`stepperAccel`/`stepperSpeed`) instead of the user's actually-configured values (`stepperAccelConfig`/`stepperSpeedConfig`) - meaning a custom Stepper Speed silently reverted to the firmware default after any homing error. Now uses the Config variants throughout.
+
 ## TMC2209 UART driver control (added this session)
 
 Added `tmc_handler` (new module, `teemuatlut/TMCStepper` dependency) using the driver's UART link — wired to D6 (TX) / D7 (RX), separate from the STEP/DIR/EN pins FastAccelStepper drives. Disabled by default (`tmcEnabled` preference); enable it in Settings once the wiring is confirmed. Covers:

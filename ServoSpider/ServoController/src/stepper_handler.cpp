@@ -16,6 +16,8 @@ int stepperSpeedConfig = stepperSpeed;
 int stepperAccelConfig = stepperAccel;
 int jumpStartConfig = 0;
 bool autoHomeOnBootConfig = true;
+int stepperSpeedHomingConfig = stepperSpeedHoming;
+int stepperAccelHomingConfig = stepperAccelHoming;
 
 // Homing switch interrupt
 //
@@ -83,8 +85,8 @@ void startHoming() {
   homingCounter = 0;
   interruptTriggered = false;
 
-  stepper->setAcceleration(stepperAccelHoming);
-  stepper->setSpeedInHz(stepperSpeedHoming);
+  stepper->setAcceleration(stepperAccelHomingConfig);
+  stepper->setSpeedInHz(stepperSpeedHomingConfig);
 }
 
 bool isHoming() {
@@ -175,8 +177,8 @@ void updateHoming() {
         // Couldn't clear switch
         Serial.println("ERROR: Homing switch stuck!");
         stepper->forceStop();
-        stepper->setAcceleration(stepperAccel);
-        stepper->setSpeedInHz(stepperSpeed);
+        stepper->setAcceleration(stepperAccelConfig);
+        stepper->setSpeedInHz(stepperSpeedConfig);
         homingState = HOMING_ERROR;
         homed = false;
       }
@@ -191,13 +193,13 @@ void updateHoming() {
       interruptTriggered = false;
 
       // Reset to homing speed/accel before searching
-      stepper->setAcceleration(stepperAccelHoming);
-      stepper->setSpeedInHz(stepperSpeedHoming);
+      stepper->setAcceleration(stepperAccelHomingConfig);
+      stepper->setSpeedInHz(stepperSpeedHomingConfig);
 
       Serial.print("Starting runBackward() with speed ");
-      Serial.print(stepperSpeedHoming);
+      Serial.print(stepperSpeedHomingConfig);
       Serial.print(" Hz, accel ");
-      Serial.print(stepperAccelHoming);
+      Serial.print(stepperAccelHomingConfig);
       Serial.println(" Hz/s");
 
       stepper->runBackward();
@@ -210,8 +212,8 @@ void updateHoming() {
     } else if (currentTime - homingStateTime >= 10000) {  // 10 second timeout
       Serial.println("ERROR: Timed out moving off switch!");
       stepper->forceStop();
-      stepper->setAcceleration(stepperAccel);
-      stepper->setSpeedInHz(stepperSpeed);
+      stepper->setAcceleration(stepperAccelConfig);
+      stepper->setSpeedInHz(stepperSpeedConfig);
       homingState = HOMING_ERROR;
       homed = false;
     }
@@ -227,8 +229,8 @@ void updateHoming() {
       if (homingCounter > 60) {  // 30 second timeout
         Serial.println("\nERROR: Timed out finding initial position!");
         stepper->forceStop();
-        stepper->setAcceleration(stepperAccel);
-        stepper->setSpeedInHz(stepperSpeed);
+        stepper->setAcceleration(stepperAccelConfig);
+        stepper->setSpeedInHz(stepperSpeedConfig);
         homingState = HOMING_ERROR;
         homed = false;
         return;
@@ -261,8 +263,8 @@ void updateHoming() {
     } else if (currentTime - homingStateTime >= 10000) {  // 10 second timeout
       Serial.println("ERROR: Timed out moving off initial switch!");
       stepper->forceStop();
-      stepper->setAcceleration(stepperAccel);
-      stepper->setSpeedInHz(stepperSpeed);
+      stepper->setAcceleration(stepperAccelConfig);
+      stepper->setSpeedInHz(stepperSpeedConfig);
       homingState = HOMING_ERROR;
       homed = false;
     }
@@ -278,8 +280,8 @@ void updateHoming() {
       if (homingCounter > 60) {  // 30 second timeout
         Serial.println("\nERROR: Timed out finding other end!");
         stepper->forceStop();
-        stepper->setAcceleration(stepperAccel);
-        stepper->setSpeedInHz(stepperSpeed);
+        stepper->setAcceleration(stepperAccelConfig);
+        stepper->setSpeedInHz(stepperSpeedConfig);
         homingState = HOMING_ERROR;
         homed = false;
         return;
@@ -308,16 +310,16 @@ void updateHoming() {
     // Wait for move to complete and switch to clear
     if (!stepper->isRunning() && digitalRead(homingSwitchPin) == LOW) {
       Serial.println("Switch cleared, returning to home position");
-      stepper->setAcceleration(stepperAccel);
-      stepper->setSpeedInHz(stepperSpeed);
+      stepper->setAcceleration(stepperAccelConfig);
+      stepper->setSpeedInHz(stepperSpeedConfig);
       stepper->moveTo(0);
       homingState = HOMING_RETURN_TO_ZERO;
       homingStateTime = currentTime;
     } else if (currentTime - homingStateTime >= 10000) {  // 10 second timeout
       Serial.println("ERROR: Timed out moving off other end switch!");
       stepper->forceStop();
-      stepper->setAcceleration(stepperAccel);
-      stepper->setSpeedInHz(stepperSpeed);
+      stepper->setAcceleration(stepperAccelConfig);
+      stepper->setSpeedInHz(stepperSpeedConfig);
       homingState = HOMING_ERROR;
       homed = false;
     }

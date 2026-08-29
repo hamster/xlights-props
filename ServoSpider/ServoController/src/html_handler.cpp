@@ -69,6 +69,8 @@ void handleRoot() {
   page.replace("{{STEPPER_ACCEL}}", String(stepperAccelConfig));
   page.replace("{{JUMP_START}}", String(jumpStartConfig));
   page.replace("{{AUTO_HOME_ON_BOOT_CHECKED}}", autoHomeOnBootConfig ? "checked" : "");
+  page.replace("{{STEPPER_SPEED_HOMING}}", String(stepperSpeedHomingConfig));
+  page.replace("{{STEPPER_ACCEL_HOMING}}", String(stepperAccelHomingConfig));
 
   // Protocol configuration values
   page.replace("{{STEPPER_CONTROL_CHECKED}}", stepperControlEnabled ? "checked" : "");
@@ -202,11 +204,19 @@ void handleSaveStepper() {
     stepperAccelConfig = server.arg("stepperAccel").toInt();
     jumpStartConfig = server.arg("jumpStart").toInt();
     autoHomeOnBootConfig = server.hasArg("autoHomeOnBoot");
+    if (server.hasArg("stepperSpeedHoming")) {
+      stepperSpeedHomingConfig = server.arg("stepperSpeedHoming").toInt();
+    }
+    if (server.hasArg("stepperAccelHoming")) {
+      stepperAccelHomingConfig = server.arg("stepperAccelHoming").toInt();
+    }
 
     preferences.putInt("stepperSpeed", stepperSpeedConfig);
     preferences.putInt("stepperAccel", stepperAccelConfig);
     preferences.putInt("jumpStart", jumpStartConfig);
     preferences.putBool("autoHomeOnBoot", autoHomeOnBootConfig);
+    preferences.putInt("stepperSpeedHoming", stepperSpeedHomingConfig);
+    preferences.putInt("stepperAccelHoming", stepperAccelHomingConfig);
 
     // Apply the new settings immediately
     stepper->setSpeedInHz(stepperSpeedConfig);
@@ -222,6 +232,11 @@ void handleSaveStepper() {
     Serial.print(jumpStartConfig);
     Serial.print(" steps, Auto Home on Boot: ");
     Serial.println(autoHomeOnBootConfig ? "Enabled" : "Disabled");
+    Serial.print("Homing Speed: ");
+    Serial.print(stepperSpeedHomingConfig);
+    Serial.print(" Hz, Homing Acceleration: ");
+    Serial.print(stepperAccelHomingConfig);
+    Serial.println(" Hz/s (takes effect on next homing run)");
 
     // Send JSON response
     server.send(200, "application/json", "{\"success\":true,\"message\":\"Stepper settings saved and applied immediately!\"}");

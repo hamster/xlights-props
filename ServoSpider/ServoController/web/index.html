@@ -275,6 +275,17 @@
           </div>
 
           <div class="form-group">
+            <label for="stepperSpeedHoming">Homing Speed (Hz):</label>
+            <input type="number" id="stepperSpeedHoming" name="stepperSpeedHoming" value="{{STEPPER_SPEED_HOMING}}" min="100" max="50000" required>
+            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">This is a step-pulse rate, not a physical speed - it doesn't scale with the driver's microstep setting. If you change Microsteps per Full Step under the TMC2209 driver settings, re-tune this: lower microsteps means faster physical movement for the same Hz, so a coarser microstep setting needs a lower Hz here to move at the same physical speed.</p>
+          </div>
+
+          <div class="form-group">
+            <label for="stepperAccelHoming">Homing Acceleration (steps/s&sup2;):</label>
+            <input type="number" id="stepperAccelHoming" name="stepperAccelHoming" value="{{STEPPER_ACCEL_HOMING}}" min="0" max="2000000" required>
+          </div>
+
+          <div class="form-group">
             <label for="autoHomeOnBoot">
               <input type="checkbox" id="autoHomeOnBoot" name="autoHomeOnBoot" {{AUTO_HOME_ON_BOOT_CHECKED}}>
               Auto Home on Bootup

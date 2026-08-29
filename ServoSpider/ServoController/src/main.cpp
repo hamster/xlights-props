@@ -91,6 +91,8 @@ void setup() {
   stepperAccelConfig = preferences.getInt("stepperAccel", stepperAccel);
   jumpStartConfig = preferences.getInt("jumpStart", 0);
   autoHomeOnBootConfig = preferences.getBool("autoHomeOnBoot", true);
+  stepperSpeedHomingConfig = preferences.getInt("stepperSpeedHoming", stepperSpeedHoming);
+  stepperAccelHomingConfig = preferences.getInt("stepperAccelHoming", stepperAccelHoming);
 
   // Load protocol configuration
   protocolConfig = (protocolType)preferences.getInt("protocol", PROTOCOL_DDP);
@@ -345,9 +347,9 @@ void handleSerialCommands() {
       }
       else {
         Serial.println("Moving forward 10 steps");
-        stepper->setAcceleration(stepperAccelHoming);
+        stepper->setAcceleration(stepperAccelHomingConfig);
         stepper->move(10);
-        stepper->setAcceleration(stepperAccel);
+        stepper->setAcceleration(stepperAccelConfig);
       }
       break;
     case 'b':
@@ -356,9 +358,9 @@ void handleSerialCommands() {
       }
       else {
         Serial.println("Moving backward 10 steps");
-        stepper->setAcceleration(stepperAccelHoming);
+        stepper->setAcceleration(stepperAccelHomingConfig);
         stepper->move(-10);
-        stepper->setAcceleration(stepperAccel);
+        stepper->setAcceleration(stepperAccelConfig);
       }
       break;
     }
