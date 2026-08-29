@@ -435,18 +435,34 @@ function showNotification(message, isSuccess) {
 
           document.getElementById('led-pixel-count').textContent = ledPixelCount;
 
-          // Update received pixels display with combined status
+          // Received pixel count, shown alongside packets received
           var receivedElement = document.getElementById('led-pixels-received');
-
+          receivedElement.textContent = ledMaxPixelsReceived;
           if (ledsBlanked) {
-            receivedElement.textContent = 'No recent data';
-            receivedElement.style.color = '#6c757d';  // Gray
-          } else if (ledMaxPixelsReceived === 0) {
-            receivedElement.textContent = '0';
-            receivedElement.style.color = 'inherit';
+            receivedElement.style.color = '#6c757d';  // Gray - no recent data
           } else {
-            receivedElement.textContent = ledMaxPixelsReceived;
             receivedElement.style.color = (ledMaxPixelsReceived > ledPixelCount && ledPixelCount > 0) ? '#dc3545' : 'inherit';
+          }
+
+          // DDP state indicator: 0=Disabled (OTA in progress), 1=Enabled, 2=Paused (test mode)
+          var ddpStatusEl = document.getElementById('ddp-status-text');
+          if (ddpStatusEl) {
+            if (data.ddpState === 0) {
+              ddpStatusEl.textContent = 'Disabled';
+              ddpStatusEl.className = 'status disconnected';
+            } else if (data.ddpState === 2) {
+              ddpStatusEl.textContent = 'Paused';
+              ddpStatusEl.className = 'status not-homed';
+            } else {
+              ddpStatusEl.textContent = 'Enabled';
+              ddpStatusEl.className = 'status connected';
+            }
+          }
+
+          // Time since last DDP packet
+          var lastPacketEl = document.getElementById('ddp-last-packet');
+          if (lastPacketEl) {
+            lastPacketEl.textContent = data.ddpEverReceived ? (data.secsSinceLastDdp + 's ago') : 'Never';
           }
 
           // Fetch LED preview separately (only if enabled to save bandwidth)

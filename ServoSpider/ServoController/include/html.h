@@ -913,18 +913,34 @@ function showNotification(message, isSuccess) {
 
           document.getElementById('led-pixel-count').textContent = ledPixelCount;
 
-          // Update received pixels display with combined status
+          // Received pixel count, shown alongside packets received
           var receivedElement = document.getElementById('led-pixels-received');
-
+          receivedElement.textContent = ledMaxPixelsReceived;
           if (ledsBlanked) {
-            receivedElement.textContent = 'No recent data';
-            receivedElement.style.color = '#6c757d';  // Gray
-          } else if (ledMaxPixelsReceived === 0) {
-            receivedElement.textContent = '0';
-            receivedElement.style.color = 'inherit';
+            receivedElement.style.color = '#6c757d';  // Gray - no recent data
           } else {
-            receivedElement.textContent = ledMaxPixelsReceived;
             receivedElement.style.color = (ledMaxPixelsReceived > ledPixelCount && ledPixelCount > 0) ? '#dc3545' : 'inherit';
+          }
+
+          // DDP state indicator: 0=Disabled (OTA in progress), 1=Enabled, 2=Paused (test mode)
+          var ddpStatusEl = document.getElementById('ddp-status-text');
+          if (ddpStatusEl) {
+            if (data.ddpState === 0) {
+              ddpStatusEl.textContent = 'Disabled';
+              ddpStatusEl.className = 'status disconnected';
+            } else if (data.ddpState === 2) {
+              ddpStatusEl.textContent = 'Paused';
+              ddpStatusEl.className = 'status not-homed';
+            } else {
+              ddpStatusEl.textContent = 'Enabled';
+              ddpStatusEl.className = 'status connected';
+            }
+          }
+
+          // Time since last DDP packet
+          var lastPacketEl = document.getElementById('ddp-last-packet');
+          if (lastPacketEl) {
+            lastPacketEl.textContent = data.ddpEverReceived ? (data.secsSinceLastDdp + 's ago') : 'Never';
           }
 
           // Fetch LED preview separately (only if enabled to save bandwidth)
@@ -1248,11 +1264,13 @@ function showNotification(message, isSuccess) {
 
       <div class="status-box">
         <h4>DDP / LED Status</h4>
+        <div id="ddp-status-text" class="status">Enabled</div>
         <p><strong>Stepper Mode:</strong> <span id="protocol-mode">8-bit</span></p>
         <p><strong>Total Channels:</strong> <span id="total-channels">0</span></p>
-        <p><strong>Packets Received:</strong> <span id="protocol-packets-received">0</span></p>
+        <p><strong>Packets Received:</strong> <span id="protocol-packets-received">0</span> (<span id="led-pixels-received">0</span> pixels)</p>
+        <p><strong>Last Packet:</strong> <span id="ddp-last-packet">Never</span></p>
 
-        <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd;">
+        <div style="margin-top: 10px;">
           <label style="font-size: 12px; cursor: pointer;">
             <input type="checkbox" id="led-preview-enabled" onchange="toggleLedPreview()">
             Show Pixels
@@ -1262,9 +1280,8 @@ function showNotification(message, isSuccess) {
           <div id="led-preview" style="display: flex; flex-wrap: wrap; gap: 1px;"></div>
         </div>
         <p><strong>Configured Pixels:</strong> <span id="led-pixel-count">0</span></p>
-        <p><strong>Received Pixels:</strong> <span id="led-pixels-received">0</span></p>
 
-        <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd;">
+        <div style="margin-top: 10px;">
           <label style="font-size: 12px; cursor: pointer;">
             <input type="checkbox" id="led-test-mode-enabled" onchange="toggleLedTestMode()">
             Test Pattern

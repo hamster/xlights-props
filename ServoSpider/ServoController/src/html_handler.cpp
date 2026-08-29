@@ -540,7 +540,7 @@ void handleLedTest() {
 }
 
 // Static buffer for status data response (avoids heap allocation)
-static char statusDataBuffer[1600];
+static char statusDataBuffer[1700];
 
 void handleStatusData() {
 
@@ -569,6 +569,14 @@ void handleStatusData() {
   int lastCommandPercent = (int)((currentPositionRequest / maxValue) * 100.0);
   unsigned long packetsReceived = ddpPacketsReceived;
   int totalChannels = 2 + (ledPixelCount * 3);
+
+  // DDP state: Disabled while OTA is pausing protocol handling entirely,
+  // Paused while the LED test pattern is ignoring DDP pixel data (stepper
+  // DDP still works in that case), Enabled otherwise. OTA takes priority
+  // over test mode if both were somehow true at once.
+  int ddpState = otaInProgress ? 0 : (ledTestModeActive ? 2 : 1);  // 0=Disabled,1=Enabled,2=Paused
+  bool ddpEverReceived = (lastProtocolUpdateTime > 0);
+  unsigned long secsSinceLastDdp = ddpEverReceived ? (millis() - lastProtocolUpdateTime) / 1000 : 0;
 
   // Get IP addresses as strings
   char ipStr[16], gatewayStr[16], subnetStr[16];
@@ -613,6 +621,9 @@ void handleStatusData() {
     "\"protocolLastCommand\":%u,"
     "\"protocolLastCommandPercent\":%d,"
     "\"totalChannels\":%d,"
+    "\"ddpState\":%d,"
+    "\"ddpEverReceived\":%s,"
+    "\"secsSinceLastDdp\":%lu,"
     "\"locateMode\":%s,"
     "\"autoHomeOnBoot\":%s,"
     "\"ledPixelCount\":%d,"
@@ -651,6 +662,9 @@ void handleStatusData() {
     currentPositionRequest,
     lastCommandPercent,
     totalChannels,
+    ddpState,
+    ddpEverReceived ? "true" : "false",
+    secsSinceLastDdp,
     locateMode ? "true" : "false",
     autoHomeOnBootConfig ? "true" : "false",
     ledPixelCount,
