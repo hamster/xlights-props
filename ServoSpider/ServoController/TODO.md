@@ -1,0 +1,83 @@
+# TODO / Roadmap
+
+## Goal
+
+Turn this into a standalone stepper-mover **+** pixel controller: one ESP32-S3 device on a moving prop that gets both its position and its pixel data over the network via DDP, with no separate LED controller needed on the prop. Target capacity is up to ~500 WS2812 pixels, though most real props will be 50-150. Whether WiFi is reliable enough for combined position + 500-pixel data at a usable frame rate is an open question this roadmap is meant to answer.
+
+Note: checked `git branch -a` / `git stash list` / `git log --all` — there is no leftover branch, stash, or commit anywhere in this repo with prior dual-core work. If there was earlier progress on splitting stepper/LED work across cores, it never made it into git, so treat this as a fresh design rather than something to dig up.
+
+## Fixed/done this session
+
+- [x] **DDP LED channel-offset bug** — `ddp_handler.cpp` used byte offset `3` for where LED data starts; the documented channel layout (and the now-removed ArtNet handler) used byte offset `2` (channel 3). This meant LED colors landed one byte later — and therefore looked different/shifted — than intended. Now uses offset `2`.
+- [x] **`totalChannels` status miscalculation** — `html_handler.cpp`'s status JSON added a stray `+1` to the reserved-channels + LED-channels count. Removed; it now reports `2 + ledPixelCount*3`.
+- [x] **Docs**: CLAUDE.md's pin table said D9 for WS2812 data; code has always used D4. Corrected to match the code. *(Confirm against the actual board/schematic if you get a chance — the doc was fixed to match firmware, not the other way around.)*
+- [x] **ArtNet support removed entirely.** Decision: DDP already scales to the 500-pixel goal for free via its fragmented-packet handling (`header.dataOffset` spans multiple UDP packets with no universe-style ceiling), while ArtNet would have needed real work — subscribing N consecutive universes, per-universe pixel-offset math, UI for universe count — to reach the same target, and every prop in xLights can already have its own protocol per output, so keeping this device DDP-only doesn't constrain the rest of the show. Not worth the ongoing test/debug surface for a capability DDP already has.
+  - Removed `artnet_handler.h`/`.cpp`, the `hideakitai/ArtNet` lib dependency, `PROTOCOL_ARTNET` from `protocolType`, the protocol `<select>` and ArtNet config fields from the web UI (settings tab is now "Channel Configuration", DDP-only), and the `artnetChannelsPerUniverseConfig` dead setting.
+  - `protocolConfig`/`protocolType` (now just `PROTOCOL_NONE`/`PROTOCOL_DDP`) was left in place as cheap scaffolding in case another protocol (e.g. sACN/E1.31) is ever wanted — but nothing currently exposes a way to pick anything other than DDP.
+  - If you ever do want ArtNet or sACN back (e.g. to match other controllers in the show), the multi-universe design notes from the previous version of this doc are in git history (see the commit that introduced this TODO.md) — worth a re-read rather than starting from scratch, since the offset math is the same problem DDP's fragmented handler already solves.
+
+## Priority 1 — Split stepper/protocol handling from LED output across both cores
+
+This is the reason the project moved from the C3 to the S3 in the first place, and it's never actually been implemented — everything (WiFi, web server, DDP receive, stepper dispatch, `FastLED.show()`) still runs serially in one `loop()` on Core 1. See CLAUDE.md's Architecture section.
+
+**Why it matters at 500 pixels:** `FastLED.show()` blocks its calling core for the WS2812 transmission time, roughly 30µs/pixel — about 15ms for 500 pixels, physically required by the WS2812 protocol regardless of which core runs it. Today that 15ms happens inline inside the DDP packet handler, so for that window the device can't parse the next incoming packet, dispatch a stepper move, or serve a web request. At 500 pixels and a typical 20-40Hz update rate from xLights, that's a meaningful fraction of every frame period spent blocked.
+
+Stepper motion itself is *not* blocked by this today — FastAccelStepper generates step pulses from a hardware timer/RMT peripheral independent of `loop()` — so the actual physical movement should stay smooth even now. The real win from splitting cores is keeping protocol *reception* responsive during the LED push, not motion smoothness.
+
+**Suggested approach (not yet designed in detail — worth a dedicated planning pass before coding):**
+- Run WiFi + web server + DDP receive + stepper move dispatch on Core 1 (current behavior, unchanged).
+- Move the pixel buffer → `FastLED.show()` push to a FreeRTOS task pinned to Core 0.
+- The DDP handler writes into the `leds[]` buffer as it does now, then just signals/queues a "show" request instead of calling `FastLED.show()` inline; the Core 0 task performs the actual push.
+- Watch for double-buffering vs. tearing: decide whether a partially-updated `leds[]` array mid-push (e.g., a DDP frame arriving while Core 0 is still transmitting the previous frame) is acceptable, or whether you need a double buffer swapped atomically between cores.
+- Re-verify the watchdog (`esp_task_wdt`) setup once there's a second task — right now `esp_task_wdt_add(NULL)` only registers the main loop's task.
+
+## Priority 2 — Validate WiFi actually holds up at scale
+
+This is explicitly an open question, not an assumption. Before investing further in Priority 1, worth doing a cheap real-world test:
+- Point xLights at the device with a ~150-pixel and a ~500-pixel test model at a normal show frame rate and watch for dropped frames, visible stutter in position moves, or flicker in the pixel output, especially on a busy WiFi network (i.e. actual show night conditions, not a quiet bench).
+- Check whether `WiFiUDP`'s default receive buffering is enough at higher sustained packet rates, or whether packets get dropped silently before `ddpUdp.parsePacket()` even sees them.
+- This will tell you whether Priority 1 is sufficient, or whether frame-rate/pixel-count guidance needs to be added to the docs (e.g. "500 pixels works but cap update rate to X Hz over WiFi").
+
+## Homing speed settings weren't persisting - NVS 15-char key limit, and a pre-existing instance found in the same audit
+
+Reported: Homing Speed setting reverted after every reboot. Cause: ESP32's NVS (what `Preferences` writes to) silently caps key names at 15 characters - a longer key fails to write with no obvious error, so the value only ever lived in RAM for that boot and reverted to the `getInt()` default on the next one. The new keys `"stepperSpeedHoming"`/`"stepperAccelHoming"` were 18 characters each. Renamed to `"stepSpeedHome"`/`"stepAccelHome"` (13 chars) in both `main.cpp` (load) and `html_handler.cpp` (save).
+
+While fixing it, audited every `Preferences` key in the codebase for the same limit (`grep` + `awk` sorted by length) and found one more, **pre-existing, unrelated to this session**: `"stepperBlankTime"` is 16 characters - the "Stepper Blank Time" setting (Channel Configuration) has silently never persisted across a reboot since it was originally written. Renamed to `"stepBlankTime"` (13 chars). After both fixes, the longest key anywhere in the codebase is exactly 15 characters (`tmcStallEnabled`), which is within the limit - confirmed no other violations remain.
+
+**Worth remembering for any future `Preferences` key added to this codebase: keep it to 15 characters or fewer, and there's no compiler or runtime error to catch a violation - it just silently doesn't persist.**
+
+## Fixed a regression the ISR crash fix introduced into homing itself
+
+The `handleHomingInterrupt`/`updateHoming` crash fix (above) accidentally changed `forceStop()` from edge-triggered (called exactly once, synchronously, the instant the switch trips - the original ISR behavior) to level-triggered (called on *every* `loop()` iteration for as long as `interruptTriggered` stayed `true`). `HOMING_MOVE_OFF_FORWARD`/`HOMING_MOVE_OFF_BACKWARD` never touch `interruptTriggered` at all, so a single stray edge during the initial move-off-the-switch phase (plausible on a mechanical switch as it releases) left the flag latched. The very next state (`HOMING_WAIT_CLEAR_SWITCH`) then had its 2500-step "get clear" move force-stopped almost immediately by that stale flag, read the premature stop as "move finished," and pressed on into the search from right back at the switch boundary - re-tripping and re-stopping in a tight loop near the original position instead of actually traveling to search for the other end. Externally this looked like "moves off the switch, then never moves again, times out."
+
+Fixed by splitting the ISR's signal into two flags: `pendingForceStop` (consumed and cleared the instant `updateHoming()` acts on it, restoring the original "exactly once per edge" behavior) and the existing `interruptTriggered` (left exactly as before - a level flag only the specific `HOMING_*` state waiting for that edge clears, on its own schedule). `stepper_handler.cpp`.
+
+## Homing speed is now independently configurable (added this session)
+
+Homing speed/acceleration (`stepperSpeedHomingConfig`/`stepperAccelHomingConfig`, in Stepper Configuration) used to be hardcoded (`stepperSpeedHoming`/`stepperAccelHoming`, 6000 Hz / 1000000 steps/s²) and only ever tuned against 16 microsteps. Found when dropping to 4 microsteps to speed up movement made homing 4x physically faster for the same Hz - fast enough that the motor slammed past the switch and stalled/buzzed against the mechanical end-stop before it could stop in time. Homing speed is a step-pulse rate, not a physical velocity, so it doesn't automatically scale with microstep resolution; deliberately made this a manual setting rather than auto-deriving it from `tmcMicrostepsConfig`, since `stepper_handler` has no dependency on `tmc_handler` (and shouldn't - TMC UART control is optional/independent) and homing needs to work correctly whether or not UART control is even enabled. Re-tune Homing Speed/Acceleration whenever the microstep setting changes.
+
+While touching every `stepperAccelHoming`/`stepperSpeedHoming` call site, also fixed a small pre-existing bug: several homing-error/timeout recovery paths (and the `f`/`b` serial commands) reset speed/acceleration to the hardcoded defaults (`stepperAccel`/`stepperSpeed`) instead of the user's actually-configured values (`stepperAccelConfig`/`stepperSpeedConfig`) - meaning a custom Stepper Speed silently reverted to the firmware default after any homing error. Now uses the Config variants throughout.
+
+## TMC2209 UART driver control (added this session)
+
+Added `tmc_handler` (new module, `teemuatlut/TMCStepper` dependency) using the driver's UART link — wired to D6 (TX) / D7 (RX), separate from the STEP/DIR/EN pins FastAccelStepper drives. Disabled by default (`tmcEnabled` preference); enable it in Settings once the wiring is confirmed. Covers:
+- Digital run/hold current control (replaces the board's Vref trimpot once enabled)
+- StealthChop/SpreadCycle chopper mode toggle (under Advanced in the UI)
+- A firmware-side stall-detection safety cutoff, polling live `SG_RESULT` and force-stopping the motor if it stays below a configured threshold while moving — deliberately *not* using the chip's internal SGTHRS/DIAG-pin comparator, since DIAG isn't wired; this is a simpler, firmware-side comparison so the live value is directly visible on the Status tab while tuning
+- Diagnostics (over-temp, short-to-ground, open-load, UART CRC errors) surfaced on both the Status tab and the `n` serial command
+
+**Bring-up findings (bench-tested this session):**
+- [x] MS1/MS2 confirmed grounded on the actual board → UART address 0 matches the firmware default. Link connects.
+- [x] **TMCStepper register-shadow trap, hit twice**: the library caches each register in RAM and rewrites the *whole* register on any write to it; any field never explicitly touched stays at its C++ default of 0 forever, regardless of the chip's own power-on-reset default for that field. Found and fixed two instances - `CHOPCONF.toff` (0 = driver output stage fully disabled, motor didn't move at all) and `CHOPCONF.mres` (0 = 256 microsteps, motor moved at ~1/16th intended speed after the toff fix). Also preemptively fixed `PWMCONF.pwm_reg`/`pwm_lim`/`pwm_autograd`, which would have silently crippled StealthChop's autotuning the moment it was selected, even though SpreadCycle was in use when this was found. **Any future field added to a TMC register write must be checked against this same trap** - cross-reference against `TMC2208_bitfields.h`'s struct layout before assuming an untouched field is safe at its hardware default.
+- [x] `CHOPCONF.hstrt`/`hend` (SpreadCycle hysteresis) and microstep resolution are now exposed as Settings fields (under Advanced) instead of hardcoded, so they can be tuned on the bench without a rebuild - defaults unchanged (hstrt=0, hend=0, microsteps=16). Still worth listening for excess coil noise/ripple in SpreadCycle and adjusting hstrt/hend if so.
+- [ ] Changing Microsteps per Full Step requires a re-home afterward (bottomPosition is measured in actual steps, so it self-corrects, but the previously-tuned Stepper Speed (Hz) will feel like a different physical speed since distance per step changed) - the UI warns about this on save, but it's easy to miss.
+- [x] **Found and fixed a pre-existing crash, not new but newly exposed**: saving TMC settings while homing was in progress caused a reboot - `Guru Meditation Error: Core 1 panic'ed (Cache disabled but cached memory region accessed)`. Root cause: `handleHomingInterrupt()` (the homing-switch ISR, correctly marked `IRAM_ATTR`) called `stepper->forceStop()`, but `FastAccelStepper::forceStop()` itself is a regular (non-IRAM) function living in cached flash. `Preferences.putX()` briefly disables flash cache while it writes, and the TMC settings save does eight of those plus several UART round-trips in one HTTP request - if the switch tripped during that window, the ISR jumped into forceStop()'s flash-cached code while cache was disabled and panicked. This bug predates the TMC work; nothing previously wrote to flash that repeatedly while the homing interrupt was live, so it never got hit. Fixed by making the ISR set only a flag (`interruptTriggered`), with `updateHoming()` (always normal task context) calling the actual `forceStop()` as soon as it notices the flag - `stepper_handler.cpp`. Also added a `409` guard rejecting `/save-tmc` while `isHoming()` is true, both to close the exposure window and because changing microsteps/current mid-search would corrupt the homing math regardless (it assumes constant distance-per-step throughout the search).
+  - [ ] Worth auditing whether any *other* code path can call `Preferences.putX()` (or otherwise trigger a flash write) while homing's interrupt is live and unguarded - the fix above only closes the specific TMC path that was actually hit. The interrupt-side fix (deferring `forceStop()` to `updateHoming()`) is the real belt-and-suspenders protection; the `/save-tmc` guard is closing one specific door, not the whole hallway.
+  - [ ] Relevant to Priority 1 (splitting protocol/DDP handling and `FastLED.show()` across cores): any future interrupt or cross-core signaling needs the same IRAM-safety scrutiny - don't assume a library function is interrupt-safe just because it's called from inside an `IRAM_ATTR` function; check whether the *callee* is also IRAM-resident.
+- [ ] Tune the stall-detection threshold: watch live `SG_RESULT` on the Status tab during normal moves vs. a deliberately blocked/jammed trolley, then pick a threshold with margin, before enabling the cutoff for real use.
+- [ ] Confirm StealthChop doesn't introduce mid-range resonance/lost-step issues at this project's typical speed range once actually tried - TMC2209 StealthChop can be less robust than SpreadCycle at higher step rates; SpreadCycle is there as a fallback under Advanced.
+
+## Smaller/follow-up items
+
+- [ ] Web UI: pixel count input already allows up to 1000 (`MAX_LEDS`), no change needed there, but consider adding a hint/warning in the LED settings section once Priority 2 establishes real practical limits over WiFi.
+- [ ] Consider whether `stepperControlEnabled = false` (pixel-only prop) should be a first-class documented use case — it already works today (channels 1-2 stay reserved/unused, LEDs still start at channel 3), just isn't called out anywhere.

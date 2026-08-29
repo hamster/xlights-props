@@ -6,7 +6,6 @@
 
 typedef enum {
   PROTOCOL_NONE,
-  PROTOCOL_ARTNET,
   PROTOCOL_DDP
 } protocolType;
 
@@ -16,7 +15,7 @@ extern bool stepperControlEnabled;  // Enable stepper control (stepper uses chan
 extern bool control16BitConfig;     // 16-bit stepper control (only used if stepperControlEnabled)
 extern bool protocolDebugConfig;
 
-// Blank time settings (shared between ArtNet and DDP)
+// Blank time settings (used by DDP)
 extern int ledBlankTimeConfig;      // Seconds before LEDs turn off (0 = disabled)
 extern int stepperBlankTimeConfig;  // Seconds before stepper goes to zero (0 = disabled)
 extern unsigned long lastProtocolUpdateTime;  // Timestamp of last protocol update

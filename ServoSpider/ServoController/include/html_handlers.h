@@ -20,6 +20,8 @@ void handleSaveAP();
 void handleSaveStepper();
 void handleSaveProtocol();
 void handleSaveLed();
+void handleSaveTmc();
+void handleClearTmcStall();
 void handleConnect();
 void handleReboot();
 void handleResetSettings();

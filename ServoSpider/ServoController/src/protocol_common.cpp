@@ -6,7 +6,7 @@ bool stepperControlEnabled = true;  // Enable stepper control (stepper uses chan
 bool control16BitConfig = false;    // 16-bit stepper control (only used if stepperControlEnabled)
 bool protocolDebugConfig = false;
 
-// Blank time settings (shared between ArtNet and DDP)
+// Blank time settings (used by DDP)
 int ledBlankTimeConfig = 0;      // Seconds before LEDs turn off (0 = disabled)
 int stepperBlankTimeConfig = 0;  // Seconds before stepper goes to zero (0 = disabled)
 unsigned long lastProtocolUpdateTime = 0;  // Timestamp of last protocol update

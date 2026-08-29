@@ -5,6 +5,11 @@
 FastAccelStepperEngine engine = FastAccelStepperEngine();
 FastAccelStepper *stepper = NULL;
 volatile bool interruptTriggered = false;
+// Set alongside interruptTriggered, but consumed separately (see
+// handleHomingInterrupt/updateHoming) so the deferred forceStop() fires
+// exactly once per switch edge instead of on every loop() iteration for as
+// long as interruptTriggered happens to stay set.
+volatile bool pendingForceStop = false;
 int bottomPosition = 0;
 bool homed = false;
 HomingState homingState = HOMING_IDLE;
@@ -16,12 +21,33 @@ int stepperSpeedConfig = stepperSpeed;
 int stepperAccelConfig = stepperAccel;
 int jumpStartConfig = 0;
 bool autoHomeOnBootConfig = true;
+int stepperSpeedHomingConfig = stepperSpeedHoming;
+int stepperAccelHomingConfig = stepperAccelHoming;
 
 // Homing switch interrupt
+//
+// Deliberately does nothing but set flags. FastAccelStepper::forceStop()
+// is a regular (non-IRAM) function; calling it directly from here used to
+// work in practice, but crashes ("Cache disabled but cached memory region
+// accessed") if this ISR fires while flash cache happens to be disabled -
+// which any Preferences.putX() write briefly does. updateHoming() (called
+// every loop() iteration, always in normal task context, never from an
+// ISR) calls forceStop() from there instead, which is always cache-safe.
+//
+// pendingForceStop is separate from interruptTriggered, and deliberately
+// consumed (cleared) the instant updateHoming() acts on it, regardless of
+// homing state - this replicates the original "stop exactly once, right
+// when the switch trips" behavior. interruptTriggered stays a level flag
+// that only the specific HOMING_* state waiting for this edge clears, once
+// it's actually ready to react to it. Without this split, a stray edge
+// during a state that doesn't touch interruptTriggered (e.g. the initial
+// small-step move off the switch) would leave it stuck true, and a naive
+// "if (interruptTriggered) forceStop()" at the top of updateHoming() would
+// then force-stop every subsequent move - including the very next
+// clear-the-switch move - before it can actually get clear.
 void IRAM_ATTR handleHomingInterrupt() {
-  // Safety: Stop the motor immediately to prevent damage to the string
-  stepper->forceStop();
   interruptTriggered = true;
+  pendingForceStop = true;
 }
 
 // Find the home.  We run in one direction until we hit the homing switch.
@@ -73,8 +99,8 @@ void startHoming() {
   homingCounter = 0;
   interruptTriggered = false;
 
-  stepper->setAcceleration(stepperAccelHoming);
-  stepper->setSpeedInHz(stepperSpeedHoming);
+  stepper->setAcceleration(stepperAccelHomingConfig);
+  stepper->setSpeedInHz(stepperSpeedHomingConfig);
 }
 
 bool isHoming() {
@@ -89,6 +115,18 @@ bool isHomingSwitchTripped() {
 void updateHoming() {
   if (!isHoming() && homingState != HOMING_COMPLETE && homingState != HOMING_ERROR) {
     return;  // Not homing
+  }
+
+  // Deferred from the ISR (see handleHomingInterrupt) - forceStop() isn't
+  // IRAM-safe, so it's issued here instead, in normal task context, as soon
+  // as we notice the flag. Cleared immediately so this fires exactly once
+  // per switch edge, not on every loop() iteration for as long as
+  // interruptTriggered (a separate flag - see handleHomingInterrupt) stays
+  // set; the HOMING_* states below consume/clear interruptTriggered
+  // themselves, on their own schedule, for their own transition logic.
+  if (pendingForceStop) {
+    pendingForceStop = false;
+    stepper->forceStop();
   }
 
   unsigned long currentTime = millis();
@@ -156,8 +194,8 @@ void updateHoming() {
         // Couldn't clear switch
         Serial.println("ERROR: Homing switch stuck!");
         stepper->forceStop();
-        stepper->setAcceleration(stepperAccel);
-        stepper->setSpeedInHz(stepperSpeed);
+        stepper->setAcceleration(stepperAccelConfig);
+        stepper->setSpeedInHz(stepperSpeedConfig);
         homingState = HOMING_ERROR;
         homed = false;
       }
@@ -172,13 +210,13 @@ void updateHoming() {
       interruptTriggered = false;
 
       // Reset to homing speed/accel before searching
-      stepper->setAcceleration(stepperAccelHoming);
-      stepper->setSpeedInHz(stepperSpeedHoming);
+      stepper->setAcceleration(stepperAccelHomingConfig);
+      stepper->setSpeedInHz(stepperSpeedHomingConfig);
 
       Serial.print("Starting runBackward() with speed ");
-      Serial.print(stepperSpeedHoming);
+      Serial.print(stepperSpeedHomingConfig);
       Serial.print(" Hz, accel ");
-      Serial.print(stepperAccelHoming);
+      Serial.print(stepperAccelHomingConfig);
       Serial.println(" Hz/s");
 
       stepper->runBackward();
@@ -191,8 +229,8 @@ void updateHoming() {
     } else if (currentTime - homingStateTime >= 10000) {  // 10 second timeout
       Serial.println("ERROR: Timed out moving off switch!");
       stepper->forceStop();
-      stepper->setAcceleration(stepperAccel);
-      stepper->setSpeedInHz(stepperSpeed);
+      stepper->setAcceleration(stepperAccelConfig);
+      stepper->setSpeedInHz(stepperSpeedConfig);
       homingState = HOMING_ERROR;
       homed = false;
     }
@@ -208,8 +246,8 @@ void updateHoming() {
       if (homingCounter > 60) {  // 30 second timeout
         Serial.println("\nERROR: Timed out finding initial position!");
         stepper->forceStop();
-        stepper->setAcceleration(stepperAccel);
-        stepper->setSpeedInHz(stepperSpeed);
+        stepper->setAcceleration(stepperAccelConfig);
+        stepper->setSpeedInHz(stepperSpeedConfig);
         homingState = HOMING_ERROR;
         homed = false;
         return;
@@ -242,8 +280,8 @@ void updateHoming() {
     } else if (currentTime - homingStateTime >= 10000) {  // 10 second timeout
       Serial.println("ERROR: Timed out moving off initial switch!");
       stepper->forceStop();
-      stepper->setAcceleration(stepperAccel);
-      stepper->setSpeedInHz(stepperSpeed);
+      stepper->setAcceleration(stepperAccelConfig);
+      stepper->setSpeedInHz(stepperSpeedConfig);
       homingState = HOMING_ERROR;
       homed = false;
     }
@@ -259,8 +297,8 @@ void updateHoming() {
       if (homingCounter > 60) {  // 30 second timeout
         Serial.println("\nERROR: Timed out finding other end!");
         stepper->forceStop();
-        stepper->setAcceleration(stepperAccel);
-        stepper->setSpeedInHz(stepperSpeed);
+        stepper->setAcceleration(stepperAccelConfig);
+        stepper->setSpeedInHz(stepperSpeedConfig);
         homingState = HOMING_ERROR;
         homed = false;
         return;
@@ -289,16 +327,16 @@ void updateHoming() {
     // Wait for move to complete and switch to clear
     if (!stepper->isRunning() && digitalRead(homingSwitchPin) == LOW) {
       Serial.println("Switch cleared, returning to home position");
-      stepper->setAcceleration(stepperAccel);
-      stepper->setSpeedInHz(stepperSpeed);
+      stepper->setAcceleration(stepperAccelConfig);
+      stepper->setSpeedInHz(stepperSpeedConfig);
       stepper->moveTo(0);
       homingState = HOMING_RETURN_TO_ZERO;
       homingStateTime = currentTime;
     } else if (currentTime - homingStateTime >= 10000) {  // 10 second timeout
       Serial.println("ERROR: Timed out moving off other end switch!");
       stepper->forceStop();
-      stepper->setAcceleration(stepperAccel);
-      stepper->setSpeedInHz(stepperSpeed);
+      stepper->setAcceleration(stepperAccelConfig);
+      stepper->setSpeedInHz(stepperSpeedConfig);
       homingState = HOMING_ERROR;
       homed = false;
     }

@@ -27,7 +27,7 @@ bool ap_append_mac = DEFAULT_AP_APPEND_MAC;
 // Connection timeout
 const unsigned long WIFI_TIMEOUT = 10000; // 10 seconds
 
-// connect to wifi – returns true if successful or false if not
+// connect to wifi - returns true if successful or false if not
 boolean connectToWifi() {
   WiFi.mode(WIFI_STA);
 

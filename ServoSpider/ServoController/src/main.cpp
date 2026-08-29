@@ -8,11 +8,11 @@
 #include "stepper_handler.h"
 #include "wifi_handler.h"
 #include "html_handlers.h"
-#include "artnet_handler.h"
 #include "ddp_handler.h"
 #include "led_handler.h"
 #include "partition_utils.h"
 #include "protocol_common.h"
+#include "tmc_handler.h"
 
 // Watchdog timeout in seconds
 #define WDT_TIMEOUT 10
@@ -91,6 +91,10 @@ void setup() {
   stepperAccelConfig = preferences.getInt("stepperAccel", stepperAccel);
   jumpStartConfig = preferences.getInt("jumpStart", 0);
   autoHomeOnBootConfig = preferences.getBool("autoHomeOnBoot", true);
+  // NVS keys are capped at 15 chars - keep these short (see matching note in
+  // html_handler.cpp's handleSaveStepper()).
+  stepperSpeedHomingConfig = preferences.getInt("stepSpeedHome", stepperSpeedHoming);
+  stepperAccelHomingConfig = preferences.getInt("stepAccelHome", stepperAccelHoming);
 
   // Load protocol configuration
   protocolConfig = (protocolType)preferences.getInt("protocol", PROTOCOL_DDP);
@@ -98,16 +102,33 @@ void setup() {
   control16BitConfig = preferences.getBool("control16Bit", false);
   protocolDebugConfig = preferences.getBool("protocolDebug", false);
 
-  // Load saved ArtNet configuration
-  artnetUniverseConfig = preferences.getInt("artnetUniverse", startUniverse);
-  artnetChannelsPerUniverseConfig = preferences.getInt("artnetChansPerUni", 512);
-
   // Load blank time configuration
   ledBlankTimeConfig = preferences.getInt("ledBlankTime", 0);
-  stepperBlankTimeConfig = preferences.getInt("stepperBlankTime", 0);
+  // See matching note in html_handler.cpp's handleSaveProtocol() - old key
+  // exceeded NVS's 15-char limit and never actually persisted.
+  stepperBlankTimeConfig = preferences.getInt("stepBlankTime", 0);
+
+  // Load TMC2209 UART configuration
+  tmcEnabledConfig = preferences.getBool("tmcEnabled", false);
+  tmcRSenseConfig = preferences.getFloat("tmcRSense", 0.11f);
+  tmcAddressConfig = (uint8_t)preferences.getInt("tmcAddress", 0);
+  tmcRunCurrentConfig = (uint16_t)preferences.getInt("tmcRunCurrent", 800);
+  tmcHoldPercentConfig = (uint8_t)preferences.getInt("tmcHoldPercent", 50);
+  tmcStealthChopConfig = preferences.getBool("tmcStealthChop", true);
+  tmcStallEnabledConfig = preferences.getBool("tmcStallEnabled", false);
+  tmcStallThresholdConfig = (uint16_t)preferences.getInt("tmcStallThresh", 50);
+  tmcMicrostepsConfig = (uint16_t)preferences.getInt("tmcMicrosteps", 16);
+  tmcHstrtConfig = (uint8_t)preferences.getInt("tmcHstrt", 0);
+  tmcHendConfig = (uint8_t)preferences.getInt("tmcHend", 0);
+  tmcPwmRegConfig = (uint8_t)preferences.getInt("tmcPwmReg", 4);
+  tmcPwmLimConfig = (uint8_t)preferences.getInt("tmcPwmLim", 12);
+  tmcPwmAutogradConfig = preferences.getBool("tmcPwmAutograd", true);
 
   // Initialize stepper
   initializeStepper();
+
+  // Initialize TMC2209 UART link (no-op if tmcEnabledConfig is false)
+  initTmc();
 
   // Initialize pixel LEDs (loads config from preferences)
   initPixelLeds();
@@ -144,7 +165,6 @@ void setup() {
   }
 
   startWebServer();
-  initializeArtNet();
   initDDP();
 
   // Start non-blocking homing if enabled (will complete in loop)
@@ -166,25 +186,25 @@ void loop() {
   // Update non-blocking homing state machine
   updateHoming();
 
+  // Poll TMC2209 diagnostics / stall detection (no-op if not enabled)
+  updateTmc();
+
   server.handleClient();
   handleSerialCommands();
 
-  // Skip ArtNet, DDP, and DNS handling during OTA update to prevent interference
+  // Skip DDP and DNS handling during OTA update to prevent interference
   if (!otaInProgress) {
-    if(protocolConfig == PROTOCOL_ARTNET){
-      artnet.parse();
-    }
-    else if(protocolConfig == PROTOCOL_DDP){
+    if (protocolConfig == PROTOCOL_DDP) {
       handleDDP();
     }
-    
+
     // Process DNS requests for captive portal (only in AP mode)
     if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
       dnsServer.processNextRequest();
     }
   }
 
-  // Handle position requests from active protocol (ArtNet or DDP)
+  // Handle position requests from DDP
   uint16_t currentPositionRequest;
   currentPositionRequest = positionRequest;
 
@@ -331,9 +351,9 @@ void handleSerialCommands() {
       }
       else {
         Serial.println("Moving forward 10 steps");
-        stepper->setAcceleration(stepperAccelHoming);
+        stepper->setAcceleration(stepperAccelHomingConfig);
         stepper->move(10);
-        stepper->setAcceleration(stepperAccel);
+        stepper->setAcceleration(stepperAccelConfig);
       }
       break;
     case 'b':
@@ -342,9 +362,9 @@ void handleSerialCommands() {
       }
       else {
         Serial.println("Moving backward 10 steps");
-        stepper->setAcceleration(stepperAccelHoming);
+        stepper->setAcceleration(stepperAccelHomingConfig);
         stepper->move(-10);
-        stepper->setAcceleration(stepperAccel);
+        stepper->setAcceleration(stepperAccelConfig);
       }
       break;
     }
@@ -460,7 +480,7 @@ void printNetworkDiagnostics() {
   // Protocol info
   Serial.println("\n--- Protocol Status ---");
   Serial.print("Active Protocol: ");
-  Serial.println(protocolConfig == PROTOCOL_DDP ? "DDP" : "ArtNet");
+  Serial.println(protocolConfig == PROTOCOL_DDP ? "DDP" : "Disabled");
   Serial.print("Last Protocol Update: ");
   if (lastProtocolUpdateTime > 0) {
     Serial.print(millis() - lastProtocolUpdateTime);
@@ -469,12 +489,51 @@ void printNetworkDiagnostics() {
     Serial.println("Never");
   }
 
-  if (protocolConfig == PROTOCOL_DDP) {
-    Serial.print("DDP Packets Received: ");
-    Serial.println(ddpPacketsReceived);
+  Serial.print("DDP Packets Received: ");
+  Serial.println(ddpPacketsReceived);
+
+  // TMC2209 driver info
+  Serial.println("\n--- TMC2209 Driver Status ---");
+  if (!tmcEnabledConfig) {
+    Serial.println("UART control: Disabled");
+  } else if (!tmcConnected) {
+    Serial.println("UART control: Enabled, but link FAILED (check wiring/RSense/address)");
   } else {
-    Serial.print("ArtNet Packets Received: ");
-    Serial.println(artnetPacketsReceived);
+    Serial.println("UART control: Connected");
+    Serial.print("Run Current: ");
+    Serial.print(tmcRunCurrentConfig);
+    Serial.print(" mA, Hold: ");
+    Serial.print(tmcHoldPercentConfig);
+    Serial.println("%");
+    Serial.print("Chopper Mode: ");
+    Serial.println(tmcStealthChopConfig ? "StealthChop" : "SpreadCycle");
+    Serial.print("Over-Temp Warning: ");
+    Serial.println(tmcStatus.overTempWarning ? "YES" : "No");
+    Serial.print("Over-Temp Shutdown: ");
+    Serial.println(tmcStatus.overTempShutdown ? "YES" : "No");
+    Serial.print("Short to Ground (A/B): ");
+    Serial.print(tmcStatus.shortToGroundA ? "YES" : "No");
+    Serial.print(" / ");
+    Serial.println(tmcStatus.shortToGroundB ? "YES" : "No");
+    Serial.print("Open Load (A/B): ");
+    Serial.print(tmcStatus.openLoadA ? "YES" : "No");
+    Serial.print(" / ");
+    Serial.println(tmcStatus.openLoadB ? "YES" : "No");
+    Serial.print("UART CRC Errors: ");
+    Serial.println(tmcStatus.uartCrcError ? "YES" : "No");
+    Serial.print("Stall Detection: ");
+    if (tmcStallEnabledConfig) {
+      Serial.print("Enabled (threshold ");
+      Serial.print(tmcStallThresholdConfig);
+      Serial.print(", live SG_RESULT ");
+      Serial.print(tmcStatus.stallGuardResult);
+      Serial.println(")");
+      if (tmcStatus.stalled) {
+        Serial.println("*** STALL LATCHED - clear from the Status page ***");
+      }
+    } else {
+      Serial.println("Disabled");
+    }
   }
 
   // LED info

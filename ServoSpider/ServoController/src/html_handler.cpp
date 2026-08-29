@@ -3,14 +3,15 @@
 #include "version.h"
 #include "wifi_handler.h"
 #include "stepper_handler.h"
-#include "artnet_handler.h"
 #include "ddp_handler.h"
 #include "ota_handler.h"
 #include "led_handler.h"
 #include "protocol_common.h"
+#include "tmc_handler.h"
 #include "main.h"
 #include <WiFi.h>
 #include <Preferences.h>
+#include <esp_task_wdt.h>
 
 // Web server
 WebServer server(80);
@@ -68,20 +69,35 @@ void handleRoot() {
   page.replace("{{STEPPER_ACCEL}}", String(stepperAccelConfig));
   page.replace("{{JUMP_START}}", String(jumpStartConfig));
   page.replace("{{AUTO_HOME_ON_BOOT_CHECKED}}", autoHomeOnBootConfig ? "checked" : "");
+  page.replace("{{STEPPER_SPEED_HOMING}}", String(stepperSpeedHomingConfig));
+  page.replace("{{STEPPER_ACCEL_HOMING}}", String(stepperAccelHomingConfig));
 
   // Protocol configuration values
-  page.replace("{{DDP_SELECTED}}", protocolConfig == PROTOCOL_DDP ? "selected" : "");
-  page.replace("{{ARTNET_SELECTED}}", protocolConfig == PROTOCOL_ARTNET ? "selected" : "");
-  page.replace("{{ARTNET_UNIVERSE}}", String(artnetUniverseConfig));
-  page.replace("{{ARTNET_CHANNELS_PER_UNIVERSE}}", String(artnetChannelsPerUniverseConfig));
   page.replace("{{STEPPER_CONTROL_CHECKED}}", stepperControlEnabled ? "checked" : "");
   page.replace("{{CONTROL_16BIT_CHECKED}}", control16BitConfig ? "checked" : "");
   page.replace("{{PROTOCOL_DEBUG_CHECKED}}", protocolDebugConfig ? "checked" : "");
   page.replace("{{LED_BLANK_TIME}}", String(ledBlankTimeConfig));
   page.replace("{{STEPPER_BLANK_TIME}}", String(stepperBlankTimeConfig));
 
-  // Status page protocol values
-  page.replace("{{PROTOCOL_TYPE}}", protocolConfig == PROTOCOL_DDP ? "DDP" : "ArtNet");
+  // TMC2209 configuration values
+  page.replace("{{TMC_ENABLED_CHECKED}}", tmcEnabledConfig ? "checked" : "");
+  page.replace("{{TMC_RSENSE}}", String(tmcRSenseConfig, 3));
+  page.replace("{{TMC_ADDRESS}}", String(tmcAddressConfig));
+  page.replace("{{TMC_RUN_CURRENT}}", String(tmcRunCurrentConfig));
+  page.replace("{{TMC_HOLD_PERCENT}}", String(tmcHoldPercentConfig));
+  page.replace("{{TMC_STEALTHCHOP_CHECKED}}", tmcStealthChopConfig ? "checked" : "");
+  page.replace("{{TMC_SPREADCYCLE_CHECKED}}", tmcStealthChopConfig ? "" : "checked");
+  page.replace("{{TMC_STALL_ENABLED_CHECKED}}", tmcStallEnabledConfig ? "checked" : "");
+  page.replace("{{TMC_STALL_THRESHOLD}}", String(tmcStallThresholdConfig));
+  const uint16_t tmcMicrostepOptions[] = {1, 2, 4, 8, 16, 32, 64, 128, 256};
+  for (uint16_t opt : tmcMicrostepOptions) {
+    page.replace("{{TMC_USTEP_" + String(opt) + "}}", (opt == tmcMicrostepsConfig) ? "selected" : "");
+  }
+  page.replace("{{TMC_HSTRT}}", String(tmcHstrtConfig));
+  page.replace("{{TMC_HEND}}", String(tmcHendConfig));
+  page.replace("{{TMC_PWM_REG}}", String(tmcPwmRegConfig));
+  page.replace("{{TMC_PWM_LIM}}", String(tmcPwmLimConfig));
+  page.replace("{{TMC_PWM_AUTOGRAD_CHECKED}}", tmcPwmAutogradConfig ? "checked" : "");
 
   // LED configuration values
   page.replace("{{LED_PIXEL_COUNT}}", String(ledPixelCount));
@@ -188,11 +204,21 @@ void handleSaveStepper() {
     stepperAccelConfig = server.arg("stepperAccel").toInt();
     jumpStartConfig = server.arg("jumpStart").toInt();
     autoHomeOnBootConfig = server.hasArg("autoHomeOnBoot");
+    if (server.hasArg("stepperSpeedHoming")) {
+      stepperSpeedHomingConfig = server.arg("stepperSpeedHoming").toInt();
+    }
+    if (server.hasArg("stepperAccelHoming")) {
+      stepperAccelHomingConfig = server.arg("stepperAccelHoming").toInt();
+    }
 
     preferences.putInt("stepperSpeed", stepperSpeedConfig);
     preferences.putInt("stepperAccel", stepperAccelConfig);
     preferences.putInt("jumpStart", jumpStartConfig);
     preferences.putBool("autoHomeOnBoot", autoHomeOnBootConfig);
+    // NVS keys are capped at 15 chars - "stepperSpeedHoming"/"stepperAccelHoming"
+    // (18 chars each) silently fail to write and never persist across reboot.
+    preferences.putInt("stepSpeedHome", stepperSpeedHomingConfig);
+    preferences.putInt("stepAccelHome", stepperAccelHomingConfig);
 
     // Apply the new settings immediately
     stepper->setSpeedInHz(stepperSpeedConfig);
@@ -208,6 +234,11 @@ void handleSaveStepper() {
     Serial.print(jumpStartConfig);
     Serial.print(" steps, Auto Home on Boot: ");
     Serial.println(autoHomeOnBootConfig ? "Enabled" : "Disabled");
+    Serial.print("Homing Speed: ");
+    Serial.print(stepperSpeedHomingConfig);
+    Serial.print(" Hz, Homing Acceleration: ");
+    Serial.print(stepperAccelHomingConfig);
+    Serial.println(" Hz/s (takes effect on next homing run)");
 
     // Send JSON response
     server.send(200, "application/json", "{\"success\":true,\"message\":\"Stepper settings saved and applied immediately!\"}");
@@ -217,85 +248,52 @@ void handleSaveStepper() {
 }
 
 void handleSaveProtocol() {
-  if (server.hasArg("protocol")) {
-    String newProtocol = server.arg("protocol");
-    bool newStepperControl = server.hasArg("stepperControl");
-    bool new16Bit = server.hasArg("control16Bit");
-    bool newDebug = server.hasArg("protocolDebug");
+  // DDP is the only supported protocol; this form covers channel/stepper settings.
+  bool newStepperControl = server.hasArg("stepperControl");
+  bool new16Bit = server.hasArg("control16Bit");
+  bool newDebug = server.hasArg("protocolDebug");
 
-    // Save protocol selection
-    stepperControlEnabled = newStepperControl;
-    control16BitConfig = new16Bit;
-    protocolDebugConfig = newDebug;
+  stepperControlEnabled = newStepperControl;
+  control16BitConfig = new16Bit;
+  protocolDebugConfig = newDebug;
 
-    if(newProtocol == "artnet") {
-      preferences.putInt("protocol", PROTOCOL_ARTNET);
-    } else {
-      preferences.putInt("protocol", PROTOCOL_DDP);
-    }
+  preferences.putBool("stepperControl", stepperControlEnabled);
+  preferences.putBool("control16Bit", control16BitConfig);
+  preferences.putBool("protocolDebug", protocolDebugConfig);
 
-    preferences.putBool("stepperControl", stepperControlEnabled);
-    preferences.putBool("control16Bit", control16BitConfig);
-    preferences.putBool("protocolDebug", protocolDebugConfig);
-
-    // Save ArtNet-specific settings if present
-    if (server.hasArg("artnetUniverse")) {
-      artnetUniverseConfig = server.arg("artnetUniverse").toInt();
-      preferences.putInt("artnetUniverse", artnetUniverseConfig);
-    }
-    if (server.hasArg("artnetChannelsPerUniverse")) {
-      artnetChannelsPerUniverseConfig = server.arg("artnetChannelsPerUniverse").toInt();
-      preferences.putInt("artnetChansPerUni", artnetChannelsPerUniverseConfig);
-    }
-
-    // Save blank time settings
-    if (server.hasArg("ledBlankTime")) {
-      ledBlankTimeConfig = server.arg("ledBlankTime").toInt();
-      preferences.putInt("ledBlankTime", ledBlankTimeConfig);
-    }
-    if (server.hasArg("stepperBlankTime")) {
-      stepperBlankTimeConfig = server.arg("stepperBlankTime").toInt();
-      preferences.putInt("stepperBlankTime", stepperBlankTimeConfig);
-    }
-
-    Serial.println("Protocol configuration saved!");
-    Serial.print("Protocol: ");
-    if( protocolConfig == PROTOCOL_DDP ) {
-      Serial.println("DDP");
-    } else {
-      Serial.println("ArtNet");
-    }
-    Serial.print("Stepper Control: ");
-    Serial.println(stepperControlEnabled ? "Enabled" : "Disabled");
-    if (stepperControlEnabled) {
-      Serial.print("16-bit Control: ");
-      Serial.println(control16BitConfig ? "Yes" : "No");
-    }
-    Serial.print("Debug: ");
-    Serial.println(protocolDebugConfig ? "Enabled" : "Disabled");
-    Serial.print("LED Blank Time: ");
-    Serial.print(ledBlankTimeConfig);
-    Serial.println(" seconds");
-    Serial.print("Stepper Blank Time: ");
-    Serial.print(stepperBlankTimeConfig);
-    Serial.println(" seconds");
-
-    if (protocolConfig == PROTOCOL_ARTNET) {
-      Serial.print("ArtNet Universe: ");
-      Serial.println(artnetUniverseConfig);
-      Serial.print("Channels per Universe: ");
-      Serial.println(artnetChannelsPerUniverseConfig);
-    }
-
-    // Send JSON response
-    server.send(200, "application/json", "{\"success\":true,\"message\":\"Protocol settings saved! Reboot may be required for changes to take effect.\"}");
-
-    // Reinitialize protocols
-    initDDP();
-    initializeArtNet();
-  } else {
-    server.send(400, "application/json", "{\"success\":false,\"message\":\"Error: Missing protocol parameter\"}");
+  // Save blank time settings
+  if (server.hasArg("ledBlankTime")) {
+    ledBlankTimeConfig = server.arg("ledBlankTime").toInt();
+    preferences.putInt("ledBlankTime", ledBlankTimeConfig);
   }
+  if (server.hasArg("stepperBlankTime")) {
+    stepperBlankTimeConfig = server.arg("stepperBlankTime").toInt();
+    // "stepperBlankTime" is 16 chars, over NVS's 15-char key limit - this
+    // setting silently never persisted across a reboot until this fix.
+    preferences.putInt("stepBlankTime", stepperBlankTimeConfig);
+  }
+
+  Serial.println("Protocol configuration saved!");
+  Serial.print("Stepper Control: ");
+  Serial.println(stepperControlEnabled ? "Enabled" : "Disabled");
+  if (stepperControlEnabled) {
+    Serial.print("16-bit Control: ");
+    Serial.println(control16BitConfig ? "Yes" : "No");
+  }
+  Serial.print("Debug: ");
+  Serial.println(protocolDebugConfig ? "Enabled" : "Disabled");
+  Serial.print("LED Blank Time: ");
+  Serial.print(ledBlankTimeConfig);
+  Serial.println(" seconds");
+  Serial.print("Stepper Blank Time: ");
+  Serial.print(stepperBlankTimeConfig);
+  Serial.println(" seconds");
+
+  // Send JSON response
+  server.send(200, "application/json", "{\"success\":true,\"message\":\"Protocol settings saved and applied immediately!\"}");
+
+  // Reinitialize DDP
+  initDDP();
 }
 
 void handleSaveLed() {
@@ -342,6 +340,102 @@ void handleSaveLed() {
   } else {
     server.send(400, "application/json", "{\"success\":false,\"message\":\"Error: Missing LED parameters\"}");
   }
+}
+
+void handleSaveTmc() {
+  if (isHoming()) {
+    // Two independent reasons to refuse this while homing is in progress:
+    // 1) Changing microsteps/current mid-search corrupts the step-count
+    //    math homing depends on (it assumes a constant distance per step
+    //    throughout the whole search).
+    // 2) This handler makes several Preferences.putX() flash writes plus
+    //    TMC UART round-trips; flash writes briefly disable cache, and
+    //    doing that repeatedly while the homing-switch interrupt is live
+    //    widens the window for a cache-disabled-access crash if the
+    //    switch trips at the wrong moment (see handleHomingInterrupt).
+    server.send(409, "application/json", "{\"success\":false,\"message\":\"Cannot change driver settings while homing is in progress - wait for it to finish.\"}");
+    return;
+  }
+
+  bool newEnabled = server.hasArg("tmcEnabled");
+  float newRSense = server.hasArg("tmcRSense") ? server.arg("tmcRSense").toFloat() : tmcRSenseConfig;
+  uint8_t newAddress = server.hasArg("tmcAddress") ? (uint8_t)server.arg("tmcAddress").toInt() : tmcAddressConfig;
+  uint16_t newRunCurrent = server.hasArg("tmcRunCurrent") ? (uint16_t)server.arg("tmcRunCurrent").toInt() : tmcRunCurrentConfig;
+  uint8_t newHoldPercent = server.hasArg("tmcHoldPercent") ? (uint8_t)server.arg("tmcHoldPercent").toInt() : tmcHoldPercentConfig;
+  bool newStealthChop = server.hasArg("tmcChopperMode") ? (server.arg("tmcChopperMode") == "stealthchop") : tmcStealthChopConfig;
+  bool newStallEnabled = server.hasArg("tmcStallEnabled");
+  uint16_t newStallThreshold = server.hasArg("tmcStallThreshold") ? (uint16_t)server.arg("tmcStallThreshold").toInt() : tmcStallThresholdConfig;
+  uint16_t newMicrosteps = server.hasArg("tmcMicrosteps") ? (uint16_t)server.arg("tmcMicrosteps").toInt() : tmcMicrostepsConfig;
+  uint8_t newHstrt = server.hasArg("tmcHstrt") ? (uint8_t)server.arg("tmcHstrt").toInt() : tmcHstrtConfig;
+  uint8_t newHend = server.hasArg("tmcHend") ? (uint8_t)server.arg("tmcHend").toInt() : tmcHendConfig;
+  uint8_t newPwmReg = server.hasArg("tmcPwmReg") ? (uint8_t)server.arg("tmcPwmReg").toInt() : tmcPwmRegConfig;
+  uint8_t newPwmLim = server.hasArg("tmcPwmLim") ? (uint8_t)server.arg("tmcPwmLim").toInt() : tmcPwmLimConfig;
+  bool newPwmAutograd = server.hasArg("tmcPwmAutograd");
+
+  bool linkSettingsChanged = (newEnabled != tmcEnabledConfig) || (newRSense != tmcRSenseConfig) || (newAddress != tmcAddressConfig);
+  // A fresh homing run is needed if microstepping changes, since bottomPosition
+  // is measured in actual steps and the physical distance per step just changed.
+  bool microstepsChanged = (newMicrosteps != tmcMicrostepsConfig);
+
+  tmcEnabledConfig = newEnabled;
+  tmcRSenseConfig = newRSense;
+  tmcAddressConfig = newAddress;
+  tmcRunCurrentConfig = newRunCurrent;
+  tmcHoldPercentConfig = newHoldPercent;
+  tmcStealthChopConfig = newStealthChop;
+  tmcStallEnabledConfig = newStallEnabled;
+  tmcStallThresholdConfig = newStallThreshold;
+  tmcMicrostepsConfig = newMicrosteps;
+  tmcHstrtConfig = newHstrt;
+  tmcHendConfig = newHend;
+  tmcPwmRegConfig = newPwmReg;
+  tmcPwmLimConfig = newPwmLim;
+  tmcPwmAutogradConfig = newPwmAutograd;
+
+  preferences.putBool("tmcEnabled", tmcEnabledConfig);
+  preferences.putFloat("tmcRSense", tmcRSenseConfig);
+  preferences.putInt("tmcAddress", tmcAddressConfig);
+  preferences.putInt("tmcRunCurrent", tmcRunCurrentConfig);
+  preferences.putInt("tmcHoldPercent", tmcHoldPercentConfig);
+  preferences.putBool("tmcStealthChop", tmcStealthChopConfig);
+  preferences.putBool("tmcStallEnabled", tmcStallEnabledConfig);
+  preferences.putInt("tmcStallThresh", tmcStallThresholdConfig);
+  preferences.putInt("tmcMicrosteps", tmcMicrostepsConfig);
+  preferences.putInt("tmcHstrt", tmcHstrtConfig);
+  preferences.putInt("tmcHend", tmcHendConfig);
+  preferences.putInt("tmcPwmReg", tmcPwmRegConfig);
+  preferences.putInt("tmcPwmLim", tmcPwmLimConfig);
+  preferences.putBool("tmcPwmAutograd", tmcPwmAutogradConfig);
+
+  if (microstepsChanged) {
+    Serial.println("TMC2209 microstepping changed - re-home to recalculate bottomPosition!");
+  }
+
+  Serial.println("TMC2209 configuration saved!");
+
+  if (linkSettingsChanged) {
+    // Enable/disable, RSense, or address changed - the UART link itself
+    // needs to be (re)established rather than just re-applying registers.
+    tmcConnected = false;
+    if (tmcEnabledConfig) {
+      initTmc();
+    } else {
+      Serial.println("TMC2209 UART control disabled");
+    }
+  } else {
+    applyTmcSettings();
+  }
+
+  if (microstepsChanged) {
+    server.send(200, "application/json", "{\"success\":true,\"message\":\"TMC2209 settings saved! Microstepping changed - re-home to recalculate travel.\"}");
+  } else {
+    server.send(200, "application/json", "{\"success\":true,\"message\":\"TMC2209 settings saved and applied immediately!\"}");
+  }
+}
+
+void handleClearTmcStall() {
+  clearTmcStall();
+  server.send(200, "application/json", "{\"success\":true}");
 }
 
 void handleConnect() {
@@ -433,7 +527,7 @@ void handleLocate() {
 }
 
 // Static buffer for status data response (avoids heap allocation)
-static char statusDataBuffer[1200];
+static char statusDataBuffer[1600];
 
 void handleStatusData() {
 
@@ -460,8 +554,8 @@ void handleStatusData() {
   currentPositionRequest = positionRequest;
 
   int lastCommandPercent = (int)((currentPositionRequest / maxValue) * 100.0);
-  unsigned long packetsReceived = (protocolConfig == PROTOCOL_DDP) ? ddpPacketsReceived : artnetPacketsReceived;
-  int totalChannels = 2 + (ledPixelCount * 3) + 1;
+  unsigned long packetsReceived = ddpPacketsReceived;
+  int totalChannels = 2 + (ledPixelCount * 3);
 
   // Get IP addresses as strings
   char ipStr[16], gatewayStr[16], subnetStr[16];
@@ -481,7 +575,7 @@ void handleStatusData() {
   ssidStr[sizeof(ssidStr) - 1] = '\0';
 
   // Build JSON using snprintf in static buffer (no heap allocation)
-  // Use enums: wifiMode: 0=AP, 1=Client, ipType: 0=N/A, 1=DHCP, 2=Static, protocol: 0=ArtNet, 1=DDP
+  // Use enums: wifiMode: 0=AP, 1=Client, ipType: 0=N/A, 1=DHCP, 2=Static
   snprintf(statusDataBuffer, sizeof(statusDataBuffer),
     "{"
     "\"wifiConnected\":%s,"
@@ -501,7 +595,6 @@ void handleStatusData() {
     "\"position\":%d,"
     "\"positionPercent\":%d,"
     "\"bottomPosition\":%d,"
-    "\"protocol\":%d,"
     "\"control16Bit\":%s,"
     "\"protocolPacketsReceived\":%lu,"
     "\"protocolLastCommand\":%u,"
@@ -511,7 +604,19 @@ void handleStatusData() {
     "\"autoHomeOnBoot\":%s,"
     "\"ledPixelCount\":%d,"
     "\"ledMaxPixelsReceived\":%d,"
-    "\"ledsBlanked\":%s"
+    "\"ledsBlanked\":%s,"
+    "\"tmcEnabled\":%s,"
+    "\"tmcConnected\":%s,"
+    "\"tmcOverTempWarning\":%s,"
+    "\"tmcOverTempShutdown\":%s,"
+    "\"tmcShortToGroundA\":%s,"
+    "\"tmcShortToGroundB\":%s,"
+    "\"tmcOpenLoadA\":%s,"
+    "\"tmcOpenLoadB\":%s,"
+    "\"tmcUartCrcError\":%s,"
+    "\"tmcStallEnabled\":%s,"
+    "\"tmcStallGuardResult\":%u,"
+    "\"tmcStalled\":%s"
     "}",
     wifiConnected ? "true" : "false",
     wifiConnected ? 1 : 0,  // wifiMode: 0=AP, 1=Client
@@ -527,7 +632,6 @@ void handleStatusData() {
     currentPosition,
     positionPercent,
     bottomPosition,
-    protocolConfig == PROTOCOL_DDP ? 1 : 0,  // protocol: 0=ArtNet, 1=DDP
     control16BitConfig ? "true" : "false",
     packetsReceived,
     currentPositionRequest,
@@ -537,7 +641,19 @@ void handleStatusData() {
     autoHomeOnBootConfig ? "true" : "false",
     ledPixelCount,
     ledMaxPixelsReceived,
-    ledsBlanked ? "true" : "false"
+    ledsBlanked ? "true" : "false",
+    tmcEnabledConfig ? "true" : "false",
+    tmcConnected ? "true" : "false",
+    tmcStatus.overTempWarning ? "true" : "false",
+    tmcStatus.overTempShutdown ? "true" : "false",
+    tmcStatus.shortToGroundA ? "true" : "false",
+    tmcStatus.shortToGroundB ? "true" : "false",
+    tmcStatus.openLoadA ? "true" : "false",
+    tmcStatus.openLoadB ? "true" : "false",
+    tmcStatus.uartCrcError ? "true" : "false",
+    tmcStallEnabledConfig ? "true" : "false",
+    tmcStatus.stallGuardResult,
+    tmcStatus.stalled ? "true" : "false"
   );
 
   server.send(200, "application/json", statusDataBuffer);
@@ -621,6 +737,7 @@ void startWebServer() {
   server.on("/save-stepper", HTTP_POST, handleSaveStepper); // Stepper settings
   server.on("/save-protocol", HTTP_POST, handleSaveProtocol);  // Protocol settings
   server.on("/save-led", HTTP_POST, handleSaveLed);            // LED settings
+  server.on("/save-tmc", HTTP_POST, handleSaveTmc);             // TMC2209 driver settings
 
   // Status and control endpoints
   server.on("/status-data", HTTP_GET, handleStatusData);  // JSON status data
@@ -642,6 +759,9 @@ void startWebServer() {
 
   // Locate mode
   server.on("/locate", HTTP_GET, handleLocate);
+
+  // TMC2209 stall fault acknowledgement
+  server.on("/clear-tmc-stall", HTTP_GET, handleClearTmcStall);
 
   // OTA Update endpoint
   server.on("/update", HTTP_POST, handleOTAUpdateComplete, handleOTAUpdate);

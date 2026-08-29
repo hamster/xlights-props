@@ -1,5 +1,4 @@
 #include "ddp_handler.h"
-#include "artnet_handler.h"
 #include "led_handler.h"
 #include <Preferences.h>
 #include "protocol_common.h"
@@ -110,8 +109,9 @@ void handleDDP() {
   // Update the protocol timestamp for blank time tracking
   lastProtocolUpdateTime = millis();
 
-  // LED data always starts at channel 3 for RGB alignment
-  const int LED_START_OFFSET = 3;
+  // LED data always starts at channel 3 (byte offset 2) for RGB alignment.
+  // Byte offset 0 = channel 1, matching header.dataOffset's own 0-based convention.
+  const int LED_START_OFFSET = 2;
 
   // Process stepper control if enabled
   if (stepperControlEnabled) {
