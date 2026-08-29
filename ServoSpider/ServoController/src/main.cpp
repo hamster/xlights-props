@@ -8,7 +8,6 @@
 #include "stepper_handler.h"
 #include "wifi_handler.h"
 #include "html_handlers.h"
-#include "artnet_handler.h"
 #include "ddp_handler.h"
 #include "led_handler.h"
 #include "partition_utils.h"
@@ -98,10 +97,6 @@ void setup() {
   control16BitConfig = preferences.getBool("control16Bit", false);
   protocolDebugConfig = preferences.getBool("protocolDebug", false);
 
-  // Load saved ArtNet configuration
-  artnetUniverseConfig = preferences.getInt("artnetUniverse", startUniverse);
-  artnetChannelsPerUniverseConfig = preferences.getInt("artnetChansPerUni", 512);
-
   // Load blank time configuration
   ledBlankTimeConfig = preferences.getInt("ledBlankTime", 0);
   stepperBlankTimeConfig = preferences.getInt("stepperBlankTime", 0);
@@ -144,7 +139,6 @@ void setup() {
   }
 
   startWebServer();
-  initializeArtNet();
   initDDP();
 
   // Start non-blocking homing if enabled (will complete in loop)
@@ -169,22 +163,19 @@ void loop() {
   server.handleClient();
   handleSerialCommands();
 
-  // Skip ArtNet, DDP, and DNS handling during OTA update to prevent interference
+  // Skip DDP and DNS handling during OTA update to prevent interference
   if (!otaInProgress) {
-    if(protocolConfig == PROTOCOL_ARTNET){
-      artnet.parse();
-    }
-    else if(protocolConfig == PROTOCOL_DDP){
+    if (protocolConfig == PROTOCOL_DDP) {
       handleDDP();
     }
-    
+
     // Process DNS requests for captive portal (only in AP mode)
     if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
       dnsServer.processNextRequest();
     }
   }
 
-  // Handle position requests from active protocol (ArtNet or DDP)
+  // Handle position requests from DDP
   uint16_t currentPositionRequest;
   currentPositionRequest = positionRequest;
 
@@ -460,7 +451,7 @@ void printNetworkDiagnostics() {
   // Protocol info
   Serial.println("\n--- Protocol Status ---");
   Serial.print("Active Protocol: ");
-  Serial.println(protocolConfig == PROTOCOL_DDP ? "DDP" : "ArtNet");
+  Serial.println(protocolConfig == PROTOCOL_DDP ? "DDP" : "Disabled");
   Serial.print("Last Protocol Update: ");
   if (lastProtocolUpdateTime > 0) {
     Serial.print(millis() - lastProtocolUpdateTime);
@@ -469,13 +460,8 @@ void printNetworkDiagnostics() {
     Serial.println("Never");
   }
 
-  if (protocolConfig == PROTOCOL_DDP) {
-    Serial.print("DDP Packets Received: ");
-    Serial.println(ddpPacketsReceived);
-  } else {
-    Serial.print("ArtNet Packets Received: ");
-    Serial.println(artnetPacketsReceived);
-  }
+  Serial.print("DDP Packets Received: ");
+  Serial.println(ddpPacketsReceived);
 
   // LED info
   Serial.println("\n--- LED Status ---");

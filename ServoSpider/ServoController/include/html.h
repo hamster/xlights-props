@@ -626,24 +626,9 @@ function showNotification(message, isSuccess) {
       staticIpFields.style.display = useStatic.checked ? "block" : "none";
     }
 
-    function toggleProtocolConfig() {
-      var protocol = document.getElementById("protocol").value;
-      var ddpConfig = document.getElementById("ddpConfig");
-      var artnetConfig = document.getElementById("artnetConfig");
-
-      if (protocol === "ddp") {
-        ddpConfig.style.display = "block";
-        artnetConfig.style.display = "none";
-      } else {
-        ddpConfig.style.display = "none";
-        artnetConfig.style.display = "block";
-      }
-    }
-
     // Initialize fields visibility on page load
     window.addEventListener('load', function() {
       toggleStaticIpFields();
-      toggleProtocolConfig();
     });
 
     function moveStepsStatus(direction) {
@@ -775,7 +760,7 @@ function showNotification(message, isSuccess) {
     }
 
     function resetSettings() {
-      if (!confirm('Reset all settings to default values? This will reset WiFi credentials, stepper settings, ArtNet/DDP configuration, etc. The device will reboot after reset.')) {
+      if (!confirm('Reset all settings to default values? This will reset WiFi credentials, stepper settings, DDP/LED configuration, etc. The device will reboot after reset.')) {
         return;
       }
 
@@ -887,9 +872,7 @@ function showNotification(message, isSuccess) {
           document.getElementById('position-command').textContent = data.protocolLastCommand;
           document.getElementById('position-command-percent').textContent = data.protocolLastCommandPercent;
 
-          // Update Protocol status
-          // Decode protocol enum: 0=ArtNet, 1=DDP
-          document.getElementById('protocol-type').textContent = data.protocol === 1 ? 'DDP' : 'ArtNet';
+          // Update DDP status
           document.getElementById('protocol-mode').textContent = data.control16Bit ? '16-bit' : '8-bit';
           document.getElementById('total-channels').textContent = data.totalChannels;
           document.getElementById('protocol-packets-received').textContent = data.protocolPacketsReceived;
@@ -1183,8 +1166,7 @@ function showNotification(message, isSuccess) {
       </div>
 
       <div class="status-box">
-        <h4>Protocol Status</h4>
-        <p><strong>Protocol:</strong> <span id="protocol-type">{{PROTOCOL_TYPE}}</span></p>
+        <h4>DDP Status</h4>
         <p><strong>Stepper Mode:</strong> <span id="protocol-mode">8-bit</span></p>
         <p><strong>Total Channels:</strong> <span id="total-channels">0</span></p>
         <p><strong>Packets Received:</strong> <span id="protocol-packets-received">0</span></p>
@@ -1368,44 +1350,12 @@ function showNotification(message, isSuccess) {
         <button onclick="homeServo()" class="btn-success">Home Servo</button>
       </div>
 
-      <!-- Protocol Configuration Box -->
+      <!-- Channel Configuration Box -->
       <div class="status-box">
-        <h4>Protocol Configuration</h4>
+        <h4>Channel Configuration</h4>
+        <p style="color: #666; font-style: italic;">Position and pixel data are received via DDP on port 4048. No protocol selection needed.</p>
 
         <form onsubmit="return handleFormSubmit(event, '/save-protocol')">
-          <div class="form-group">
-            <label for="protocol">Protocol:</label>
-            <select id="protocol" name="protocol" onchange="toggleProtocolConfig()" style="width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box; border: 2px solid #ddd; border-radius: 4px;">
-              <option value="ddp" {{DDP_SELECTED}}>DDP</option>
-              <option value="artnet" {{ARTNET_SELECTED}}>ArtNet</option>
-            </select>
-          </div>
-
-          <!-- DDP Configuration -->
-          <div id="ddpConfig" style="display: none;">
-            <h4 style="margin-top: 20px; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #ddd;">DDP Configuration</h4>
-            <p style="color: #666; font-style: italic;">No additional configuration required for DDP.</p>
-          </div>
-
-          <!-- ArtNet Configuration -->
-          <div id="artnetConfig" style="display: none;">
-            <h4 style="margin-top: 20px; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #ddd;">ArtNet Configuration</h4>
-
-            <div class="form-group">
-              <label for="artnetUniverse">Start Universe:</label>
-              <input type="number" id="artnetUniverse" name="artnetUniverse" value="{{ARTNET_UNIVERSE}}" min="0" max="32767" required>
-            </div>
-
-            <div class="form-group">
-              <label for="artnetChannelsPerUniverse">Channels per Universe:</label>
-              <input type="number" id="artnetChannelsPerUniverse" name="artnetChannelsPerUniverse" value="{{ARTNET_CHANNELS_PER_UNIVERSE}}" min="1" max="512" required>
-            </div>
-          </div>
-
-          <hr style="margin: 20px 0; border: none; border-top: 1px solid #ddd;">
-
-          <h4 style="margin-bottom: 15px;">Common Settings</h4>
-
           <div class="form-group">
             <label for="stepperControl">
               <input type="checkbox" id="stepperControl" name="stepperControl" {{STEPPER_CONTROL_CHECKED}} onchange="toggleStepperOptions()">
@@ -1437,7 +1387,7 @@ function showNotification(message, isSuccess) {
             <input type="number" id="ledBlankTime" name="ledBlankTime" value="{{LED_BLANK_TIME}}" min="0" max="3600" required>
           </div>
 
-          <button type="submit" class="btn-primary">Save Protocol Settings</button>
+          <button type="submit" class="btn-primary">Save Channel Settings</button>
         </form>
       </div>
 

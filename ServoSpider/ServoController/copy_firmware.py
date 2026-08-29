@@ -56,7 +56,7 @@ def copy_firmware_after_build(source, target, env):
     # Copy the firmware
     try:
         shutil.copy2(firmware_source, firmware_dest)
-        print(f"✓ Firmware copied to: {firmware_dest}")
+        print(f"[OK] Firmware copied to: {firmware_dest}")
         print(f"  Version: {version}")
 
         # Get file size
