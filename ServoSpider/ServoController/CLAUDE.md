@@ -92,12 +92,12 @@ Type in serial monitor (115200 baud):
 - `?` - Help menu
 - `h` - Start homing
 - `r` - Reboot
-- `s` - Print status
+- `s` - Print status (full diagnostics: WiFi, memory, DDP, LED, TMC2209, uptime)
 - `w` - Reconnect WiFi
 - `a` - Switch to AP mode
 - `p` - Print stepper position
 - `f`/`b` - Move forward/backward 10 steps
-- `n` - Print detailed network/system diagnostics
+- `n` - Print connection status (brief)
 
 ## Important Patterns
 

@@ -522,6 +522,18 @@ function showNotification(message, isSuccess) {
       }
     }
 
+    function toggleLedTestMode() {
+      var enabled = document.getElementById('led-test-mode-enabled').checked;
+      fetch('/led-test?enable=' + enabled)
+        .then(response => response.json())
+        .then(data => {
+          console.log('LED test mode: ' + (data.ledTestMode ? 'enabled' : 'disabled'));
+        })
+        .catch(error => {
+          showNotification('Error toggling LED test mode: ' + error, false);
+        });
+    }
+
     function fetchLedPreview() {
       fetch('/led-preview')
         .then(response => response.json())
@@ -901,23 +913,45 @@ function showNotification(message, isSuccess) {
 
           document.getElementById('led-pixel-count').textContent = ledPixelCount;
 
-          // Update received pixels display with combined status
+          // Received pixel count, shown alongside packets received
           var receivedElement = document.getElementById('led-pixels-received');
-
+          receivedElement.textContent = ledMaxPixelsReceived;
           if (ledsBlanked) {
-            receivedElement.textContent = 'No recent data';
-            receivedElement.style.color = '#6c757d';  // Gray
-          } else if (ledMaxPixelsReceived === 0) {
-            receivedElement.textContent = '0';
-            receivedElement.style.color = 'inherit';
+            receivedElement.style.color = '#6c757d';  // Gray - no recent data
           } else {
-            receivedElement.textContent = ledMaxPixelsReceived;
             receivedElement.style.color = (ledMaxPixelsReceived > ledPixelCount && ledPixelCount > 0) ? '#dc3545' : 'inherit';
+          }
+
+          // DDP state indicator: 0=Disabled (OTA in progress), 1=Enabled, 2=Paused (test mode)
+          var ddpStatusEl = document.getElementById('ddp-status-text');
+          if (ddpStatusEl) {
+            if (data.ddpState === 0) {
+              ddpStatusEl.textContent = 'Disabled';
+              ddpStatusEl.className = 'status disconnected';
+            } else if (data.ddpState === 2) {
+              ddpStatusEl.textContent = 'Paused';
+              ddpStatusEl.className = 'status not-homed';
+            } else {
+              ddpStatusEl.textContent = 'Enabled';
+              ddpStatusEl.className = 'status connected';
+            }
+          }
+
+          // Time since last DDP packet
+          var lastPacketEl = document.getElementById('ddp-last-packet');
+          if (lastPacketEl) {
+            lastPacketEl.textContent = data.ddpEverReceived ? (data.secsSinceLastDdp + 's ago') : 'Never';
           }
 
           // Fetch LED preview separately (only if enabled to save bandwidth)
           if (ledPreviewEnabled) {
             fetchLedPreview();
+          }
+
+          // Sync LED test mode checkbox across all clients
+          var ledTestCheckbox = document.getElementById('led-test-mode-enabled');
+          if (ledTestCheckbox && document.activeElement !== ledTestCheckbox) {
+            ledTestCheckbox.checked = data.ledTestMode || false;
           }
 
           // Update locate mode indicator to sync across all clients
@@ -1218,26 +1252,25 @@ function showNotification(message, isSuccess) {
             <button onclick="homeServo()" class="btn-success">Home Servo</button>
           </div>
         </div>
+
+        <div id="tmc-status-box" style="display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd;">
+          <h4>Driver Status (TMC2209)</h4>
+          <p><strong>UART Link:</strong> <span id="tmc-connected-status" class="status">Not Connected</span></p>
+          <p><strong>Diagnostics:</strong> <span id="tmc-diag-status">OK</span></p>
+          <p><strong>Stall Guard:</strong> <span id="tmc-stall-status">Disabled</span></p>
+          <button id="tmc-clear-stall-btn" class="btn-warning" style="display: none;" onclick="clearTmcStall()">Clear Stall Fault</button>
+        </div>
       </div>
 
       <div class="status-box">
-        <h4>DDP Status</h4>
+        <h4>DDP / LED Status</h4>
+        <div id="ddp-status-text" class="status">Enabled</div>
         <p><strong>Stepper Mode:</strong> <span id="protocol-mode">8-bit</span></p>
         <p><strong>Total Channels:</strong> <span id="total-channels">0</span></p>
-        <p><strong>Packets Received:</strong> <span id="protocol-packets-received">0</span></p>
-      </div>
+        <p><strong>Packets Received:</strong> <span id="protocol-packets-received">0</span> (<span id="led-pixels-received">0</span> pixels)</p>
+        <p><strong>Last Packet:</strong> <span id="ddp-last-packet">Never</span></p>
 
-      <div class="status-box" id="tmc-status-box" style="display: none;">
-        <h4>Driver Status (TMC2209)</h4>
-        <p><strong>UART Link:</strong> <span id="tmc-connected-status" class="status">Not Connected</span></p>
-        <p><strong>Diagnostics:</strong> <span id="tmc-diag-status">OK</span></p>
-        <p><strong>Stall Guard:</strong> <span id="tmc-stall-status">Disabled</span></p>
-        <button id="tmc-clear-stall-btn" class="btn-warning" style="display: none;" onclick="clearTmcStall()">Clear Stall Fault</button>
-      </div>
-
-      <div class="status-box">
-        <h4>LED Status</h4>
-        <div style="margin-bottom: 10px;">
+        <div style="margin-top: 10px;">
           <label style="font-size: 12px; cursor: pointer;">
             <input type="checkbox" id="led-preview-enabled" onchange="toggleLedPreview()">
             Show Pixels
@@ -1247,7 +1280,13 @@ function showNotification(message, isSuccess) {
           <div id="led-preview" style="display: flex; flex-wrap: wrap; gap: 1px;"></div>
         </div>
         <p><strong>Configured Pixels:</strong> <span id="led-pixel-count">0</span></p>
-        <p><strong>Received Pixels:</strong> <span id="led-pixels-received">0</span></p>
+
+        <div style="margin-top: 10px;">
+          <label style="font-size: 12px; cursor: pointer;">
+            <input type="checkbox" id="led-test-mode-enabled" onchange="toggleLedTestMode()">
+            Test Pattern
+          </label>
+        </div>
       </div>
       </div>
     </div>

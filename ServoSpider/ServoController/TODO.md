@@ -6,6 +6,11 @@ Turn this into a standalone stepper-mover **+** pixel controller: one ESP32-S3 d
 
 Note: checked `git branch -a` / `git stash list` / `git log --all` — there is no leftover branch, stash, or commit anywhere in this repo with prior dual-core work. If there was earlier progress on splitting stepper/LED work across cores, it never made it into git, so treat this as a fresh design rather than something to dig up.
 
+## Smaller additions (most recent session)
+
+- **LED test pattern**: Status tab checkbox drives a marching R/G/B pattern out the pixel strip and ignores incoming DDP pixel data while enabled, for bench-testing pixel wiring without a controller. Scoped to LED data only (stepper DDP control unaffected). Runtime-only, not persisted. On its own branch (`led-test-pattern`), not yet merged to `main`.
+- **Serial command key swap**: `s` and `n` swapped meaning. `s` is now the full/detailed status report (formerly `printNetworkDiagnostics()`, renamed `printFullStatus()`, header now prints `=== Status ===` instead of `=== Network Diagnostics ===`); `n` is now the brief connection status (formerly bound to `s`, `printStatus()` unchanged internally). Done because the old detailed-diagnostics output was getting long and "network diagnostics" undersold what it now also covers (LED, TMC2209, uptime, etc.) - "status" is the more accurate name and better claims the more-used `s` key.
+
 ## Fixed/done this session
 
 - [x] **DDP LED channel-offset bug** — `ddp_handler.cpp` used byte offset `3` for where LED data starts; the documented channel layout (and the now-removed ArtNet handler) used byte offset `2` (channel 3). This meant LED colors landed one byte later — and therefore looked different/shifted — than intended. Now uses offset `2`.
@@ -64,7 +69,7 @@ Added `tmc_handler` (new module, `teemuatlut/TMCStepper` dependency) using the d
 - Digital run/hold current control (replaces the board's Vref trimpot once enabled)
 - StealthChop/SpreadCycle chopper mode toggle (under Advanced in the UI)
 - A firmware-side stall-detection safety cutoff, polling live `SG_RESULT` and force-stopping the motor if it stays below a configured threshold while moving — deliberately *not* using the chip's internal SGTHRS/DIAG-pin comparator, since DIAG isn't wired; this is a simpler, firmware-side comparison so the live value is directly visible on the Status tab while tuning
-- Diagnostics (over-temp, short-to-ground, open-load, UART CRC errors) surfaced on both the Status tab and the `n` serial command
+- Diagnostics (over-temp, short-to-ground, open-load, UART CRC errors) surfaced on both the Status tab and the `s` serial command (was `n` - see the serial-command key swap noted later in this file)
 
 **Bring-up findings (bench-tested this session):**
 - [x] MS1/MS2 confirmed grounded on the actual board → UART address 0 matches the firmware default. Link connects.

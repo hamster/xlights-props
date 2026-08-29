@@ -126,26 +126,25 @@
             <button onclick="homeServo()" class="btn-success">Home Servo</button>
           </div>
         </div>
+
+        <div id="tmc-status-box" style="display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd;">
+          <h4>Driver Status (TMC2209)</h4>
+          <p><strong>UART Link:</strong> <span id="tmc-connected-status" class="status">Not Connected</span></p>
+          <p><strong>Diagnostics:</strong> <span id="tmc-diag-status">OK</span></p>
+          <p><strong>Stall Guard:</strong> <span id="tmc-stall-status">Disabled</span></p>
+          <button id="tmc-clear-stall-btn" class="btn-warning" style="display: none;" onclick="clearTmcStall()">Clear Stall Fault</button>
+        </div>
       </div>
 
       <div class="status-box">
-        <h4>DDP Status</h4>
+        <h4>DDP / LED Status</h4>
+        <div id="ddp-status-text" class="status">Enabled</div>
         <p><strong>Stepper Mode:</strong> <span id="protocol-mode">8-bit</span></p>
         <p><strong>Total Channels:</strong> <span id="total-channels">0</span></p>
-        <p><strong>Packets Received:</strong> <span id="protocol-packets-received">0</span></p>
-      </div>
+        <p><strong>Packets Received:</strong> <span id="protocol-packets-received">0</span> (<span id="led-pixels-received">0</span> pixels)</p>
+        <p><strong>Last Packet:</strong> <span id="ddp-last-packet">Never</span></p>
 
-      <div class="status-box" id="tmc-status-box" style="display: none;">
-        <h4>Driver Status (TMC2209)</h4>
-        <p><strong>UART Link:</strong> <span id="tmc-connected-status" class="status">Not Connected</span></p>
-        <p><strong>Diagnostics:</strong> <span id="tmc-diag-status">OK</span></p>
-        <p><strong>Stall Guard:</strong> <span id="tmc-stall-status">Disabled</span></p>
-        <button id="tmc-clear-stall-btn" class="btn-warning" style="display: none;" onclick="clearTmcStall()">Clear Stall Fault</button>
-      </div>
-
-      <div class="status-box">
-        <h4>LED Status</h4>
-        <div style="margin-bottom: 10px;">
+        <div style="margin-top: 10px;">
           <label style="font-size: 12px; cursor: pointer;">
             <input type="checkbox" id="led-preview-enabled" onchange="toggleLedPreview()">
             Show Pixels
@@ -155,7 +154,13 @@
           <div id="led-preview" style="display: flex; flex-wrap: wrap; gap: 1px;"></div>
         </div>
         <p><strong>Configured Pixels:</strong> <span id="led-pixel-count">0</span></p>
-        <p><strong>Received Pixels:</strong> <span id="led-pixels-received">0</span></p>
+
+        <div style="margin-top: 10px;">
+          <label style="font-size: 12px; cursor: pointer;">
+            <input type="checkbox" id="led-test-mode-enabled" onchange="toggleLedTestMode()">
+            Test Pattern
+          </label>
+        </div>
       </div>
       </div>
     </div>

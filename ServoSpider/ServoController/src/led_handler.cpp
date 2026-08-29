@@ -22,6 +22,12 @@ bool ledsBlanked = false;
 int ledPixelsReceived = 0;
 int ledMaxPixelsReceived = 0;
 
+// LED test pattern state (see setLedTestMode/updateLedTestMode)
+bool ledTestModeActive = false;
+static unsigned long ledTestLastUpdateMillis = 0;
+static int ledTestPhase = 0;
+static const unsigned long LED_TEST_INTERVAL_MS = 1000;
+
 // Status LED state
 bool statusLedState = false;
 unsigned long statusLedBlinkInterval = 1000;  // Default 1 second for connected state
@@ -156,6 +162,9 @@ uint8_t applyGamma(uint8_t value, float gamma) {
 
 // Update pixel LEDs with new data (called directly from protocol handlers)
 void updatePixelLeds(uint8_t* data, uint16_t size, int stepperChannels) {
+  if (ledTestModeActive) {
+    return;  // Test mode owns the strip; ignore DDP pixel data until disabled
+  }
   if (!ledsInitialized || ledPixelCount == 0) {
     return;
   }
@@ -252,6 +261,9 @@ void updatePixelLeds(uint8_t* data, uint16_t size, int stepperChannels) {
 
 // Update pixel LEDs from fragmented packet data (for DDP multi-packet updates)
 void updatePixelLedsFragmented(uint8_t* data, uint16_t size, uint32_t pixelOffset) {
+  if (ledTestModeActive) {
+    return;  // Test mode owns the strip; ignore DDP pixel data until disabled
+  }
   if (!ledsInitialized || ledPixelCount == 0) {
     return;
   }
@@ -363,6 +375,52 @@ void blankPixelLeds() {
   if (protocolDebugConfig) {
     Serial.println("LED: Blanked all pixels");
   }
+}
+
+// Enable/disable the local test pattern. Enabling resets to a fresh phase 0
+// and forces an immediate render (rather than waiting up to a second for the
+// next tick); disabling blanks the strip so a stale test frame doesn't sit
+// on the pixels until the next real DDP update arrives.
+void setLedTestMode(bool enable) {
+  ledTestModeActive = enable;
+  if (enable) {
+    ledTestPhase = 0;
+    ledTestLastUpdateMillis = 0;
+    Serial.println("LED test mode enabled - DDP pixel updates ignored until disabled");
+  } else {
+    Serial.println("LED test mode disabled");
+    blankPixelLeds();
+  }
+}
+
+// Marching RGB test pattern: pixel i shows testColors[(i + phase) % 3].
+// Phase increments once per second, so pixel 0 goes Red -> Green -> Blue ->
+// Red... and the whole R/G/B sequence appears to march down the strip.
+void updateLedTestMode() {
+  if (!ledTestModeActive || !ledsInitialized || ledPixelCount == 0) {
+    return;
+  }
+
+  unsigned long now = millis();
+  if (now - ledTestLastUpdateMillis < LED_TEST_INTERVAL_MS) {
+    return;
+  }
+  ledTestLastUpdateMillis = now;
+
+  static const CRGB testColors[3] = {CRGB::Red, CRGB::Green, CRGB::Blue};
+
+  for (int i = 0; i < ledPixelCount; i++) {
+    int ledIndex = ledStartNullPixels + i;
+    if (ledIndex >= MAX_LEDS) {
+      break;
+    }
+    leds[ledIndex] = testColors[(i + ledTestPhase) % 3];
+  }
+
+  FastLED.show();
+  ledsBlanked = false;
+
+  ledTestPhase = (ledTestPhase + 1) % 3;
 }
 
 // Get LED preview as JSON array for web status display

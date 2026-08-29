@@ -239,12 +239,15 @@ void loop() {
     }
   }
 
+  // Advance the local LED test pattern, if enabled (no-op otherwise)
+  updateLedTestMode();
+
   // Handle blank time timeouts
   if (lastProtocolUpdateTime > 0 && !otaInProgress) {
     unsigned long timeSinceUpdate = millis() - lastProtocolUpdateTime;
 
-    // LED blank timeout
-    if (ledBlankTimeConfig > 0 && timeSinceUpdate > (unsigned long)ledBlankTimeConfig * 1000) {
+    // LED blank timeout - skip while the test pattern owns the strip
+    if (!ledTestModeActive && ledBlankTimeConfig > 0 && timeSinceUpdate > (unsigned long)ledBlankTimeConfig * 1000) {
       blankPixelLeds();
     }
 
@@ -277,8 +280,8 @@ void handleSerialCommands() {
       Serial.println("?  - Show this help menu");
       Serial.println("h  - Start homing sequence");
       Serial.println("r  - Reboot device");
-      Serial.println("s  - Print connection status");
-      Serial.println("n  - Network diagnostics (detailed)");
+      Serial.println("s  - Print status");
+      Serial.println("n  - Print connection status (brief)");
       Serial.println("w  - Attempt WiFi reconnection");
       Serial.println("a  - Switch to Access Point mode");
       Serial.println("p  - Print current stepper position");
@@ -295,10 +298,10 @@ void handleSerialCommands() {
       ESP.restart();
       break;
     case 's':
-      printStatus();
+      printFullStatus();
       break;
     case 'n':
-      printNetworkDiagnostics();
+      printStatus();
       break;
     case 'w':
       Serial.println("Attempting to reconnect to WiFi...");
@@ -400,8 +403,8 @@ void printStatus() {
   Serial.println("========================\n");
 }
 
-void printNetworkDiagnostics() {
-  Serial.println("\n=== Network Diagnostics ===");
+void printFullStatus() {
+  Serial.println("\n=== Status ===");
 
   // WiFi Status
   Serial.println("\n--- WiFi Status ---");

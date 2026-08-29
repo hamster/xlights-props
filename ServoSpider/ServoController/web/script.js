@@ -44,6 +44,18 @@ function showNotification(message, isSuccess) {
       }
     }
 
+    function toggleLedTestMode() {
+      var enabled = document.getElementById('led-test-mode-enabled').checked;
+      fetch('/led-test?enable=' + enabled)
+        .then(response => response.json())
+        .then(data => {
+          console.log('LED test mode: ' + (data.ledTestMode ? 'enabled' : 'disabled'));
+        })
+        .catch(error => {
+          showNotification('Error toggling LED test mode: ' + error, false);
+        });
+    }
+
     function fetchLedPreview() {
       fetch('/led-preview')
         .then(response => response.json())
@@ -423,23 +435,45 @@ function showNotification(message, isSuccess) {
 
           document.getElementById('led-pixel-count').textContent = ledPixelCount;
 
-          // Update received pixels display with combined status
+          // Received pixel count, shown alongside packets received
           var receivedElement = document.getElementById('led-pixels-received');
-
+          receivedElement.textContent = ledMaxPixelsReceived;
           if (ledsBlanked) {
-            receivedElement.textContent = 'No recent data';
-            receivedElement.style.color = '#6c757d';  // Gray
-          } else if (ledMaxPixelsReceived === 0) {
-            receivedElement.textContent = '0';
-            receivedElement.style.color = 'inherit';
+            receivedElement.style.color = '#6c757d';  // Gray - no recent data
           } else {
-            receivedElement.textContent = ledMaxPixelsReceived;
             receivedElement.style.color = (ledMaxPixelsReceived > ledPixelCount && ledPixelCount > 0) ? '#dc3545' : 'inherit';
+          }
+
+          // DDP state indicator: 0=Disabled (OTA in progress), 1=Enabled, 2=Paused (test mode)
+          var ddpStatusEl = document.getElementById('ddp-status-text');
+          if (ddpStatusEl) {
+            if (data.ddpState === 0) {
+              ddpStatusEl.textContent = 'Disabled';
+              ddpStatusEl.className = 'status disconnected';
+            } else if (data.ddpState === 2) {
+              ddpStatusEl.textContent = 'Paused';
+              ddpStatusEl.className = 'status not-homed';
+            } else {
+              ddpStatusEl.textContent = 'Enabled';
+              ddpStatusEl.className = 'status connected';
+            }
+          }
+
+          // Time since last DDP packet
+          var lastPacketEl = document.getElementById('ddp-last-packet');
+          if (lastPacketEl) {
+            lastPacketEl.textContent = data.ddpEverReceived ? (data.secsSinceLastDdp + 's ago') : 'Never';
           }
 
           // Fetch LED preview separately (only if enabled to save bandwidth)
           if (ledPreviewEnabled) {
             fetchLedPreview();
+          }
+
+          // Sync LED test mode checkbox across all clients
+          var ledTestCheckbox = document.getElementById('led-test-mode-enabled');
+          if (ledTestCheckbox && document.activeElement !== ledTestCheckbox) {
+            ledTestCheckbox.checked = data.ledTestMode || false;
           }
 
           // Update locate mode indicator to sync across all clients
