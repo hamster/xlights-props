@@ -67,7 +67,7 @@ The stepper uses a non-blocking state machine (`HomingState` enum) that finds bo
 ### Configuration Storage
 All settings stored in ESP32 Preferences (NVS flash):
 - `wifi-config` namespace
-- Keys: `ssid`, `password`, `hostname`, `protocol`, `stepperControl`, `control16Bit`, `tmcEnabled`, `tmcRSense`, `tmcAddress`, `tmcRunCurrent`, `tmcHoldPercent`, `tmcStealthChop`, `tmcStallEnabled`, `tmcStallThresh`, etc.
+- Keys: `ssid`, `password`, `hostname`, `protocol`, `stepperControl`, `control16Bit`, `stepSpeedHome`, `stepAccelHome`, `stepBlankTime`, `tmcEnabled`, `tmcRSense`, `tmcAddress`, `tmcRunCurrent`, `tmcHoldPercent`, `tmcStealthChop`, `tmcStallEnabled`, `tmcStallThresh`, `tmcMicrosteps`, `tmcHstrt`, `tmcHend`, `tmcPwmReg`, `tmcPwmLim`, `tmcPwmAutograd`, etc. All ≤15 chars (see NVS note below).
 
 ## Pin Configuration
 
@@ -105,5 +105,6 @@ Type in serial monitor (115200 baud):
 - OTA sets `otaInProgress` flag to pause protocol handling during updates
 - LED updates are called directly from the DDP handler (no queue/task)
 - WiFi connection monitoring runs every 30s with auto-reconnect
-- `Preferences` (NVS) key names are capped at 15 characters - a longer key fails to write silently (no compiler or runtime error), so the setting just never persists across a reboot. Keep new keys ≤15 chars. Found two real instances of this (`stepperSpeedHoming`/`stepperAccelHoming`, and a pre-existing `stepperBlankTime`) - see TODO.md.
+- `Preferences` (NVS) key names are capped at 15 characters - a longer key fails to write silently (no compiler or runtime error), so the setting just never persists across a reboot. Keep new keys ≤15 chars. Found and fixed two real instances of this: `stepSpeedHome`/`stepAccelHome` (originally `stepperSpeedHoming`/`stepperAccelHoming`) and `stepBlankTime` (originally `stepperBlankTime`, a pre-existing bug unrelated to this session) - see TODO.md.
+- The homing-switch ISR (`handleHomingInterrupt`) only ever sets flags, never calls into non-`IRAM_ATTR` code (e.g. `FastAccelStepper::forceStop()`, which lives in regular cached flash) - doing so can crash if the ISR fires while flash cache is briefly disabled by a `Preferences.putX()` write elsewhere. `updateHoming()` (always normal task context) consumes those flags instead. Two separate flags on purpose: `pendingForceStop` is consumed exactly once per edge (mirrors the original synchronous-stop behavior); `interruptTriggered` is a level flag only the specific `HOMING_*` state waiting for that edge clears. Don't collapse these into one flag with a naive `if (flag) forceStop()` at the top of `updateHoming()` - see TODO.md for the regression that caused.
 - Use `extern` declarations in headers, definitions in `.cpp` files

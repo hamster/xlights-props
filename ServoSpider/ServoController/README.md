@@ -24,8 +24,9 @@ DDP is the only supported protocol — ArtNet was deliberately dropped (see [TOD
 - **PlatformIO** - Build system and IDE
 - **ESP32 Arduino Core** - Framework
 - **Libraries**:
-  - FastAccelStepper (^0.33.9)
+  - FastAccelStepper (^1.2.7)
   - FastLED (^3.7.0)
+  - TMCStepper (^0.7.3) — optional TMC2209 UART driver control
 
 ## Installation
 
@@ -143,6 +144,7 @@ The controller uses a non-blocking state machine for homing. The hardware design
 - **Speed** (Hz): 100-50,000 (default: 6,500)
 - **Acceleration** (steps/s²): 0-1,000,000 (default: 20,000)
 - **Jump Start** (steps): 0-10,000 (initial power boost)
+- **Homing Speed** (Hz) / **Homing Acceleration** (steps/s²): separate from the values above, used only during the homing search (default: 6,000 Hz / 1,000,000 steps/s²). This is a step-pulse rate, not a physical speed — it doesn't automatically scale with the driver's microstep setting. If you change **Microsteps per Full Step** under the TMC2209 driver settings, re-tune this too: fewer microsteps means more physical distance per step, so the same Hz now moves faster and can overshoot the homing switch.
 - **Auto Home on Boot**: Enable/disable automatic homing
 
 ### Channel Settings
@@ -153,11 +155,15 @@ The controller uses a non-blocking state machine for homing. The hardware design
 - **Stepper Blank Time**: Seconds of no DDP traffic before the stepper returns to position 0 (0 = disabled)
 
 ### Stepper Driver Settings (TMC2209 UART, optional)
-Requires the driver's UART (PDN_UART) wired to D6 (TX) / D7 (RX); leave "Enable UART Driver Control" off if it isn't.
-- **Run Current** (mA) / **Hold Current** (% of run) — replaces the board's physical Vref trimpot once enabled
-- **StealthChop / SpreadCycle** — quiet vs. higher-torque chopper mode (under Advanced)
+Requires the driver's UART (single-wire PDN_UART pad) wired to D6 (TX) / D7 (RX); leave "Enable UART Driver Control" off if it isn't. Off by default — enabling it does not change the motor's current/behavior until you also set Run Current, since the firmware won't apply digital current control until told to.
+- **Run Current** (mA) / **Hold Current** (% of run) — replaces the board's physical Vref trimpot once enabled; the trimpot has no further effect after this is turned on
 - **Stall Detection** — a firmware-side safety cutoff that watches the driver's live StallGuard reading (`SG_RESULT`) and force-stops the motor if it drops below a configured threshold while moving, e.g. a jammed rope. This needs bench tuning: watch the live `SG_RESULT` value on the Status tab under normal moves vs. a deliberately blocked one to pick a threshold, then enable the cutoff. It's independent of the physical homing switch and doesn't affect homing.
-- **Sense Resistor** / **Driver Address** (under Advanced) — match your TMC2209 module's actual sense resistor (commonly 0.11Ω) and MS1/MS2 address strapping (0 for a single-driver setup)
+- **Advanced**:
+  - **StealthChop / SpreadCycle** — quiet vs. higher-torque chopper mode
+  - **Microsteps per Full Step** — 1 to 256 (default: 16). Changing this changes the physical distance covered per step, so **re-home afterward** and re-tune Homing Speed/Acceleration and normal Stepper Speed/Acceleration if movement feels too fast or slow.
+  - **SpreadCycle Hysteresis Start/End** (`hstrt`/`hend`) — raw chopper tuning values, only affect SpreadCycle mode; default 0/0 (a conservative but valid starting point, not confirmed to need adjustment)
+  - **StealthChop Autoscale Step Size/Amplitude Limit/Automatic Gradient Adaptation** (`pwm_reg`/`pwm_lim`/`pwm_autograd`) — governs StealthChop's self-tuning; only affect StealthChop mode
+  - **Sense Resistor** / **Driver Address** — match your TMC2209 module's actual sense resistor (commonly 0.11Ω for SilentStepStick-style modules) and MS1/MS2 address strapping (0 for a single-driver setup, both pins grounded)
 
 ### LED/Pixel Settings
 - **Pixel Count**: 0-1000 (typical props are 50-150; designed to comfortably handle up to ~500)
@@ -171,7 +177,7 @@ Requires the driver's UART (PDN_UART) wired to D6 (TX) / D7 (RX); leave "Enable 
 The project uses automated version management and build artifact generation:
 
 ### Version Management
-- **MAJOR.MINOR.SUBREV** format (e.g., 1.0.210)
+- **MAJOR.MINOR.SUBREV** format (e.g., 1.0.230)
 - SUBREV auto-increments on each build
 - Manually increment MAJOR/MINOR and reset SUBREV for releases
 
@@ -181,7 +187,7 @@ Compiled firmware is automatically copied to:
 build/ServoController-<version>.bin
 ```
 
-Example: `build/ServoController-1.0.210.bin`
+Example: `build/ServoController-1.0.230.bin`
 
 ### Build Commands
 ```bash
@@ -247,6 +253,10 @@ When connected via serial monitor (115200 baud), type `?` for the full menu:
 - Ensure stepper control is enabled in Channel Configuration
 - Verify DDP is reaching the device (check packet count on the status page)
 
+### Motor Moves Too Fast/Slow, or Overshoots During Homing (TMC2209 UART enabled)
+- If you changed **Microsteps per Full Step**, Homing Speed/Acceleration and normal Stepper Speed/Acceleration are step-pulse rates (Hz), not physical speeds — they don't automatically scale with microstep resolution. Re-tune them after any microstep change, and re-home afterward.
+- If the motor barely moves after enabling UART Driver Control, check Run Current is set high enough for your motor's rated current — enabling digital current control replaces the board's physical Vref trimpot entirely, so whatever it was previously tuned to no longer applies.
+
 ### LEDs Not Responding
 - Confirm Pixel Count is set > 0 and settings were saved
 - Remember LED data starts at channel 3 (DDP byte offset 2) — check your xLights model's channel offset
@@ -275,7 +285,7 @@ ServoController/
 │   ├── main.h
 │   ├── protocol_common.h    # Shared protocol/channel-layout state
 │   ├── led_handler.h
-│   ├── *_handler.h          # Other subsystem handlers (ddp, stepper, wifi, ota)
+│   ├── *_handler.h          # Other subsystem handlers (ddp, stepper, tmc, wifi, ota)
 │   └── partition_utils.h
 ├── src/                     # Source files
 │   ├── main.cpp              # Main program
