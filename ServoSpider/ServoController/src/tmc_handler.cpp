@@ -84,8 +84,38 @@ void initTmc() {
 void applyTmcSettings() {
   if (!tmcConnected || tmcDriver == nullptr) return;
 
+  // TMCStepper caches CHOPCONF in RAM and rewrites the whole register on any
+  // write to it (e.g. from rms_current()'s vsense bit below) - any field we
+  // never explicitly set defaults to 0 in that cache. TOFF=0 disables the
+  // driver's output stage entirely, so it must be set explicitly every time
+  // we touch CHOPCONF, or the motor silently stops driving. Values match
+  // TMCStepper's own reference example (toff=4, blank_time=24).
+  tmcDriver->toff(4);
+  tmcDriver->blank_time(24);
+
+  // TMC2209Stepper::begin() calls mstep_reg_select(true), which switches
+  // microstep resolution from the MS1/MS2 pins over to this UART-writable
+  // MRES field - which falls into the exact same "defaults to 0" trap as
+  // TOFF above, and MRES=0 means 256 microsteps (the finest/slowest
+  // setting). Must be set explicitly or the motor moves at 1/16th (or
+  // worse) of its intended speed for the same step rate. 16 microsteps is
+  // a reasonable general-purpose default; change here if a different
+  // resolution is wanted. Re-home after changing this - bottomPosition is
+  // measured in actual steps, so it self-corrects on the next homing run,
+  // but any previously-tuned Stepper Speed (Hz) will now feel different
+  // since the physical distance per step just changed.
+  tmcDriver->microsteps(16);
+
   float holdMultiplier = tmcHoldPercentConfig / 100.0f;
   tmcDriver->rms_current(tmcRunCurrentConfig, holdMultiplier);
+
+  // PWMCONF fields never set elsewhere also default to 0 in the same way -
+  // pwm_reg/pwm_lim bound StealthChop's autoscale step size/amplitude, so
+  // leaving them at 0 would silently cripple StealthChop the moment it's
+  // selected. Values match TMC's documented factory-default reset state.
+  tmcDriver->pwm_autograd(true);
+  tmcDriver->pwm_reg(4);
+  tmcDriver->pwm_lim(12);
 
   if (tmcStealthChopConfig) {
     tmcDriver->en_spreadCycle(false);
