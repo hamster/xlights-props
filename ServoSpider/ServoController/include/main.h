@@ -4,7 +4,7 @@
 #include <Arduino.h>
 
 void printStatus();
-void printNetworkDiagnostics();
+void printFullStatus();
 float calcPosition(float, bool);
 void handleSerialCommands();
 

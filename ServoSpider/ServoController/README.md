@@ -211,8 +211,8 @@ When connected via serial monitor (115200 baud), type `?` for the full menu:
 - `?` - Help menu
 - `h` - Start homing sequence
 - `r` - Reboot device
-- `s` - Print connection status
-- `n` - Detailed network/system diagnostics (WiFi, memory, DDP stats, LED status, uptime)
+- `s` - Print status (WiFi, memory, DDP stats, LED status, TMC2209 status, uptime)
+- `n` - Print connection status (brief)
 - `w` - Attempt WiFi reconnection
 - `a` - Switch to Access Point mode
 - `p` - Print current stepper position
