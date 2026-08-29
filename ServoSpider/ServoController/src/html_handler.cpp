@@ -10,6 +10,7 @@
 #include "main.h"
 #include <WiFi.h>
 #include <Preferences.h>
+#include <esp_task_wdt.h>
 
 // Web server
 WebServer server(80);
