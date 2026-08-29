@@ -1236,26 +1236,23 @@ function showNotification(message, isSuccess) {
             <button onclick="homeServo()" class="btn-success">Home Servo</button>
           </div>
         </div>
+
+        <div id="tmc-status-box" style="display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd;">
+          <h4>Driver Status (TMC2209)</h4>
+          <p><strong>UART Link:</strong> <span id="tmc-connected-status" class="status">Not Connected</span></p>
+          <p><strong>Diagnostics:</strong> <span id="tmc-diag-status">OK</span></p>
+          <p><strong>Stall Guard:</strong> <span id="tmc-stall-status">Disabled</span></p>
+          <button id="tmc-clear-stall-btn" class="btn-warning" style="display: none;" onclick="clearTmcStall()">Clear Stall Fault</button>
+        </div>
       </div>
 
       <div class="status-box">
-        <h4>DDP Status</h4>
+        <h4>DDP / LED Status</h4>
         <p><strong>Stepper Mode:</strong> <span id="protocol-mode">8-bit</span></p>
         <p><strong>Total Channels:</strong> <span id="total-channels">0</span></p>
         <p><strong>Packets Received:</strong> <span id="protocol-packets-received">0</span></p>
-      </div>
 
-      <div class="status-box" id="tmc-status-box" style="display: none;">
-        <h4>Driver Status (TMC2209)</h4>
-        <p><strong>UART Link:</strong> <span id="tmc-connected-status" class="status">Not Connected</span></p>
-        <p><strong>Diagnostics:</strong> <span id="tmc-diag-status">OK</span></p>
-        <p><strong>Stall Guard:</strong> <span id="tmc-stall-status">Disabled</span></p>
-        <button id="tmc-clear-stall-btn" class="btn-warning" style="display: none;" onclick="clearTmcStall()">Clear Stall Fault</button>
-      </div>
-
-      <div class="status-box">
-        <h4>LED Status</h4>
-        <div style="margin-bottom: 10px;">
+        <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd;">
           <label style="font-size: 12px; cursor: pointer;">
             <input type="checkbox" id="led-preview-enabled" onchange="toggleLedPreview()">
             Show Pixels
@@ -1270,9 +1267,8 @@ function showNotification(message, isSuccess) {
         <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd;">
           <label style="font-size: 12px; cursor: pointer;">
             <input type="checkbox" id="led-test-mode-enabled" onchange="toggleLedTestMode()">
-            Test Pattern (marching R/G/B, ignores DDP)
+            Test Pattern
           </label>
-          <p style="color: #666; font-size: 11px; margin: 4px 0 0;">For bench-testing pixel wiring without a controller pushing DDP data.</p>
         </div>
       </div>
       </div>
