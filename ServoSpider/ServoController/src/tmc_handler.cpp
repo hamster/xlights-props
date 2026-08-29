@@ -15,6 +15,12 @@ uint8_t tmcHoldPercentConfig = 50;
 bool tmcStealthChopConfig = true;
 bool tmcStallEnabledConfig = false;
 uint16_t tmcStallThresholdConfig = 50;
+uint16_t tmcMicrostepsConfig = 16;
+uint8_t tmcHstrtConfig = 0;
+uint8_t tmcHendConfig = 0;
+uint8_t tmcPwmRegConfig = 4;
+uint8_t tmcPwmLimConfig = 12;
+bool tmcPwmAutogradConfig = true;
 
 TmcStatus tmcStatus;
 
@@ -97,14 +103,18 @@ void applyTmcSettings() {
   // microstep resolution from the MS1/MS2 pins over to this UART-writable
   // MRES field - which falls into the exact same "defaults to 0" trap as
   // TOFF above, and MRES=0 means 256 microsteps (the finest/slowest
-  // setting). Must be set explicitly or the motor moves at 1/16th (or
-  // worse) of its intended speed for the same step rate. 16 microsteps is
-  // a reasonable general-purpose default; change here if a different
-  // resolution is wanted. Re-home after changing this - bottomPosition is
-  // measured in actual steps, so it self-corrects on the next homing run,
-  // but any previously-tuned Stepper Speed (Hz) will now feel different
-  // since the physical distance per step just changed.
-  tmcDriver->microsteps(16);
+  // setting). Re-home after changing this - bottomPosition is measured in
+  // actual steps, so it self-corrects on the next homing run, but any
+  // previously-tuned Stepper Speed (Hz) will now feel different since the
+  // physical distance per step just changed.
+  tmcDriver->microsteps(tmcMicrostepsConfig);
+
+  // SpreadCycle hysteresis start/end - only meaningful when SpreadCycle is
+  // active, but harmless to set unconditionally. Datasheet-recommended
+  // constraint: hstrt + hend should stay <= 15, though it's not enforced
+  // here (this is exploratory tuning territory, not a hard safety limit).
+  tmcDriver->hstrt(tmcHstrtConfig);
+  tmcDriver->hend(tmcHendConfig);
 
   float holdMultiplier = tmcHoldPercentConfig / 100.0f;
   tmcDriver->rms_current(tmcRunCurrentConfig, holdMultiplier);
@@ -112,10 +122,10 @@ void applyTmcSettings() {
   // PWMCONF fields never set elsewhere also default to 0 in the same way -
   // pwm_reg/pwm_lim bound StealthChop's autoscale step size/amplitude, so
   // leaving them at 0 would silently cripple StealthChop the moment it's
-  // selected. Values match TMC's documented factory-default reset state.
-  tmcDriver->pwm_autograd(true);
-  tmcDriver->pwm_reg(4);
-  tmcDriver->pwm_lim(12);
+  // selected. Defaults match TMC's documented factory-default reset state.
+  tmcDriver->pwm_autograd(tmcPwmAutogradConfig);
+  tmcDriver->pwm_reg(tmcPwmRegConfig);
+  tmcDriver->pwm_lim(tmcPwmLimConfig);
 
   if (tmcStealthChopConfig) {
     tmcDriver->en_spreadCycle(false);

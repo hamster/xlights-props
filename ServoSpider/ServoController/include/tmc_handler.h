@@ -25,6 +25,12 @@ extern uint8_t tmcHoldPercentConfig;      // hold current as % of run current
 extern bool tmcStealthChopConfig;         // true = StealthChop, false = SpreadCycle
 extern bool tmcStallEnabledConfig;        // enable stall-detection safety cutoff
 extern uint16_t tmcStallThresholdConfig;  // raw SG_RESULT trip point (0-1023, lower = more loaded)
+extern uint16_t tmcMicrostepsConfig;      // microsteps per full step (1,2,4,8,16,32,64,128,256)
+extern uint8_t tmcHstrtConfig;            // SpreadCycle hysteresis start, raw register value 0-7
+extern uint8_t tmcHendConfig;             // SpreadCycle hysteresis end, raw register value 0-15
+extern uint8_t tmcPwmRegConfig;           // StealthChop autoscale max PWM amplitude step, 1-15
+extern uint8_t tmcPwmLimConfig;           // StealthChop autoscale amplitude limit, 0-15
+extern bool tmcPwmAutogradConfig;         // StealthChop automatic gradient adaptation
 
 // Live diagnostics snapshot, refreshed periodically by updateTmc()
 struct TmcStatus {

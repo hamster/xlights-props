@@ -111,6 +111,12 @@ void setup() {
   tmcStealthChopConfig = preferences.getBool("tmcStealthChop", true);
   tmcStallEnabledConfig = preferences.getBool("tmcStallEnabled", false);
   tmcStallThresholdConfig = (uint16_t)preferences.getInt("tmcStallThresh", 50);
+  tmcMicrostepsConfig = (uint16_t)preferences.getInt("tmcMicrosteps", 16);
+  tmcHstrtConfig = (uint8_t)preferences.getInt("tmcHstrt", 0);
+  tmcHendConfig = (uint8_t)preferences.getInt("tmcHend", 0);
+  tmcPwmRegConfig = (uint8_t)preferences.getInt("tmcPwmReg", 4);
+  tmcPwmLimConfig = (uint8_t)preferences.getInt("tmcPwmLim", 12);
+  tmcPwmAutogradConfig = preferences.getBool("tmcPwmAutograd", true);
 
   // Initialize stepper
   initializeStepper();
