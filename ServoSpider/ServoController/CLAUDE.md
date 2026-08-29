@@ -105,4 +105,5 @@ Type in serial monitor (115200 baud):
 - OTA sets `otaInProgress` flag to pause protocol handling during updates
 - LED updates are called directly from the DDP handler (no queue/task)
 - WiFi connection monitoring runs every 30s with auto-reconnect
+- `Preferences` (NVS) key names are capped at 15 characters - a longer key fails to write silently (no compiler or runtime error), so the setting just never persists across a reboot. Keep new keys ≤15 chars. Found two real instances of this (`stepperSpeedHoming`/`stepperAccelHoming`, and a pre-existing `stepperBlankTime`) - see TODO.md.
 - Use `extern` declarations in headers, definitions in `.cpp` files

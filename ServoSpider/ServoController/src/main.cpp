@@ -91,8 +91,10 @@ void setup() {
   stepperAccelConfig = preferences.getInt("stepperAccel", stepperAccel);
   jumpStartConfig = preferences.getInt("jumpStart", 0);
   autoHomeOnBootConfig = preferences.getBool("autoHomeOnBoot", true);
-  stepperSpeedHomingConfig = preferences.getInt("stepperSpeedHoming", stepperSpeedHoming);
-  stepperAccelHomingConfig = preferences.getInt("stepperAccelHoming", stepperAccelHoming);
+  // NVS keys are capped at 15 chars - keep these short (see matching note in
+  // html_handler.cpp's handleSaveStepper()).
+  stepperSpeedHomingConfig = preferences.getInt("stepSpeedHome", stepperSpeedHoming);
+  stepperAccelHomingConfig = preferences.getInt("stepAccelHome", stepperAccelHoming);
 
   // Load protocol configuration
   protocolConfig = (protocolType)preferences.getInt("protocol", PROTOCOL_DDP);
@@ -102,7 +104,9 @@ void setup() {
 
   // Load blank time configuration
   ledBlankTimeConfig = preferences.getInt("ledBlankTime", 0);
-  stepperBlankTimeConfig = preferences.getInt("stepperBlankTime", 0);
+  // See matching note in html_handler.cpp's handleSaveProtocol() - old key
+  // exceeded NVS's 15-char limit and never actually persisted.
+  stepperBlankTimeConfig = preferences.getInt("stepBlankTime", 0);
 
   // Load TMC2209 UART configuration
   tmcEnabledConfig = preferences.getBool("tmcEnabled", false);

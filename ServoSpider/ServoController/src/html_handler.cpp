@@ -215,8 +215,10 @@ void handleSaveStepper() {
     preferences.putInt("stepperAccel", stepperAccelConfig);
     preferences.putInt("jumpStart", jumpStartConfig);
     preferences.putBool("autoHomeOnBoot", autoHomeOnBootConfig);
-    preferences.putInt("stepperSpeedHoming", stepperSpeedHomingConfig);
-    preferences.putInt("stepperAccelHoming", stepperAccelHomingConfig);
+    // NVS keys are capped at 15 chars - "stepperSpeedHoming"/"stepperAccelHoming"
+    // (18 chars each) silently fail to write and never persist across reboot.
+    preferences.putInt("stepSpeedHome", stepperSpeedHomingConfig);
+    preferences.putInt("stepAccelHome", stepperAccelHomingConfig);
 
     // Apply the new settings immediately
     stepper->setSpeedInHz(stepperSpeedConfig);
@@ -266,7 +268,9 @@ void handleSaveProtocol() {
   }
   if (server.hasArg("stepperBlankTime")) {
     stepperBlankTimeConfig = server.arg("stepperBlankTime").toInt();
-    preferences.putInt("stepperBlankTime", stepperBlankTimeConfig);
+    // "stepperBlankTime" is 16 chars, over NVS's 15-char key limit - this
+    // setting silently never persisted across a reboot until this fix.
+    preferences.putInt("stepBlankTime", stepperBlankTimeConfig);
   }
 
   Serial.println("Protocol configuration saved!");
