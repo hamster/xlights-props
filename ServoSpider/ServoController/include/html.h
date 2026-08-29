@@ -522,6 +522,18 @@ function showNotification(message, isSuccess) {
       }
     }
 
+    function toggleLedTestMode() {
+      var enabled = document.getElementById('led-test-mode-enabled').checked;
+      fetch('/led-test?enable=' + enabled)
+        .then(response => response.json())
+        .then(data => {
+          console.log('LED test mode: ' + (data.ledTestMode ? 'enabled' : 'disabled'));
+        })
+        .catch(error => {
+          showNotification('Error toggling LED test mode: ' + error, false);
+        });
+    }
+
     function fetchLedPreview() {
       fetch('/led-preview')
         .then(response => response.json())
@@ -920,6 +932,12 @@ function showNotification(message, isSuccess) {
             fetchLedPreview();
           }
 
+          // Sync LED test mode checkbox across all clients
+          var ledTestCheckbox = document.getElementById('led-test-mode-enabled');
+          if (ledTestCheckbox && document.activeElement !== ledTestCheckbox) {
+            ledTestCheckbox.checked = data.ledTestMode || false;
+          }
+
           // Update locate mode indicator to sync across all clients
           var bannerSpider = document.getElementById('banner-spider');
           if (data.locateMode) {
@@ -1248,6 +1266,14 @@ function showNotification(message, isSuccess) {
         </div>
         <p><strong>Configured Pixels:</strong> <span id="led-pixel-count">0</span></p>
         <p><strong>Received Pixels:</strong> <span id="led-pixels-received">0</span></p>
+
+        <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd;">
+          <label style="font-size: 12px; cursor: pointer;">
+            <input type="checkbox" id="led-test-mode-enabled" onchange="toggleLedTestMode()">
+            Test Pattern (marching R/G/B, ignores DDP)
+          </label>
+          <p style="color: #666; font-size: 11px; margin: 4px 0 0;">For bench-testing pixel wiring without a controller pushing DDP data.</p>
+        </div>
       </div>
       </div>
     </div>

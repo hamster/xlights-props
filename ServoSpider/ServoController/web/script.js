@@ -44,6 +44,18 @@ function showNotification(message, isSuccess) {
       }
     }
 
+    function toggleLedTestMode() {
+      var enabled = document.getElementById('led-test-mode-enabled').checked;
+      fetch('/led-test?enable=' + enabled)
+        .then(response => response.json())
+        .then(data => {
+          console.log('LED test mode: ' + (data.ledTestMode ? 'enabled' : 'disabled'));
+        })
+        .catch(error => {
+          showNotification('Error toggling LED test mode: ' + error, false);
+        });
+    }
+
     function fetchLedPreview() {
       fetch('/led-preview')
         .then(response => response.json())
@@ -440,6 +452,12 @@ function showNotification(message, isSuccess) {
           // Fetch LED preview separately (only if enabled to save bandwidth)
           if (ledPreviewEnabled) {
             fetchLedPreview();
+          }
+
+          // Sync LED test mode checkbox across all clients
+          var ledTestCheckbox = document.getElementById('led-test-mode-enabled');
+          if (ledTestCheckbox && document.activeElement !== ledTestCheckbox) {
+            ledTestCheckbox.checked = data.ledTestMode || false;
           }
 
           // Update locate mode indicator to sync across all clients

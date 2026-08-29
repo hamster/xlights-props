@@ -526,6 +526,19 @@ void handleLocate() {
   }
 }
 
+void handleLedTest() {
+  if (server.hasArg("enable")) {
+    // Check first character of enable argument to avoid String allocation
+    const String& enableArg = server.arg("enable");
+    bool enable = (enableArg.length() > 0 && enableArg[0] == 't');  // "true"
+    setLedTestMode(enable);
+    server.send(200, "application/json", enable ? "{\"success\":true,\"ledTestMode\":true}" : "{\"success\":true,\"ledTestMode\":false}");
+  } else {
+    // Return current LED test mode state
+    server.send(200, "application/json", ledTestModeActive ? "{\"ledTestMode\":true}" : "{\"ledTestMode\":false}");
+  }
+}
+
 // Static buffer for status data response (avoids heap allocation)
 static char statusDataBuffer[1600];
 
@@ -605,6 +618,7 @@ void handleStatusData() {
     "\"ledPixelCount\":%d,"
     "\"ledMaxPixelsReceived\":%d,"
     "\"ledsBlanked\":%s,"
+    "\"ledTestMode\":%s,"
     "\"tmcEnabled\":%s,"
     "\"tmcConnected\":%s,"
     "\"tmcOverTempWarning\":%s,"
@@ -642,6 +656,7 @@ void handleStatusData() {
     ledPixelCount,
     ledMaxPixelsReceived,
     ledsBlanked ? "true" : "false",
+    ledTestModeActive ? "true" : "false",
     tmcEnabledConfig ? "true" : "false",
     tmcConnected ? "true" : "false",
     tmcStatus.overTempWarning ? "true" : "false",
@@ -759,6 +774,9 @@ void startWebServer() {
 
   // Locate mode
   server.on("/locate", HTTP_GET, handleLocate);
+
+  // LED test pattern (local bench testing without DDP)
+  server.on("/led-test", HTTP_GET, handleLedTest);
 
   // TMC2209 stall fault acknowledgement
   server.on("/clear-tmc-stall", HTTP_GET, handleClearTmcStall);

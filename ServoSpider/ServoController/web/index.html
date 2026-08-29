@@ -156,6 +156,14 @@
         </div>
         <p><strong>Configured Pixels:</strong> <span id="led-pixel-count">0</span></p>
         <p><strong>Received Pixels:</strong> <span id="led-pixels-received">0</span></p>
+
+        <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd;">
+          <label style="font-size: 12px; cursor: pointer;">
+            <input type="checkbox" id="led-test-mode-enabled" onchange="toggleLedTestMode()">
+            Test Pattern (marching R/G/B, ignores DDP)
+          </label>
+          <p style="color: #666; font-size: 11px; margin: 4px 0 0;">For bench-testing pixel wiring without a controller pushing DDP data.</p>
+        </div>
       </div>
       </div>
     </div>

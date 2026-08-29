@@ -50,4 +50,10 @@ void blankPixelLeds();
 // Uses static buffer to avoid heap allocation, returns const char* (not String)
 const char* getLedPreviewJson(int maxPixels);
 
+// LED test pattern - marching RGB pattern for local bench testing without a
+// DDP source. Runtime-only (not persisted), mirrors locateMode's pattern.
+extern bool ledTestModeActive;
+void setLedTestMode(bool enable);  // Enable/disable; handles reset + blank-on-disable
+void updateLedTestMode();          // Call every loop() iteration - advances the pattern once/second
+
 #endif

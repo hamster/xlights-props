@@ -239,12 +239,15 @@ void loop() {
     }
   }
 
+  // Advance the local LED test pattern, if enabled (no-op otherwise)
+  updateLedTestMode();
+
   // Handle blank time timeouts
   if (lastProtocolUpdateTime > 0 && !otaInProgress) {
     unsigned long timeSinceUpdate = millis() - lastProtocolUpdateTime;
 
-    // LED blank timeout
-    if (ledBlankTimeConfig > 0 && timeSinceUpdate > (unsigned long)ledBlankTimeConfig * 1000) {
+    // LED blank timeout - skip while the test pattern owns the strip
+    if (!ledTestModeActive && ledBlankTimeConfig > 0 && timeSinceUpdate > (unsigned long)ledBlankTimeConfig * 1000) {
       blankPixelLeds();
     }
 

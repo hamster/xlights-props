@@ -27,6 +27,7 @@ void handleReboot();
 void handleResetSettings();
 void handleHoming();
 void handleLocate();
+void handleLedTest();
 void handleStatusData();
 void handleMove();
 void handleSetPosition();

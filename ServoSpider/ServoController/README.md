@@ -88,6 +88,7 @@ Access the device via its IP address (or `http://<hostname>.local`) in a web bro
 - Monitor network connectivity and uptime
 - Track DDP packet statistics
 - Live LED preview (fetched separately from `/led-preview` to save bandwidth)
+- LED test pattern (LED Status box): drives a marching red/green/blue pattern out the pixel strip and ignores incoming DDP pixel data while enabled — for bench-testing a prop's pixel wiring without a controller pushing DDP. Doesn't affect stepper/DDP position control. Not persisted across reboot; disabling it blanks the strip.
 - Manual motor control (position and incremental movement)
 - Locate mode (blinks the status LED in an SOS pattern to help find the device)
 
