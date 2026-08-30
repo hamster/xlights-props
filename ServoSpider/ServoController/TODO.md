@@ -6,6 +6,20 @@ Turn this into a standalone stepper-mover **+** pixel controller: one ESP32-S3 d
 
 Note: checked `git branch -a` / `git stash list` / `git log --all` — there is no leftover branch, stash, or commit anywhere in this repo with prior dual-core work. If there was earlier progress on splitting stepper/LED work across cores, it never made it into git, so treat this as a fresh design rather than something to dig up.
 
+## Fixed: re-homing silently didn't move, after the trolley drifted off the switch during normal operation
+
+Reported: trolley returns to "zero" after being in motion for a while but sits offset from the switch; commanding a re-home logs "Moving to find initial homing position..." (`HOMING_CHECK_SWITCH`'s else-branch) but the motor never actually moves. Any unrelated manual move (e.g. jogging 100 steps) "recovers" it, and re-homing works normally afterward.
+
+Root cause, found by code inspection (not log evidence - `log2.log` turned out to be another Compact Motion Log CSV capture, not the serial text from this incident): `pendingForceStop` (set by the homing-switch ISR, see `handleHomingInterrupt`) was only ever consumed inside `updateHoming()`, and that function returned early, before ever reaching the check, whenever homing wasn't currently active. So if the switch ever tripped during *normal* (non-homing) operation - plausible after extended travel, if the trolley drifts near the switch zone - the flag got set and then sat there unconsumed indefinitely, since nothing looked at it while idle. The *next* time homing started, that stale flag was treated as "the switch just tripped right now," triggering a `forceStop()` in the same `loop()` iteration as `HOMING_CHECK_SWITCH`'s first `runBackward()` call for `HOMING_FIND_INITIAL` - racing against it in FastAccelStepper's own internal ramp-generator state and, per what was reported, sometimes silently swallowing that first move entirely. An unrelated manual move (which goes through a different call path) happened to reset enough internal state to unstick it, which is why jogging "recovered" it.
+
+Fixed two ways in `stepper_handler.cpp`:
+1. `pendingForceStop` is now checked and cleared unconditionally at the very top of `updateHoming()`, before the "not homing" early return - never leaves it stale across a homing/non-homing boundary.
+2. A trip while *not* homing is no longer silently discarded either: it now force-stops (as it always did) and additionally marks the system `homed = false`, logging a warning - since the trolley reaching the switch outside of homing means something has genuinely drifted, and continuing to trust the old homed position would be wrong.
+3. `startHoming()` now also defensively clears `pendingForceStop` itself, belt-and-suspenders against any other path that might leave it stale.
+
+- [ ] Not yet bench-verified - logic reasoned through carefully and the code inspection is conclusive about the mechanism, but this hasn't been reproduced-then-fixed-and-reverified on the actual hardware yet.
+- [ ] The underlying drift itself (why the trolley ends up offset from the switch after extended operation in the first place) is still an open question, likely related to the still-unreproduced "loses steps" concern from the tracking-mode work above - this fix addresses the *symptom* (re-homing not working once already offset), not why it got offset to begin with.
+
 ## Root-caused: tracking jerkiness, and three motion strategies added to compare on the bench
 
 Follow-up to the "loses steps / drives into the end stop" report below - a compact CSV log (`compactLogEnabled`, see below) was captured across four real pans ("Fast" 2.5s, "Middle" 10s, "Very slow" 20s, "Kinda fast" 6s) and analyzed. Full log in `log.log` at the repo root (kept for reference; not meant to stay there long-term - it's a one-off capture, not something the build depends on).

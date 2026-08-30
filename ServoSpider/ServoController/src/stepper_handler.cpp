@@ -158,6 +158,7 @@ void startHoming() {
   homingStateTime = millis();
   homingCounter = 0;
   interruptTriggered = false;
+  pendingForceStop = false;  // Defensive: never let a stale flag from before this attempt fire mid-sequence
 
   stepper->setAcceleration(stepperAccelHomingConfig);
   stepper->setSpeedInHz(stepperSpeedHomingConfig);
@@ -173,20 +174,38 @@ bool isHomingSwitchTripped() {
 }
 
 void updateHoming() {
-  if (!isHoming() && homingState != HOMING_COMPLETE && homingState != HOMING_ERROR) {
-    return;  // Not homing
-  }
-
   // Deferred from the ISR (see handleHomingInterrupt) - forceStop() isn't
   // IRAM-safe, so it's issued here instead, in normal task context, as soon
-  // as we notice the flag. Cleared immediately so this fires exactly once
-  // per switch edge, not on every loop() iteration for as long as
-  // interruptTriggered (a separate flag - see handleHomingInterrupt) stays
-  // set; the HOMING_* states below consume/clear interruptTriggered
-  // themselves, on their own schedule, for their own transition logic.
+  // as we notice the flag. Checked and cleared *before* the "not homing"
+  // early return below, and unconditionally - not just while homing is
+  // active. This used to be gated behind that early return, which meant a
+  // switch trip during normal (non-homing) operation left the flag stuck
+  // true indefinitely (never consumed, since nothing here ran while idle).
+  // The next time homing started, that stale flag would be treated as "the
+  // switch just tripped right now" and force-stop the motor in the very
+  // same loop() iteration as HOMING_CHECK_SWITCH's first runBackward() call
+  // for HOMING_FIND_INITIAL - racing against it and sometimes silently
+  // swallowing that first move entirely (reported as "homing prints that
+  // it's searching but the motor never actually moves"; recoverable by any
+  // unrelated manual move, which happened to reset the stepper library's
+  // internal state enough to unstick it).
+  //
+  // A trip while not homing is now also treated as a real event rather
+  // than a silently-discarded one: the trolley shouldn't reach the switch
+  // outside of homing at all, so if it does, something has drifted -
+  // stop and require a fresh re-home rather than pretending nothing
+  // happened.
   if (pendingForceStop) {
     pendingForceStop = false;
     stepper->forceStop();
+    if (!isHoming() && homed) {
+      Serial.println("WARNING: Homing switch tripped outside of homing - stopping and marking system as not homed");
+      homed = false;
+    }
+  }
+
+  if (!isHoming() && homingState != HOMING_COMPLETE && homingState != HOMING_ERROR) {
+    return;  // Not homing
   }
 
   unsigned long currentTime = millis();
