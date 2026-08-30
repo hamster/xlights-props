@@ -41,6 +41,15 @@ int stepperTrackSpeedConfig = stepperSpeed;
 int stepperTrackAccelConfig = stepperAccel / 4;
 int stepperTrackMaxLagConfig = 3000;
 
+// Motion strategy - see StepperTrackMode's declaration comment. Default
+// stays DIRECT (the original/current behavior) so flashing this firmware
+// doesn't change anything until a mode is explicitly picked in Settings.
+int stepperTrackModeConfig = TRACK_MODE_DIRECT;
+int stepperCoalesceMsConfig = 250;
+int stepperCoalesceStepsConfig = 400;
+int stepperStreamRateWindowMsConfig = 250;
+int stepperStreamSettleMsConfig = 150;
+
 bool stepperSettingsPendingSave = false;
 
 // Deferred flash write for Stepper Configuration settings - see the
@@ -65,6 +74,11 @@ void persistStepperSettingsIfPending() {
   preferences.putInt("stepTrackSpeed", stepperTrackSpeedConfig);
   preferences.putInt("stepTrackAccel", stepperTrackAccelConfig);
   preferences.putInt("stepTrackMaxLag", stepperTrackMaxLagConfig);
+  preferences.putInt("stepTrackMode", stepperTrackModeConfig);
+  preferences.putInt("stepCoalesceMs", stepperCoalesceMsConfig);
+  preferences.putInt("stepCoalesceSt", stepperCoalesceStepsConfig);
+  preferences.putInt("stepStreamRateW", stepperStreamRateWindowMsConfig);
+  preferences.putInt("stepStreamSettl", stepperStreamSettleMsConfig);
 
   stepperSettingsPendingSave = false;
   Serial.println("Stepper settings persisted to flash (motor now idle)");

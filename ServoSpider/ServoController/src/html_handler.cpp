@@ -76,6 +76,13 @@ void handleRoot() {
   page.replace("{{STEPPER_TRACK_SPEED}}", String(stepperTrackSpeedConfig));
   page.replace("{{STEPPER_TRACK_ACCEL}}", String(stepperTrackAccelConfig));
   page.replace("{{STEPPER_TRACK_MAX_LAG}}", String(stepperTrackMaxLagConfig));
+  page.replace("{{TRACK_MODE_DIRECT_SEL}}", stepperTrackModeConfig == TRACK_MODE_DIRECT ? "selected" : "");
+  page.replace("{{TRACK_MODE_COALESCE_SEL}}", stepperTrackModeConfig == TRACK_MODE_COALESCE ? "selected" : "");
+  page.replace("{{TRACK_MODE_STREAMING_SEL}}", stepperTrackModeConfig == TRACK_MODE_STREAMING ? "selected" : "");
+  page.replace("{{STEPPER_COALESCE_MS}}", String(stepperCoalesceMsConfig));
+  page.replace("{{STEPPER_COALESCE_STEPS}}", String(stepperCoalesceStepsConfig));
+  page.replace("{{STEPPER_STREAM_RATE_WINDOW}}", String(stepperStreamRateWindowMsConfig));
+  page.replace("{{STEPPER_STREAM_SETTLE}}", String(stepperStreamSettleMsConfig));
 
   // Protocol configuration values
   page.replace("{{STEPPER_CONTROL_CHECKED}}", stepperControlEnabled ? "checked" : "");
@@ -227,6 +234,21 @@ void handleSaveStepper() {
     }
     if (server.hasArg("stepperTrackMaxLag")) {
       stepperTrackMaxLagConfig = server.arg("stepperTrackMaxLag").toInt();
+    }
+    if (server.hasArg("stepperTrackMode")) {
+      stepperTrackModeConfig = server.arg("stepperTrackMode").toInt();
+    }
+    if (server.hasArg("stepperCoalesceMs")) {
+      stepperCoalesceMsConfig = server.arg("stepperCoalesceMs").toInt();
+    }
+    if (server.hasArg("stepperCoalesceSteps")) {
+      stepperCoalesceStepsConfig = server.arg("stepperCoalesceSteps").toInt();
+    }
+    if (server.hasArg("stepperStreamRateWindow")) {
+      stepperStreamRateWindowMsConfig = server.arg("stepperStreamRateWindow").toInt();
+    }
+    if (server.hasArg("stepperStreamSettle")) {
+      stepperStreamSettleMsConfig = server.arg("stepperStreamSettle").toInt();
     }
 
     // Config variables are live immediately - the DDP position-handling

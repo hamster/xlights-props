@@ -498,6 +498,12 @@ function showNotification(message, isSuccess) {
       document.getElementById('tmcOptionsGroup').style.display = tmcEnabled ? 'block' : 'none';
     }
 
+    function toggleTrackModeFields() {
+      var mode = document.getElementById('stepperTrackMode').value;
+      document.getElementById('coalesceFieldsGroup').style.display = (mode === '1') ? 'block' : 'none';
+      document.getElementById('streamFieldsGroup').style.display = (mode === '2') ? 'block' : 'none';
+    }
+
     function clearTmcStall() {
       fetch('/clear-tmc-stall')
         .then(response => response.json())
@@ -574,6 +580,7 @@ function showNotification(message, isSuccess) {
     document.addEventListener('DOMContentLoaded', function() {
       toggleStepperOptions();
       toggleTmcOptions();
+      toggleTrackModeFields();
     });
 
     function handleFormSubmit(event, url) {
@@ -1469,6 +1476,30 @@ function showNotification(message, isSuccess) {
           <div class="form-group">
             <label for="stepperTrackAccel">Tracking Acceleration (steps/s&sup2;):</label>
             <input type="number" id="stepperTrackAccel" name="stepperTrackAccel" value="{{STEPPER_TRACK_ACCEL}}" min="1" max="1000000" required>
+          </div>
+
+          <div class="form-group">
+            <label for="stepperTrackMode">Tracking Motion Strategy:</label>
+            <select id="stepperTrackMode" name="stepperTrackMode" onchange="toggleTrackModeFields()" style="width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box; border: 2px solid #ddd; border-radius: 4px;">
+              <option value="0" {{TRACK_MODE_DIRECT_SEL}}>Direct (moveTo every packet - original behavior)</option>
+              <option value="1" {{TRACK_MODE_COALESCE_SEL}}>Coalesce (batch small updates into fewer, larger moves)</option>
+              <option value="2" {{TRACK_MODE_STREAMING_SEL}}>Streaming (continuous speed, snaps to position once quiet)</option>
+            </select>
+            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Experimental - added to compare on the bench after log analysis showed Direct mode's jerkiness comes from moveTo() always planning to decelerate to a full stop at each new nearby target, not primarily from accel/speed tuning. All three still use the Tracking Speed/Acceleration/Threshold above.</p>
+          </div>
+
+          <div class="form-group" id="coalesceFieldsGroup">
+            <label for="stepperCoalesceMs">Coalesce Window (ms):</label>
+            <input type="number" id="stepperCoalesceMs" name="stepperCoalesceMs" value="{{STEPPER_COALESCE_MS}}" min="0" max="5000" required>
+            <label for="stepperCoalesceSteps" style="margin-top: 8px;">Coalesce Min Steps (early commit if delta exceeds this):</label>
+            <input type="number" id="stepperCoalesceSteps" name="stepperCoalesceSteps" value="{{STEPPER_COALESCE_STEPS}}" min="1" max="100000" required>
+          </div>
+
+          <div class="form-group" id="streamFieldsGroup">
+            <label for="stepperStreamRateWindow">Streaming Rate Window (ms):</label>
+            <input type="number" id="stepperStreamRateWindow" name="stepperStreamRateWindow" value="{{STEPPER_STREAM_RATE_WINDOW}}" min="20" max="5000" required>
+            <label for="stepperStreamSettle" style="margin-top: 8px;">Streaming Settle Time (ms):</label>
+            <input type="number" id="stepperStreamSettle" name="stepperStreamSettle" value="{{STEPPER_STREAM_SETTLE}}" min="20" max="5000" required>
           </div>
 
           <div class="form-group">

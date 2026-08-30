@@ -25,11 +25,211 @@ uint16_t oldPositionRequest = 0;
 float position = 0;
 float lastCommandedTargetPosition = 0;  // Previous DDP-commanded target, steps - see tracking-profile note in loop()
 
-// Uptime tracking
-unsigned long bootTime = 0;
-
 // Blank time tracking
 bool stepperBlanked = false;  // Track if stepper has been blanked
+
+// --- TRACK_MODE_COALESCE state ---
+unsigned long coalesceLastCommitMs = 0;
+float coalescePendingTarget = 0;
+bool coalesceHasPending = false;
+
+// --- TRACK_MODE_STREAMING state ---
+struct StreamHistoryPoint { unsigned long ms; float pos; };
+const int STREAM_HISTORY_SIZE = 6;
+StreamHistoryPoint streamHistory[STREAM_HISTORY_SIZE];
+int streamHistoryCount = 0;
+unsigned long lastDdpCommandMs = 0;
+float streamRawTarget = 0;
+bool streamSettled = true;
+int streamCurrentDirection = 0;  // -1, 0, 1
+unsigned long lastStreamUpdateMs = 0;
+
+// Applies the tracking-vs-normal profile decision (see stepperTrackThresholdConfig's
+// declaration comment) for a move toward newTarget, given the previous target this
+// decision was based on. Updates FastAccelStepper's live speed/accel. Returns true
+// if the tracking profile was used; writes the Hz that was applied to targetSpeedHzOut.
+bool applyTrackingProfileDecision(float newTarget, float lastCommittedTarget, int& targetSpeedHzOut) {
+  int curPos = stepper->getCurrentPosition();
+  float commandDelta = fabs(newTarget - lastCommittedTarget);
+  float lagFromActual = fabs(newTarget - (float)curPos);
+
+  bool useTracking = stepperTrackEnabledConfig
+                      && commandDelta > 0
+                      && commandDelta <= stepperTrackThresholdConfig
+                      && lagFromActual <= stepperTrackMaxLagConfig;
+
+  targetSpeedHzOut = useTracking ? stepperTrackSpeedConfig : stepperSpeedConfig;
+  if (useTracking) {
+    stepper->setSpeedInHz(stepperTrackSpeedConfig);
+    stepper->setAcceleration(stepperTrackAccelConfig);
+  } else {
+    stepper->setSpeedInHz(stepperSpeedConfig);
+    stepper->setAcceleration(stepperAccelConfig);
+  }
+  return useTracking;
+}
+
+// Temporary compact CSV motion log, independent of protocolDebugConfig - see
+// compactLogEnabled's declaration comment in protocol_common.h. Shared by all
+// three TRACK_MODE_* strategies so the log stays useful regardless of mode.
+void logCompactMotion(uint16_t ddpVal, int cmdPos, int curPos, int delta, int lag,
+                       bool tracking, int32_t curSpeedMilliHz, int targetSpeedHz) {
+  if (!compactLogEnabled) return;
+  Serial.print(millis());
+  Serial.print(",");
+  Serial.print(ddpVal);
+  Serial.print(",");
+  Serial.print(cmdPos);
+  Serial.print(",");
+  Serial.print(curPos);
+  Serial.print(",");
+  Serial.print(delta);
+  Serial.print(",");
+  Serial.print(lag);
+  Serial.print(",");
+  Serial.print(tracking ? "T" : "N");
+  Serial.print(",");
+  Serial.print(curSpeedMilliHz / 1000);
+  Serial.print(",");
+  Serial.println(targetSpeedHz);
+}
+
+// TRACK_MODE_DIRECT: moveTo(newTarget) immediately, every DDP packet - the
+// original/current behavior.
+void handleDirectModeCommand(uint16_t ddpVal, float newTarget) {
+  int curPosBeforeMove = stepper->getCurrentPosition();
+  int32_t curSpeedBeforeMove = stepper->getCurrentSpeedInMilliHz();
+  float commandDeltaForLog = fabs(newTarget - lastCommandedTargetPosition);
+  float lagForLog = fabs(newTarget - (float)curPosBeforeMove);
+
+  int targetSpeedHz;
+  bool useTracking = applyTrackingProfileDecision(newTarget, lastCommandedTargetPosition, targetSpeedHz);
+  lastCommandedTargetPosition = newTarget;
+
+  if (protocolDebugConfig) {
+    Serial.print("Moving to position ");
+    Serial.print(ddpVal);
+    Serial.print(" -> ");
+    Serial.print((int)newTarget);
+    Serial.println(useTracking ? " [tracking]" : " [normal]");
+  }
+
+  logCompactMotion(ddpVal, (int)newTarget, curPosBeforeMove, (int)commandDeltaForLog,
+                    (int)lagForLog, useTracking, curSpeedBeforeMove, targetSpeedHz);
+
+  stepper->moveTo((int)newTarget);
+  stepperBlanked = false;
+}
+
+// TRACK_MODE_COALESCE: called every loop() iteration. Batches consecutive
+// small DDP updates into one less-frequent, larger moveTo(), so each move
+// has real distance to accelerate through before it needs to plan a stop -
+// see stepperCoalesceMsConfig/stepperCoalesceStepsConfig's declaration.
+void updateCoalesceMode() {
+  if (!coalesceHasPending) return;
+
+  unsigned long now = millis();
+  bool timeElapsed = (now - coalesceLastCommitMs) >= (unsigned long)stepperCoalesceMsConfig;
+  bool bigEnough = fabs(coalescePendingTarget - lastCommandedTargetPosition) >= stepperCoalesceStepsConfig;
+  if (!timeElapsed && !bigEnough) return;
+
+  int curPosBeforeMove = stepper->getCurrentPosition();
+  int32_t curSpeedBeforeMove = stepper->getCurrentSpeedInMilliHz();
+  float commandDeltaForLog = fabs(coalescePendingTarget - lastCommandedTargetPosition);
+  float lagForLog = fabs(coalescePendingTarget - (float)curPosBeforeMove);
+
+  int targetSpeedHz;
+  bool useTracking = applyTrackingProfileDecision(coalescePendingTarget, lastCommandedTargetPosition, targetSpeedHz);
+  lastCommandedTargetPosition = coalescePendingTarget;
+
+  logCompactMotion(oldPositionRequest, (int)coalescePendingTarget, curPosBeforeMove,
+                    (int)commandDeltaForLog, (int)lagForLog, useTracking, curSpeedBeforeMove, targetSpeedHz);
+
+  stepper->moveTo((int)coalescePendingTarget);
+  stepperBlanked = false;
+  coalesceLastCommitMs = now;
+  coalesceHasPending = false;
+}
+
+// TRACK_MODE_STREAMING: called every loop() iteration. While DDP updates
+// keep arriving, runs continuously (runForward/runBackward) at a speed
+// estimated from the recent rate of DDP position change, instead of
+// aiming to stop at each tiny target; snaps to an exact moveTo() once
+// updates go quiet for stepperStreamSettleMsConfig. The position clamp
+// below is a hard safety net: a rate-based estimate has no built-in
+// "never overshoot" guarantee the way moveTo() does - confirmed by
+// simulation against real logged DDP data showing exactly this failure
+// mode before this clamp was added.
+void updateStreamingMode() {
+  if (stepper->isRunning()) {
+    int curPos = stepper->getCurrentPosition();
+    if (curPos <= 0 || curPos >= bottomPosition) {
+      stepper->forceStop();
+    }
+  }
+
+  unsigned long now = millis();
+  if (now - lastStreamUpdateMs < 20) return;  // rate-limit this control loop
+  lastStreamUpdateMs = now;
+
+  unsigned long quietMs = now - lastDdpCommandMs;
+  if (!streamSettled && quietMs >= (unsigned long)stepperStreamSettleMsConfig) {
+    // Gone quiet - land exactly on the final commanded position.
+    int curPosBeforeMove = stepper->getCurrentPosition();
+    int32_t curSpeedBeforeMove = stepper->getCurrentSpeedInMilliHz();
+    float commandDeltaForLog = fabs(streamRawTarget - lastCommandedTargetPosition);
+    float lagForLog = fabs(streamRawTarget - (float)curPosBeforeMove);
+
+    int targetSpeedHz;
+    bool useTracking = applyTrackingProfileDecision(streamRawTarget, lastCommandedTargetPosition, targetSpeedHz);
+    lastCommandedTargetPosition = streamRawTarget;
+
+    logCompactMotion(oldPositionRequest, (int)streamRawTarget, curPosBeforeMove,
+                      (int)commandDeltaForLog, (int)lagForLog, useTracking, curSpeedBeforeMove, targetSpeedHz);
+
+    stepper->moveTo((int)streamRawTarget);
+    stepperBlanked = false;
+    streamSettled = true;
+    streamCurrentDirection = 0;
+    return;
+  }
+
+  if (streamSettled || streamHistoryCount < 2) return;  // nothing to stream yet
+
+  StreamHistoryPoint &oldest = streamHistory[0];
+  StreamHistoryPoint &newest = streamHistory[streamHistoryCount - 1];
+  long dtMs = (long)(newest.ms - oldest.ms);
+  float estRateHzSigned = (dtMs > 0) ? (newest.pos - oldest.pos) / (dtMs / 1000.0f) : 0;
+
+  float maxTrackSpeed = (float)stepperTrackSpeedConfig;
+  if (estRateHzSigned > maxTrackSpeed) estRateHzSigned = maxTrackSpeed;
+  if (estRateHzSigned < -maxTrackSpeed) estRateHzSigned = -maxTrackSpeed;
+
+  int newDirection = (estRateHzSigned > 5) ? 1 : (estRateHzSigned < -5 ? -1 : 0);
+  uint32_t speedHz = (uint32_t)fabs(estRateHzSigned);
+  if (speedHz < 50) speedHz = 50;  // floor so runForward/runBackward always gets a sane nonzero speed
+
+  stepper->setAcceleration(stepperTrackAccelConfig);
+  stepper->setSpeedInHz(speedHz);
+
+  if (newDirection != streamCurrentDirection || !stepper->isRunning()) {
+    if (newDirection > 0) {
+      stepper->runForward();
+    } else if (newDirection < 0) {
+      stepper->runBackward();
+    } else {
+      stepper->forceStop();
+    }
+    streamCurrentDirection = newDirection;
+  }
+
+  logCompactMotion(oldPositionRequest, (int)streamRawTarget, stepper->getCurrentPosition(), 0,
+                    (int)fabs(streamRawTarget - stepper->getCurrentPosition()), true,
+                    stepper->getCurrentSpeedInMilliHz(), (int)speedHz);
+}
+
+// Uptime tracking
+unsigned long bootTime = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -101,6 +301,11 @@ void setup() {
   stepperTrackSpeedConfig = preferences.getInt("stepTrackSpeed", stepperSpeed);
   stepperTrackAccelConfig = preferences.getInt("stepTrackAccel", stepperAccel / 4);
   stepperTrackMaxLagConfig = preferences.getInt("stepTrackMaxLag", 3000);
+  stepperTrackModeConfig = preferences.getInt("stepTrackMode", TRACK_MODE_DIRECT);
+  stepperCoalesceMsConfig = preferences.getInt("stepCoalesceMs", 250);
+  stepperCoalesceStepsConfig = preferences.getInt("stepCoalesceSt", 400);
+  stepperStreamRateWindowMsConfig = preferences.getInt("stepStreamRateW", 250);
+  stepperStreamSettleMsConfig = preferences.getInt("stepStreamSettl", 150);
 
   // Load protocol configuration. Sanitize against stale NVS values from
   // before ArtNet was removed, when the enum was NONE=0/ARTNET=1/DDP=2 - a
@@ -246,87 +451,43 @@ void loop() {
     } else {
       position = calcPosition(currentPositionRequest, control16BitConfig);
 
-      // Small-move "tracking" profile: a stream of small incremental
-      // position updates (e.g. xLights slowly panning a value over DDP)
-      // otherwise forces a full accelerate/decelerate cycle - torque spike
-      // and all - on every single packet, which reads as jerky motion and
-      // risks skipped steps. For moves within stepperTrackThresholdConfig
-      // steps, use the gentler tracking speed/accel instead so consecutive
-      // small updates blend into continuous motion; anything bigger (a
-      // deliberate jump) still gets full Speed/Acceleration for a snappy
-      // repositioning move.
-      //
-      // The size of "this move" is measured as the change from the
-      // previous *commanded* target, not from the stepper's current actual
-      // position - using actual position caused a spurious speed burst at
-      // the ends of travel: near a reversal, the stepper is still
-      // physically travelling in the old direction while DDP starts
-      // commanding the new direction, so the gap to actual position
-      // balloons even though each individual DDP increment is still
-      // small. stepperTrackMaxLagConfig is a separate, much larger safety
-      // net: if the stepper's actual position ever falls genuinely far
-      // behind the commanded target (not just a momentary reversal
-      // artifact), fall back to the normal profile to resync rather than
-      // let it drift indefinitely.
-      // Captured before this command changes anything, for both the
-      // profile decision below and the compact CSV log.
-      int curPosBeforeMove = stepper->getCurrentPosition();
-      int32_t curSpeedMilliHzBeforeMove = stepper->getCurrentSpeedInMilliHz();
-
-      float commandDelta = fabs(position - lastCommandedTargetPosition);
-      float lagFromActual = fabs(position - (float)curPosBeforeMove);
-      lastCommandedTargetPosition = position;
-
-      bool useTracking = stepperTrackEnabledConfig
-                          && commandDelta > 0
-                          && commandDelta <= stepperTrackThresholdConfig
-                          && lagFromActual <= stepperTrackMaxLagConfig;
-
-      int targetSpeedHz = useTracking ? stepperTrackSpeedConfig : stepperSpeedConfig;
-      if (useTracking) {
-        stepper->setSpeedInHz(stepperTrackSpeedConfig);
-        stepper->setAcceleration(stepperTrackAccelConfig);
-      } else {
-        stepper->setSpeedInHz(stepperSpeedConfig);
-        stepper->setAcceleration(stepperAccelConfig);
+      // Which motion strategy handles this - see StepperTrackMode's
+      // declaration comment for why there's more than one.
+      switch (stepperTrackModeConfig) {
+        case TRACK_MODE_COALESCE:
+          coalescePendingTarget = position;
+          coalesceHasPending = true;
+          break;
+        case TRACK_MODE_STREAMING:
+          streamRawTarget = position;
+          lastDdpCommandMs = millis();
+          streamSettled = false;
+          if (streamHistoryCount < STREAM_HISTORY_SIZE) {
+            streamHistory[streamHistoryCount].ms = lastDdpCommandMs;
+            streamHistory[streamHistoryCount].pos = position;
+            streamHistoryCount++;
+          } else {
+            for (int i = 1; i < STREAM_HISTORY_SIZE; i++) streamHistory[i - 1] = streamHistory[i];
+            streamHistory[STREAM_HISTORY_SIZE - 1].ms = lastDdpCommandMs;
+            streamHistory[STREAM_HISTORY_SIZE - 1].pos = position;
+          }
+          break;
+        case TRACK_MODE_DIRECT:
+        default:
+          handleDirectModeCommand(currentPositionRequest, position);
+          break;
       }
-
-      // Only print position changes if protocol debug is enabled
-      if (protocolDebugConfig) {
-        float maxValue = control16BitConfig ? 65535.0 : 255.0;
-        Serial.print("Moving to position ");
-        Serial.print(currentPositionRequest);
-        Serial.print(" (");
-        Serial.print(int((float)((float)currentPositionRequest / maxValue) * 100));
-        Serial.print("%) -> ");
-        Serial.print((int)position);
-        Serial.println(useTracking ? " [tracking]" : " [normal]");
-      }
-
-      // Temporary compact CSV motion log, independent of protocolDebugConfig
-      // - see compactLogEnabled's declaration comment in protocol_common.h.
-      if (compactLogEnabled) {
-        Serial.print(millis());
-        Serial.print(",");
-        Serial.print(currentPositionRequest);
-        Serial.print(",");
-        Serial.print((int)position);
-        Serial.print(",");
-        Serial.print(curPosBeforeMove);
-        Serial.print(",");
-        Serial.print((int)commandDelta);
-        Serial.print(",");
-        Serial.print((int)lagFromActual);
-        Serial.print(",");
-        Serial.print(useTracking ? "T" : "N");
-        Serial.print(",");
-        Serial.print(curSpeedMilliHzBeforeMove / 1000);
-        Serial.print(",");
-        Serial.println(targetSpeedHz);
-      }
-
-      stepper->moveTo((int)position);
       stepperBlanked = false;  // Reset blank state when we receive a command
+    }
+  }
+
+  // Per-loop-iteration processing for the batching/streaming modes (no-op
+  // unless that mode is active and homed/not-homing) - see StepperTrackMode.
+  if (homed && !isHoming()) {
+    if (stepperTrackModeConfig == TRACK_MODE_COALESCE) {
+      updateCoalesceMode();
+    } else if (stepperTrackModeConfig == TRACK_MODE_STREAMING) {
+      updateStreamingMode();
     }
   }
 

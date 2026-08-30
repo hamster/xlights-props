@@ -77,6 +77,37 @@ extern int stepperTrackAccelConfig;      // steps/s^2 - keep well below stepperA
 // profile is used regardless, to resync rather than drift indefinitely.
 extern int stepperTrackMaxLagConfig;     // steps
 
+// Which motion strategy handles DDP position updates. All three still
+// respect stepperTrackThresholdConfig/stepperTrackMaxLagConfig to pick
+// tracking vs. normal speed/accel; they differ in *how* new targets get
+// committed to the stepper. Added after bench data showed the jerkiness
+// wasn't really an accel/speed tuning problem: moveTo() always plans to
+// decelerate to a full stop at whatever target it's given, and since a
+// tracking-mode target is only ~60-120 steps further than the last one,
+// the motor is almost always within its own stopping distance of the
+// current target - so it's constantly "in the process of stopping,"
+// never truly cruising, regardless of how gentle the accel is tuned.
+enum StepperTrackMode {
+  TRACK_MODE_DIRECT = 0,     // Current/original behavior: moveTo(new target) on every DDP packet.
+  TRACK_MODE_COALESCE = 1,   // Batch several close updates into one less-frequent, larger moveTo(),
+                              // so each move has real distance to accelerate through before planning a stop.
+  TRACK_MODE_STREAMING = 2   // While updates keep arriving, run continuously (runForward/runBackward) at a
+                              // speed estimated from the recent rate of DDP change, instead of aiming to
+                              // stop at each tiny target; snaps to an exact moveTo() once updates go quiet.
+                              // Clamped to [0, bottomPosition] every step as a hard safety net - a rate-
+                              // based estimate has no built-in "never overshoot" guarantee the way
+                              // moveTo() does, confirmed by simulation showing exactly this failure mode.
+};
+extern int stepperTrackModeConfig;
+
+// TRACK_MODE_COALESCE parameters
+extern int stepperCoalesceMsConfig;     // ms - minimum time between committed moves
+extern int stepperCoalesceStepsConfig;  // steps - accumulated delta that forces an early commit
+
+// TRACK_MODE_STREAMING parameters
+extern int stepperStreamRateWindowMsConfig;  // ms - window for estimating rate of DDP position change
+extern int stepperStreamSettleMsConfig;      // ms - quiet period (no new DDP command) before snapping to the exact final position
+
 // Set by handleSaveStepper() instead of writing to flash immediately, since
 // a Preferences write briefly disables the flash cache and FastAccelStepper's
 // step-generation interrupt fires continuously while moving - see
