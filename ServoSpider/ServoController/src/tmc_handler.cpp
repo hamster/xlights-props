@@ -184,10 +184,20 @@ void updateTmc() {
     }
   }
 
-  // Stall-detection safety cutoff: only while actually moving under normal
-  // (already-homed) operation, so it never fights the homing state machine's
-  // own switch-based logic.
-  if (tmcStallEnabledConfig && isRunning && homed && !isHoming() &&
+  // Stall-detection safety cutoff: while actually moving, in either normal
+  // operation or an active homing search. Originally excluded homing
+  // entirely ("never fight the homing state machine's own switch-based
+  // logic") - but a real incident (2026-08-30) showed exactly why that's
+  // not safe to skip: a homing search ran the stepper at a perfectly
+  // steady commanded speed for 30+ seconds without the switch ever
+  // tripping - genuinely jammed against the mechanical stop the whole
+  // time, with nothing watching for it. During homing, a detected stall
+  // sets homingStallDetected instead of stopping directly here - the
+  // homing state machine (updateHoming()) consumes that flag and aborts
+  // the current search (HOMING_ERROR) using its own normal-profile
+  // speed/accel restore, rather than this code reaching into homing's
+  // state directly.
+  if (tmcStallEnabledConfig && isRunning &&
       (now - runStartMillis) > STALL_RAMP_GRACE_MS &&
       (now - lastStallPollMillis) >= STALL_POLL_INTERVAL_MS) {
     lastStallPollMillis = now;
@@ -199,9 +209,14 @@ void updateTmc() {
       if (stallDebounceCount >= STALL_DEBOUNCE_COUNT) {
         Serial.print("TMC2209: stall detected (SG_RESULT=");
         Serial.print(tmcStatus.stallGuardResult);
-        Serial.println("), stopping motor");
-        stepper->forceStop();
-        tmcStatus.stalled = true;
+        Serial.println(")");
+        if (isHoming()) {
+          homingStallDetected = true;
+        } else {
+          Serial.println("Stopping motor");
+          stepper->forceStop();
+          tmcStatus.stalled = true;
+        }
       }
     } else {
       stallDebounceCount = 0;

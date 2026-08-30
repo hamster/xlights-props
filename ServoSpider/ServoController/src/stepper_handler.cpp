@@ -7,6 +7,7 @@ extern Preferences preferences;
 FastAccelStepperEngine engine = FastAccelStepperEngine();
 FastAccelStepper *stepper = NULL;
 volatile bool interruptTriggered = false;
+volatile bool homingStallDetected = false;
 // Set alongside interruptTriggered, but consumed separately (see
 // handleHomingInterrupt/updateHoming) so the deferred forceStop() fires
 // exactly once per switch edge instead of on every loop() iteration for as
@@ -325,6 +326,26 @@ void updateHoming() {
         Serial.print(tripPosition);
         Serial.println(" during normal operation - expected endpoint of travel, not treated as drift");
       }
+    }
+  }
+
+  // Real stall during an active homing search (tmc_handler.cpp's stall
+  // check, extended to also run while homing - see homingStallDetected's
+  // declaration comment). Consumed unconditionally, same pattern as
+  // pendingForceStop above, so it can't go stale. Checked before the
+  // "not homing" early return, but only actually aborts anything if a
+  // search genuinely is in progress - a stray/late flag while idle is just
+  // discarded.
+  if (homingStallDetected) {
+    homingStallDetected = false;
+    if (isHoming()) {
+      Serial.println("ERROR: Stall detected during homing search (motor commanded to move but not turning) - aborting");
+      stepper->forceStop();
+      stepper->setAcceleration(stepperAccelConfig);
+      stepper->setSpeedInHz(stepperSpeedConfig);
+      homingState = HOMING_ERROR;
+      homed = false;
+      return;
     }
   }
 

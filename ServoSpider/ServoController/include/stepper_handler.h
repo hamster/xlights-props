@@ -46,6 +46,19 @@ enum HomingState {
 extern FastAccelStepperEngine engine;
 extern FastAccelStepper *stepper;
 extern volatile bool interruptTriggered;
+// Set by tmc_handler.cpp's stall-detection cutoff when a real stall (motor
+// commanded to move but the rotor isn't actually turning, per TMC2209
+// StallGuard) happens *during* an active homing search - distinct from
+// pendingForceStop, which is specifically about the homing switch. Added
+// after a real incident (2026-08-30): a homing search ran the stepper
+// continuously for 30+ seconds at a perfectly steady commanded speed
+// without ever triggering the switch - the motor was jammed against the
+// mechanical stop the whole time, but nothing detected it (the switch
+// wasn't tripping, and the old stall check explicitly excluded homing).
+// Consumed unconditionally near the top of updateHoming(), same pattern as
+// pendingForceStop, so a stall aborts the current search immediately
+// (HOMING_ERROR) instead of grinding until the state's own ~30s timeout.
+extern volatile bool homingStallDetected;
 extern int bottomPosition;
 extern bool homed;
 extern HomingState homingState;
