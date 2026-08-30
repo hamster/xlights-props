@@ -12,7 +12,17 @@
 
 // Stepper default values
 #define stepperAccel 20000
-#define stepperAccelHoming 1000000
+// Was 1000000 (reaches 4000Hz cruise in ~4ms - functionally an instant jump
+// to speed, not a ramp). Confirmed on the bench (2026-08-30) to intermittently
+// stall the motor right at the start of a homing move - buzzes in place for
+// a moment, sometimes self-recovers, sometimes needs a manual nudge or grinds
+// indefinitely (the step counter keeps incrementing fictitiously while the
+// motor isn't actually turning, since it has no way to detect a stall).
+// 20000 (matching normalAccel) plus a nonzero jumpStartConfig (see
+// stepper_handler.cpp) tested clean across multiple homing cycles, including
+// back-to-back immediate re-homes, which is exactly the scenario that
+// reliably reproduced the stall at the old value.
+#define stepperAccelHoming 20000
 #define stepperSpeed 6500
 #define stepperSpeedHoming 6000
 

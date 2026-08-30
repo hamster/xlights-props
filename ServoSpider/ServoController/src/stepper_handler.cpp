@@ -28,7 +28,17 @@ static unsigned long stepCheckStartMs = 0;
 // Stepper configuration variables
 int stepperSpeedConfig = stepperSpeed;
 int stepperAccelConfig = stepperAccel;
-int jumpStartConfig = 0;
+// Was 0 (no jump-start boost - every move ramps from a dead stop). Bench
+// testing (2026-08-30) found the motor could intermittently stall right at
+// the very first step of a move (buzzes in place briefly, then either
+// self-recovers or needs a nudge) - a classic stepper starting-torque
+// symptom, not something a lower cruise acceleration alone fully fixes.
+// FastAccelStepper's jump-start feature exists specifically for this: one
+// deliberately larger first step (speed = sqrt(2*accel*jump_step), so 20
+// steps at stepperAccelHoming=20000 gives roughly an 894Hz starting kick)
+// instead of ramping from true zero. Tested clean across multiple homing
+// cycles alongside the stepperAccelHoming reduction above.
+int jumpStartConfig = 20;
 bool autoHomeOnBootConfig = true;
 int stepperSpeedHomingConfig = stepperSpeedHoming;
 int stepperAccelHomingConfig = stepperAccelHoming;

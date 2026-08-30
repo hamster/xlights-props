@@ -58,7 +58,8 @@
 // Tunable names (see tools/README.md for the matching Python-side names):
 //   normalSpeed, normalAccel, jumpStart, trackEnabled, trackThreshold,
 //   trackSpeed, trackAccel, trackMaxLag, trackMode, coalesceMs,
-//   coalesceSteps, streamRateWindow, streamSettle, compactLog, protocolDebug
+//   coalesceSteps, streamRateWindow, streamSettle, compactLog, protocolDebug,
+//   homeSpeed, homeAccel
 void handleExtendedSerialCommand(const String& line);
 
 #endif

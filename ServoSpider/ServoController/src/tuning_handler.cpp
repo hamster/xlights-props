@@ -38,13 +38,16 @@ static bool getTunable(const String& name, String& valueOut) {
   if (name == "streamSettle") { valueOut = String(stepperStreamSettleMsConfig); return true; }
   if (name == "compactLog") { valueOut = String(compactLogEnabled ? 1 : 0); return true; }
   if (name == "protocolDebug") { valueOut = String(protocolDebugConfig ? 1 : 0); return true; }
+  if (name == "homeSpeed") { valueOut = String(stepperSpeedHomingConfig); return true; }
+  if (name == "homeAccel") { valueOut = String(stepperAccelHomingConfig); return true; }
   return false;
 }
 
 static const char* ALL_TUNABLE_NAMES[] = {
   "normalSpeed", "normalAccel", "jumpStart", "trackEnabled", "trackThreshold",
   "trackSpeed", "trackAccel", "trackMaxLag", "trackMode", "coalesceMs",
-  "coalesceSteps", "streamRateWindow", "streamSettle", "compactLog", "protocolDebug"
+  "coalesceSteps", "streamRateWindow", "streamSettle", "compactLog", "protocolDebug",
+  "homeSpeed", "homeAccel"
 };
 static const int ALL_TUNABLE_COUNT = sizeof(ALL_TUNABLE_NAMES) / sizeof(ALL_TUNABLE_NAMES[0]);
 
@@ -69,6 +72,11 @@ static bool setTunable(const String& name, const String& valueStr) {
   if (name == "streamSettle") { stepperStreamSettleMsConfig = v; return true; }
   if (name == "compactLog") { compactLogEnabled = (v != 0); return true; }
   if (name == "protocolDebug") { protocolDebugConfig = (v != 0); return true; }
+  // Applied fresh by startHoming()/HOMING_WAIT_CLEAR_SWITCH each time a
+  // search actually begins, so just updating the config var here is enough -
+  // no immediate stepper call needed (matches every other tunable above).
+  if (name == "homeSpeed") { stepperSpeedHomingConfig = v; return true; }
+  if (name == "homeAccel") { stepperAccelHomingConfig = v; return true; }
   return false;
 }
 
