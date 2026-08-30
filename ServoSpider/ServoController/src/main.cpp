@@ -95,6 +95,36 @@ void logCompactMotion(uint16_t ddpVal, int cmdPos, int curPos, int delta, int la
   Serial.println(targetSpeedHz);
 }
 
+// Periodic compact-log tick, independent of the DDP/tracking-mode dispatch
+// below - Direct and Coalesce only log once at the moment a move is
+// committed, so a single large move (a big DDP jump, or a diagnostic
+// moveTo() like $CHECKSTEPS's that never goes through this dispatch at
+// all) previously produced only one data point instead of a full
+// speed-over-time trace. Streaming mode already logs every ~20ms on its
+// own (updateStreamingMode()), so this is skipped there to avoid
+// duplicate/conflicting rows. Call every loop() iteration; rate-limited
+// internally.
+unsigned long lastPeriodicLogMs = 0;
+void logCompactMotionPeriodic() {
+  if (!compactLogEnabled || stepperTrackModeConfig == TRACK_MODE_STREAMING) return;
+  if (stepper == NULL || !stepper->isRunning()) return;
+  unsigned long now = millis();
+  if (now - lastPeriodicLogMs < 50) return;
+  lastPeriodicLogMs = now;
+
+  int curPos = stepper->getCurrentPosition();
+  int cmdPos = (int)stepper->targetPos();
+  // Heuristic, display-only: tracking and normal accel are expected to
+  // differ (that's the whole point of the tracking profile), so use
+  // acceleration rather than speed to tell them apart - trackSpeed and
+  // normalSpeed are commonly configured equal (bench-validated default),
+  // which would make a speed-based comparison ambiguous.
+  bool tracking = (stepper->getAcceleration() == (uint32_t)stepperTrackAccelConfig);
+  logCompactMotion(oldPositionRequest, cmdPos, curPos, 0, cmdPos - curPos,
+                    tracking, stepper->getCurrentSpeedInMilliHz(),
+                    (int)(stepper->getSpeedInMilliHz() / 1000));
+}
+
 // TRACK_MODE_DIRECT: moveTo(newTarget) immediately, every DDP packet - the
 // original/current behavior.
 void handleDirectModeCommand(uint16_t ddpVal, float newTarget) {
@@ -407,6 +437,12 @@ void loop() {
 
   // Check WiFi connection and reconnect if needed
   checkWifiConnection();
+
+  // Periodic compact-log sample, so any significant move (a single large
+  // DDP jump, or a diagnostic moveTo() like $CHECKSTEPS's that bypasses
+  // this DDP dispatch entirely) gets a full speed-over-time trace instead
+  // of just one data point at commit time. No-op unless compactLogEnabled.
+  logCompactMotionPeriodic();
 
   // Update the skipped-step diagnostic move, if one is in progress - must
   // run before updateHoming() since both react to the same ISR-deferred

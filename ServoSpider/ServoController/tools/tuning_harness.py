@@ -266,6 +266,51 @@ class DeviceLink:
             # discarded - we're only listening for the one async result line.
         return {"ok": False, "error": "timeout waiting for CHECKSTEPS_RESULT"}
 
+    def send_direction_test(self, sock, ddp_host, ddp_port, pause_s=2.0, settle_s=1.5,
+                             move_timeout=15.0):
+        """One packet to each extreme (255, then 0), each followed by a real
+        pause once the move settles - instead of a continuous triangle wave.
+        Isolates each direction's actual achieved speed/behavior without the
+        "still finishing the previous reversal" artifact a continuously
+        reversing wave introduces right at each turnaround. Built to
+        investigate the up/down speed asymmetry noted from triangle-wave
+        runs (see TODO.md): is it a fixed mechanical/gravity characteristic
+        of the prop, or an artifact of reversal/tracking-profile timing?
+
+        A single large jump like this is far beyond stepperTrackThresholdConfig,
+        so it drives the normal (not tracking) profile in Direct/Coalesce
+        modes regardless of current settings - this deliberately is NOT
+        representative of the tracking profile's own behavior, only of the
+        normal profile's achieved speed each direction. Requires the new
+        periodic Compact Motion Log tick (logCompactMotionPeriodic() in
+        main.cpp) to get more than one data point per leg - a single
+        DDP-triggered moveTo() only logs once at commit time otherwise.
+
+        Returns the raw captured Compact Motion Log lines spanning both legs
+        (the pause between them is visible in the timestamps).
+        """
+        self.start_capture()
+        seq = 1
+        sock.sendto(build_ddp_packet(seq, 255), (ddp_host, ddp_port))
+        # UDP (WiFi) vs. $STATUS (direct serial) are two independent
+        # transports - the serial round-trip can easily beat the DDP packet
+        # to the device, so polling wait_until_idle() with zero delay can
+        # see running=0 because the move hasn't *started* yet, not because
+        # it already finished. Confirmed on the bench: without this, the
+        # second leg's command went out ~2s into a ~2.7s first move, visibly
+        # cutting it off mid-travel. A short mandatory settle guarantees the
+        # device has actually received and begun the move before we start
+        # asking whether it's done.
+        time.sleep(0.2)
+        self.wait_until_idle(timeout=move_timeout)
+        time.sleep(pause_s)
+        seq = (seq % 15) + 1
+        sock.sendto(build_ddp_packet(seq, 0), (ddp_host, ddp_port))
+        time.sleep(0.2)
+        self.wait_until_idle(timeout=move_timeout)
+        time.sleep(settle_s)
+        return self.stop_capture()
+
     def close(self):
         self._stop = True
         try:
@@ -599,6 +644,114 @@ def run_hardware_session(args):
         link.close()
 
 
+def run_direction_test_session(args):
+    """--direction-test: one packet to each extreme (255, then 0), each
+    followed by a real pause once it settles, instead of a continuous
+    triangle wave - see DeviceLink.send_direction_test()'s docstring for why
+    this isolates each direction's achieved speed better than reading it off
+    a reversing wave. Reuses the same output conventions (log/json/png,
+    summary.csv/all_rows.csv) as the regular duration runs, tagged with
+    duration_s="dir" so it's easy to filter out of/into that data."""
+    os.makedirs(args.out_dir, exist_ok=True)
+    config = {}
+    if args.config:
+        with open(args.config) as f:
+            config = json.load(f)
+
+    link = DeviceLink(args.port, args.baud)
+    try:
+        print(f"Applying {len(config)} tunable(s) from {args.config}...")
+        for name, value in config.items():
+            resp = link.set_tunable(name, value)
+            print(f"  {name} = {value}: {resp}")
+        link.set_tunable("protocolDebug", 0)
+        link.set_tunable("compactLog", 1)
+
+        status = link.get_status()
+        print("Status:", status)
+        if not status:
+            print("ERROR: no response to $STATUS - check port/baud/wiring", file=sys.stderr)
+            sys.exit(1)
+        if status.get("homed") != 1:
+            print("Homing now (this can take a while)...")
+            result = link.rehome_and_check(timeout=args.home_timeout)
+            print("  Homing result:", result)
+            if not result["ok"]:
+                print("ERROR: homing did not complete in time, aborting", file=sys.stderr)
+                sys.exit(1)
+
+        full_config = link.get_all_tunables()
+        print("Full tunable snapshot for this session:", full_config)
+        print("NOTE: a single full-range jump like this is far beyond trackThreshold, so it "
+              "exercises the NORMAL profile each direction, not the tracking profile.")
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        link.wait_until_idle(timeout=15.0)
+        print("\n  Checking for skipped steps before this test...")
+        step_check_result = link.check_for_skipped_steps(target=0, timeout=args.home_timeout)
+        print("  Skipped-step check:", step_check_result)
+        if step_check_result.get("tripped"):
+            print("  Recovering with a full re-home...")
+            homing_result = link.rehome_and_check(timeout=args.home_timeout)
+            print("  Homing result:", homing_result)
+            if not homing_result["ok"]:
+                print("ERROR: recovery re-home did not complete in time, aborting", file=sys.stderr)
+                sys.exit(1)
+
+        run_id = f"{args.label}_{timestamp}_dirtest"
+        print(f"\n=== Direction test: label={args.label} (up to 255, pause, back to 0) ===")
+        raw_rows = link.send_direction_test(sock, args.ddp_host, args.ddp_port,
+                                             pause_s=args.direction_pause, settle_s=args.settle)
+
+        log_filename = os.path.join(args.out_dir, f"{run_id}.log")
+        with open(log_filename, "w") as f:
+            f.write(f"{args.label} - direction test (0->255, pause {args.direction_pause}s, 255->0)\n")
+            f.write(f"overrides this session: {json.dumps(config)}\n")
+            f.write(f"full config: {json.dumps(full_config)}\n")
+            f.write(f"skipped-step check before this test: {json.dumps(step_check_result)}\n\n")
+            for line in raw_rows:
+                f.write(line + "\n")
+        print(f"  Captured {len(raw_rows)} rows -> {log_filename}")
+
+        rows = [parse_row(l) for l in raw_rows]
+        rows = [r for r in rows if r is not None]
+        metrics = compute_metrics(rows)
+        print("  Metrics:", metrics)
+
+        if rows:
+            png_filename = log_filename.replace(".log", ".png")
+            plot_run(rows, png_filename, f"{args.label} - direction test (up/pause/down)")
+            print(f"  Plot -> {png_filename}")
+
+        sidecar = {
+            "run_id": run_id, "label": args.label, "duration_s": "dir",
+            "timestamp": timestamp, "log_file": os.path.basename(log_filename),
+            "overrides": config, "full_config": full_config,
+            "step_check_before_test": step_check_result, "metrics": metrics,
+        }
+        with open(log_filename.replace(".log", ".json"), "w") as f:
+            json.dump(sidecar, f, indent=2)
+
+        all_rows_path = os.path.join(args.out_dir, "all_rows.csv")
+        for r in rows:
+            write_summary_row(all_rows_path, {"run_id": run_id, "label": args.label,
+                                                "duration_s": "dir", **r})
+
+        summary_path = os.path.join(args.out_dir, "summary.csv")
+        write_summary_row(summary_path, {
+            "run_id": run_id, "label": args.label, "duration_s": "dir",
+            "log_file": os.path.basename(log_filename),
+            "step_check_tripped": step_check_result.get("tripped"),
+            "step_check_trip_pos": step_check_result.get("trip_pos"),
+            **full_config, **metrics,
+        })
+        print(f"\nSummary appended to {summary_path}")
+    finally:
+        link.close()
+
+
 def run_reanalyze(args):
     pattern = os.path.join(args.reanalyze_dir, "*.log")
     files = sorted(glob.glob(pattern))
@@ -650,6 +803,14 @@ def main():
                               "to skip both drift checks entirely.")
     parser.add_argument("--reanalyze-dir", default=None,
                          help="Skip hardware entirely; just re-parse/re-plot/re-summarize .log files in this directory")
+    parser.add_argument("--direction-test", action="store_true",
+                         help="Instead of the triangle-wave duration runs, send one packet to each "
+                              "extreme (255, then 0) with a real pause in between once each settles - "
+                              "isolates each direction's achieved speed without a continuous wave's "
+                              "reversal artifacts. See DeviceLink.send_direction_test(). Ignores "
+                              "--durations/--rate-hz.")
+    parser.add_argument("--direction-pause", type=float, default=2.0,
+                         help="--direction-test only: seconds to sit still between the two legs")
     args = parser.parse_args()
 
     if args.reanalyze_dir:
@@ -658,6 +819,10 @@ def main():
 
     if not args.port or not args.ddp_host or not args.label:
         parser.error("--port, --ddp-host, and --label are required unless using --reanalyze-dir")
+
+    if args.direction_test:
+        run_direction_test_session(args)
+        return
 
     run_hardware_session(args)
 

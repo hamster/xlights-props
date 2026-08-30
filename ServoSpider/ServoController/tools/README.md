@@ -142,6 +142,27 @@ None of these ever get overwritten - each run's filename embeds the label
 and a timestamp, and the two CSVs are always appended to, so `--out-dir`
 is a durable, growing record of the whole tuning history.
 
+## Isolating one direction's behavior: `--direction-test`
+
+```bash
+python tuning_harness.py --port COM5 --ddp-host 192.168.1.50 \
+    --config example_config.json --label dirtest --direction-test
+```
+
+Instead of the triangle-wave duration runs, sends one packet to each extreme
+(255, then 0), with a real pause (`--direction-pause`, default 2s) once each
+move fully settles - no continuous back-and-forth. A reversing triangle wave
+confounds each direction's own behavior with "still finishing the previous
+direction's deceleration," which is exactly the ambiguity that made an
+apparent up/down speed asymmetry look real in early triangle-wave runs (see
+TODO.md) until this test isolated it and showed both directions actually
+reach the same cruise speed. Uses the same log/plot/summary conventions as
+the duration runs, tagged `duration_s="dir"`.
+
+A single full-range jump like this is far beyond `trackThreshold`, so both
+legs exercise the *normal* profile, not tracking - this test characterizes
+normal-profile behavior per direction, not the tracking profile.
+
 ## Re-analyzing without touching hardware
 
 ```bash
