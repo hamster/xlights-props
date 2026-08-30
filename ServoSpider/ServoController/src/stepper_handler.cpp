@@ -272,16 +272,40 @@ void updateHoming() {
   // internal state enough to unstick it).
   //
   // A trip while not homing is now also treated as a real event rather
-  // than a silently-discarded one: the trolley shouldn't reach the switch
-  // outside of homing at all, so if it does, something has drifted -
-  // stop and require a fresh re-home rather than pretending nothing
-  // happened.
+  // than a silently-discarded one - *if* it happens somewhere the trolley
+  // had no reason to be near the switch at all, that's real drift and the
+  // right response is to stop and require a fresh re-home rather than
+  // pretend nothing happened.
+  //
+  // But position 0 - where this switch physically lives - is not itself
+  // off-limits outside of homing: normal DDP operation maps its whole
+  // 0-255 range onto [0, bottomPosition], so legitimately driving the
+  // trolley all the way down to real position 0 is an ordinary, intended
+  // endpoint of travel, not a diagnostic event. Confirmed on the bench
+  // (2026-08-30): a real triangle-wave run reaching position 0 tripped the
+  // switch exactly as designed, and treating every such trip as drift
+  // broke every subsequent command with "not homed" for the rest of the
+  // session - the fix below only escalates when the trip happens far
+  // enough from 0 that it can't be explained by legitimately arriving
+  // there, using the same tolerance $CHECKSTEPS's bench data suggested
+  // (measured early-trip offset there was ~25 steps; this is deliberately
+  // generous versus that).
   if (pendingForceStop) {
     pendingForceStop = false;
+    long tripPosition = stepper->getCurrentPosition();
     stepper->forceStop();
     if (!isHoming() && homed) {
-      Serial.println("WARNING: Homing switch tripped outside of homing - stopping and marking system as not homed");
-      homed = false;
+      const long ZERO_TRIP_TOLERANCE = 200;  // steps
+      if (labs(tripPosition) > ZERO_TRIP_TOLERANCE) {
+        Serial.print("WARNING: Homing switch tripped outside of homing, far from position 0 (at ");
+        Serial.print(tripPosition);
+        Serial.println(") - stopping and marking system as not homed");
+        homed = false;
+      } else {
+        Serial.print("Homing switch tripped at position ");
+        Serial.print(tripPosition);
+        Serial.println(" during normal operation - expected endpoint of travel, not treated as drift");
+      }
     }
   }
 
