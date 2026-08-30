@@ -71,6 +71,10 @@ void handleRoot() {
   page.replace("{{AUTO_HOME_ON_BOOT_CHECKED}}", autoHomeOnBootConfig ? "checked" : "");
   page.replace("{{STEPPER_SPEED_HOMING}}", String(stepperSpeedHomingConfig));
   page.replace("{{STEPPER_ACCEL_HOMING}}", String(stepperAccelHomingConfig));
+  page.replace("{{STEPPER_TRACK_ENABLED_CHECKED}}", stepperTrackEnabledConfig ? "checked" : "");
+  page.replace("{{STEPPER_TRACK_THRESHOLD}}", String(stepperTrackThresholdConfig));
+  page.replace("{{STEPPER_TRACK_SPEED}}", String(stepperTrackSpeedConfig));
+  page.replace("{{STEPPER_TRACK_ACCEL}}", String(stepperTrackAccelConfig));
 
   // Protocol configuration values
   page.replace("{{STEPPER_CONTROL_CHECKED}}", stepperControlEnabled ? "checked" : "");
@@ -210,6 +214,16 @@ void handleSaveStepper() {
     if (server.hasArg("stepperAccelHoming")) {
       stepperAccelHomingConfig = server.arg("stepperAccelHoming").toInt();
     }
+    stepperTrackEnabledConfig = server.hasArg("stepperTrackEnabled");
+    if (server.hasArg("stepperTrackThreshold")) {
+      stepperTrackThresholdConfig = server.arg("stepperTrackThreshold").toInt();
+    }
+    if (server.hasArg("stepperTrackSpeed")) {
+      stepperTrackSpeedConfig = server.arg("stepperTrackSpeed").toInt();
+    }
+    if (server.hasArg("stepperTrackAccel")) {
+      stepperTrackAccelConfig = server.arg("stepperTrackAccel").toInt();
+    }
 
     preferences.putInt("stepperSpeed", stepperSpeedConfig);
     preferences.putInt("stepperAccel", stepperAccelConfig);
@@ -219,6 +233,10 @@ void handleSaveStepper() {
     // (18 chars each) silently fail to write and never persist across reboot.
     preferences.putInt("stepSpeedHome", stepperSpeedHomingConfig);
     preferences.putInt("stepAccelHome", stepperAccelHomingConfig);
+    preferences.putBool("stepTrackEn", stepperTrackEnabledConfig);
+    preferences.putInt("stepTrackThresh", stepperTrackThresholdConfig);
+    preferences.putInt("stepTrackSpeed", stepperTrackSpeedConfig);
+    preferences.putInt("stepTrackAccel", stepperTrackAccelConfig);
 
     // Apply the new settings immediately
     stepper->setSpeedInHz(stepperSpeedConfig);
@@ -725,6 +743,10 @@ void handleMove() {
 
   if (server.hasArg("steps")) {
     int steps = server.arg("steps").toInt();
+    // Manual moves always use the normal profile, not whatever DDP's
+    // small-move tracking logic last left speed/accel set to.
+    stepper->setSpeedInHz(stepperSpeedConfig);
+    stepper->setAcceleration(stepperAccelConfig);
     stepper->move(steps);
 
     Serial.print("Moving stepper: ");
@@ -745,6 +767,10 @@ void handleSetPosition() {
 
   if (server.hasArg("position")) {
     int position = server.arg("position").toInt();
+    // Manual moves always use the normal profile, not whatever DDP's
+    // small-move tracking logic last left speed/accel set to.
+    stepper->setSpeedInHz(stepperSpeedConfig);
+    stepper->setAcceleration(stepperAccelConfig);
     stepper->moveTo(position);
 
     Serial.print("Moving stepper to position: ");

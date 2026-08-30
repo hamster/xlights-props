@@ -1417,6 +1417,30 @@ function showNotification(message, isSuccess) {
           </div>
 
           <div class="form-group">
+            <label for="stepperTrackEnabled">
+              <input type="checkbox" id="stepperTrackEnabled" name="stepperTrackEnabled" {{STEPPER_TRACK_ENABLED_CHECKED}}>
+              Small-Move Tracking
+            </label>
+            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Uses a gentler speed/acceleration for small position updates (e.g. xLights slowly panning a value over DDP), so a stream of tiny moves blends into smooth continuous motion instead of a torque-spiking accelerate/decelerate cycle on every packet. Larger jumps still use the normal Stepper Speed/Acceleration above. Needs on-bench tuning: too aggressive and it can stall/skip steps starting from near-rest; too gentle and it visibly lags behind a fast-panning curve.</p>
+          </div>
+
+          <div class="form-group">
+            <label for="stepperTrackThreshold">Tracking Threshold (steps):</label>
+            <input type="number" id="stepperTrackThreshold" name="stepperTrackThreshold" value="{{STEPPER_TRACK_THRESHOLD}}" min="1" max="100000" required>
+            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Moves at or below this size use the tracking profile; anything bigger uses the normal profile.</p>
+          </div>
+
+          <div class="form-group">
+            <label for="stepperTrackSpeed">Tracking Speed (Hz):</label>
+            <input type="number" id="stepperTrackSpeed" name="stepperTrackSpeed" value="{{STEPPER_TRACK_SPEED}}" min="10" max="50000" required>
+          </div>
+
+          <div class="form-group">
+            <label for="stepperTrackAccel">Tracking Acceleration (steps/s&sup2;):</label>
+            <input type="number" id="stepperTrackAccel" name="stepperTrackAccel" value="{{STEPPER_TRACK_ACCEL}}" min="1" max="1000000" required>
+          </div>
+
+          <div class="form-group">
             <label for="autoHomeOnBoot">
               <input type="checkbox" id="autoHomeOnBoot" name="autoHomeOnBoot" {{AUTO_HOME_ON_BOOT_CHECKED}}>
               Auto Home on Bootup

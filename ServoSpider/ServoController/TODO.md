@@ -6,6 +6,20 @@ Turn this into a standalone stepper-mover **+** pixel controller: one ESP32-S3 d
 
 Note: checked `git branch -a` / `git stash list` / `git log --all` — there is no leftover branch, stash, or commit anywhere in this repo with prior dual-core work. If there was earlier progress on splitting stepper/LED work across cores, it never made it into git, so treat this as a fresh design rather than something to dig up.
 
+## Added: small-move "tracking" profile for smooth slow panning
+
+Reported symptom: commanding small, frequent position changes (e.g. xLights slowly panning a DDP value, observed incrementing by ~1 unit / ~60 steps every 150-300ms) produced visibly jerky motion, not a smooth glide.
+
+Root cause: at the configured Speed/Acceleration (6500 Hz / 20000 steps/s²), the ramp-up distance to reach cruise speed is `speed² / (2 × accel)` ≈ 1056 steps - far more than the ~60-step moves being commanded. Every small move was a tiny triangular spike that never reached cruise speed, and a new target kept arriving before the previous spike finished decelerating, forcing the ramp generator to recompute a fresh spike from whatever nonzero velocity it still had - repeated many times a second. That's the jerk.
+
+First instinct (rejected, correctly, by the user before implementing): just lower the target speed for small moves while keeping the same acceleration. That doesn't work - peak torque demand at the start of a move scales with acceleration alone (steps/s²), not with what speed it's ramping toward. Keeping accel high and only lowering speed shortens the high-torque phase's *duration*, not its *magnitude*, so it doesn't reduce stall/skipped-step risk at all.
+
+Implemented instead: a genuinely separate, independently-tunable "tracking" profile (`stepperTrack*Config` in `stepper_handler.h`/`.cpp`) - Enabled, Threshold (steps), Speed (Hz), Acceleration (steps/s²) - all exposed in Stepper Configuration. `main.cpp`'s DDP position-handling code now computes the delta between the new target and the stepper's actual current position on every update, and applies the tracking speed/acceleration instead of the normal ones whenever that delta is at or below the threshold; anything larger still gets the normal (fast, punchy) profile. Defaults are deliberately gentle guesses (1000 Hz / 3000 steps/s², threshold 300 steps) - **not verified on real hardware**, needs on-bench tuning against the actual trolley's mass/rope tension: too aggressive and it can stall/skip steps starting from near-rest on every small update; too gentle and it visibly lags behind a fast-panning curve. Watch/listen for skipped-step behavior (grinding, position drift after homing) while tuning, not just visual smoothness.
+
+Also fixed as part of this: `/move` and `/set-position` (manual web UI control) now explicitly reset to the normal Speed/Acceleration before moving, since without that they'd silently inherit whatever profile DDP's tracking logic last left the stepper in.
+
+- [ ] Not yet done: surfacing which profile was used per-move anywhere in the UI (currently only visible via serial with Debug enabled, printed as `[tracking]`/`[normal]`) - could be a nice fit for the planned Debug tab.
+
 ## Fixed: DDP reception was silently broken on any device with pre-ArtNet-removal history
 
 Reported as "I'm sending DDP data and it's being ignored." Two separate bugs found and fixed:

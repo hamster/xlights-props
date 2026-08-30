@@ -24,6 +24,17 @@ bool autoHomeOnBootConfig = true;
 int stepperSpeedHomingConfig = stepperSpeedHoming;
 int stepperAccelHomingConfig = stepperAccelHoming;
 
+// Small-move tracking profile defaults - deliberately much gentler than the
+// main Speed/Acceleration, not just a scaled-down version of them. Starting
+// guesses only; needs on-bench tuning against the actual trolley's mass and
+// rope tension. Too high and it stalls/skips steps trying to move from
+// near-rest on every small update; too low and the trolley visibly lags
+// behind a fast-panning DDP curve.
+bool stepperTrackEnabledConfig = true;
+int stepperTrackThresholdConfig = 300;
+int stepperTrackSpeedConfig = 1000;
+int stepperTrackAccelConfig = 3000;
+
 // Homing switch interrupt
 //
 // Deliberately does nothing but set flags. FastAccelStepper::forceStop()

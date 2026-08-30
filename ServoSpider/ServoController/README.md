@@ -146,6 +146,7 @@ The controller uses a non-blocking state machine for homing. The hardware design
 - **Acceleration** (steps/s²): 0-1,000,000 (default: 20,000)
 - **Jump Start** (steps): 0-10,000 (initial power boost)
 - **Homing Speed** (Hz) / **Homing Acceleration** (steps/s²): separate from the values above, used only during the homing search (default: 6,000 Hz / 1,000,000 steps/s²). This is a step-pulse rate, not a physical speed — it doesn't automatically scale with the driver's microstep setting. If you change **Microsteps per Full Step** under the TMC2209 driver settings, re-tune this too: fewer microsteps means more physical distance per step, so the same Hz now moves faster and can overshoot the homing switch.
+- **Small-Move Tracking**: uses a separate, gentler Speed/Acceleration (default: 1,000 Hz / 3,000 steps/s², threshold 300 steps) for position updates within the threshold distance, so a stream of small DDP position changes (e.g. xLights slowly panning a value) blends into smooth motion instead of a torque-spiking accelerate/decelerate cycle on every packet. Larger jumps still use the normal Speed/Acceleration above. Needs on-bench tuning against your prop's actual mass/rope tension — too aggressive and it can stall or skip steps starting from near-rest; too gentle and it lags behind a fast-panning curve.
 - **Auto Home on Boot**: Enable/disable automatic homing
 
 ### Channel Settings

@@ -95,6 +95,10 @@ void setup() {
   // html_handler.cpp's handleSaveStepper()).
   stepperSpeedHomingConfig = preferences.getInt("stepSpeedHome", stepperSpeedHoming);
   stepperAccelHomingConfig = preferences.getInt("stepAccelHome", stepperAccelHoming);
+  stepperTrackEnabledConfig = preferences.getBool("stepTrackEn", true);
+  stepperTrackThresholdConfig = preferences.getInt("stepTrackThresh", 300);
+  stepperTrackSpeedConfig = preferences.getInt("stepTrackSpeed", 1000);
+  stepperTrackAccelConfig = preferences.getInt("stepTrackAccel", 3000);
 
   // Load protocol configuration. Sanitize against stale NVS values from
   // before ArtNet was removed, when the enum was NONE=0/ARTNET=1/DDP=2 - a
@@ -236,6 +240,26 @@ void loop() {
     } else {
       position = calcPosition(currentPositionRequest, control16BitConfig);
 
+      // Small-move "tracking" profile: a stream of small incremental
+      // position updates (e.g. xLights slowly panning a value over DDP)
+      // otherwise forces a full accelerate/decelerate cycle - torque spike
+      // and all - on every single packet, which reads as jerky motion and
+      // risks skipped steps. For moves within stepperTrackThresholdConfig
+      // steps, use the gentler tracking speed/accel instead so consecutive
+      // small updates blend into continuous motion; anything bigger (a
+      // deliberate jump) still gets full Speed/Acceleration for a snappy
+      // repositioning move.
+      int moveDelta = abs((int)position - stepper->getCurrentPosition());
+      bool useTracking = stepperTrackEnabledConfig && moveDelta > 0 && moveDelta <= stepperTrackThresholdConfig;
+
+      if (useTracking) {
+        stepper->setSpeedInHz(stepperTrackSpeedConfig);
+        stepper->setAcceleration(stepperTrackAccelConfig);
+      } else {
+        stepper->setSpeedInHz(stepperSpeedConfig);
+        stepper->setAcceleration(stepperAccelConfig);
+      }
+
       // Only print position changes if protocol debug is enabled
       if (protocolDebugConfig) {
         float maxValue = control16BitConfig ? 65535.0 : 255.0;
@@ -244,7 +268,8 @@ void loop() {
         Serial.print(" (");
         Serial.print(int((float)((float)currentPositionRequest / maxValue) * 100));
         Serial.print("%) -> ");
-        Serial.println((int)position);
+        Serial.print((int)position);
+        Serial.println(useTracking ? " [tracking]" : " [normal]");
       }
 
       stepper->moveTo((int)position);
