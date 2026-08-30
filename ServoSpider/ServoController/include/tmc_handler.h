@@ -54,4 +54,25 @@ void updateTmc();         // Call every loop() iteration
 void applyTmcSettings();  // Push current/chopper-mode config to the driver
 void clearTmcStall();     // Acknowledge a latched stall fault
 
+// Explicitly restarts the stall-detection ramp grace period (see
+// STALL_RAMP_GRACE_MS in tmc_handler.cpp) right at the moment a genuinely
+// new move/direction begins. updateTmc() also infers this from an
+// isRunning() false->true transition on its own, but that heuristic can
+// miss a real restart if the stepper never reads as fully idle in between
+// two back-to-back commands (e.g. one small move finishing and a new
+// runBackward()/runForward() starting in the same loop() iteration, or
+// close enough together that isRunning() stays continuously true) - in
+// that case the grace period ends up measured from whenever the *earlier*
+// move started, letting a stall check fire on the new move almost
+// immediately even though its own ramp has barely begun. Found on the
+// bench (2026-08-30): the WAIT_CLEAR_SWITCH -> FIND_INITIAL transition
+// reported a "stall" (SG_RESULT=0-2) just ~110-130ms after runBackward()
+// was called - well under the 300ms grace period - and raising jumpStart
+// (which should help a *real* torque stall) made the reading more extreme,
+// not better, pointing at a false trigger from this exact gap rather than
+// a genuine stall. Call this right after any runBackward()/runForward()/
+// moveTo() that starts a search or move stall-detection should judge
+// independently of whatever came immediately before it.
+void tmcResetStallRampTimer();
+
 #endif

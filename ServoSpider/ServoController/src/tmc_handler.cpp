@@ -148,6 +148,15 @@ void clearTmcStall() {
   stallDebounceCount = 0;
 }
 
+void tmcResetStallRampTimer() {
+  runStartMillis = millis();
+  stallDebounceCount = 0;
+  // Also update wasRunning's baseline so updateTmc()'s own transition
+  // detection doesn't immediately re-fire this same reset from a stale
+  // false->true edge it hasn't processed yet.
+  wasRunning = (stepper != NULL) && stepper->isRunning();
+}
+
 void updateTmc() {
   if (!tmcEnabledConfig || !tmcConnected || tmcDriver == nullptr) return;
 

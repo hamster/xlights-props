@@ -1,4 +1,5 @@
 #include "stepper_handler.h"
+#include "tmc_handler.h"
 #include <Preferences.h>
 
 extern Preferences preferences;
@@ -221,6 +222,7 @@ void startStepCheck(long targetPosition) {
   stepper->setAcceleration(stepperAccelConfig);
   stepper->setSpeedInHz(stepperSpeedConfig);
   stepper->moveTo(targetPosition);
+  tmcResetStallRampTimer();
   stepCheckState = STEPCHECK_MOVING;
 }
 
@@ -370,6 +372,7 @@ void updateHoming() {
       homingState = HOMING_FIND_INITIAL;
       interruptTriggered = false;
       stepper->runBackward();
+      tmcResetStallRampTimer();
       homingStateTime = currentTime;
     }
     break;
@@ -382,11 +385,13 @@ void updateHoming() {
         // Switch cleared (pin went LOW), move a bit more to get fully off
         Serial.println("Forward worked! Moving clear of switch...");
         stepper->move(2500);
+        tmcResetStallRampTimer();
         homingState = HOMING_WAIT_CLEAR_SWITCH;
         homingStateTime = currentTime;
       } else if (homingCounter < 25) {
         // Still on switch (pin still HIGH), keep moving forward
         stepper->moveTo(10 * homingCounter);
+        tmcResetStallRampTimer();
         homingCounter++;
         homingStateTime = currentTime;
       } else {
@@ -408,11 +413,13 @@ void updateHoming() {
         // Switch cleared (pin went LOW), move a bit more to get fully off
         Serial.println("Reverse worked! Moving clear of switch...");
         stepper->move(-2500);
+        tmcResetStallRampTimer();
         homingState = HOMING_WAIT_CLEAR_SWITCH;
         homingStateTime = currentTime;
       } else if (homingCounter < 25) {
         // Still on switch (pin still HIGH), keep moving backward
         stepper->moveTo(-10 * homingCounter);
+        tmcResetStallRampTimer();
         homingCounter++;
         homingStateTime = currentTime;
       } else {
@@ -446,6 +453,7 @@ void updateHoming() {
       Serial.println(" Hz/s");
 
       stepper->runBackward();
+      tmcResetStallRampTimer();
 
       Serial.print("Stepper isRunning: ");
       Serial.println(stepper->isRunning() ? "true" : "false");
@@ -496,6 +504,7 @@ void updateHoming() {
       // Move off the switch before reversing
       Serial.println("Moving off switch...");
       stepper->move(2500);  // Move forward 2500 steps
+      tmcResetStallRampTimer();
       homingState = HOMING_MOVE_OFF_INITIAL;
       homingStateTime = currentTime;
       homingCounter = 0;
@@ -507,6 +516,7 @@ void updateHoming() {
     if (!stepper->isRunning() && digitalRead(homingSwitchPin) == LOW) {
       Serial.println("Switch cleared, reversing...");
       stepper->runForward();
+      tmcResetStallRampTimer();
       homingState = HOMING_FIND_OTHER_END;
       homingStateTime = currentTime;
       homingCounter = 0;
@@ -555,6 +565,7 @@ void updateHoming() {
       // Move off the switch before returning to center
       Serial.println("Moving off switch...");
       stepper->move(-2500);  // Move backward 2500 steps
+      tmcResetStallRampTimer();
       homingState = HOMING_MOVE_OFF_OTHER_END;
       homingStateTime = currentTime;
     }
@@ -567,6 +578,7 @@ void updateHoming() {
       stepper->setAcceleration(stepperAccelConfig);
       stepper->setSpeedInHz(stepperSpeedConfig);
       stepper->moveTo(0);
+      tmcResetStallRampTimer();
       homingState = HOMING_RETURN_TO_ZERO;
       homingStateTime = currentTime;
     } else if (currentTime - homingStateTime >= 10000) {  // 10 second timeout
@@ -597,6 +609,7 @@ void updateHoming() {
         Serial.print(currentPos);
         Serial.println(", moving to zero again...");
         stepper->moveTo(0);
+        tmcResetStallRampTimer();
         homingStateTime = currentTime;  // Reset timeout
       }
     } else if (currentTime - homingStateTime >= 30000) {  // 30 second timeout
