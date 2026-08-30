@@ -13,6 +13,7 @@
 #include "partition_utils.h"
 #include "protocol_common.h"
 #include "tmc_handler.h"
+#include "tuning_handler.h"
 
 // Watchdog timeout in seconds
 #define WDT_TIMEOUT 10
@@ -407,6 +408,12 @@ void loop() {
   // Check WiFi connection and reconnect if needed
   checkWifiConnection();
 
+  // Update the skipped-step diagnostic move, if one is in progress - must
+  // run before updateHoming() since both react to the same ISR-deferred
+  // pendingForceStop flag, and this one needs first refusal on it (see
+  // updateStepCheck()'s comment in stepper_handler.cpp).
+  updateStepCheck();
+
   // Update non-blocking homing state machine
   updateHoming();
 
@@ -521,10 +528,41 @@ float calcPosition(float positionRequest, bool is16Bit) {
   return (float)bottomPosition * ((float)positionRequest / maxValue);
 }
 
+// Buffers a '$'-prefixed line for the extended tuning-harness command
+// protocol (see tuning_handler.h) - everything else stays the normal
+// single-character commands below, read one at a time as before.
+static String extendedCommandBuffer = "";
+static bool inExtendedCommand = false;
+
 void handleSerialCommands() {
   // Check for serial input
   if (Serial.available() > 0) {
     char c = Serial.read();
+
+    if (inExtendedCommand) {
+      if (c == '\n' || c == '\r') {
+        if (extendedCommandBuffer.length() > 0) {
+          handleExtendedSerialCommand(extendedCommandBuffer);
+          extendedCommandBuffer = "";
+        }
+        inExtendedCommand = false;
+      } else {
+        extendedCommandBuffer += c;
+        if (extendedCommandBuffer.length() > 200) {  // safety cap against a runaway line
+          Serial.println("ERR line too long");
+          extendedCommandBuffer = "";
+          inExtendedCommand = false;
+        }
+      }
+      return;
+    }
+
+    if (c == '$') {
+      inExtendedCommand = true;
+      extendedCommandBuffer = "";
+      return;
+    }
+
     switch (c) {
     case '\r':
     case '?':
@@ -539,6 +577,7 @@ void handleSerialCommands() {
       Serial.println("p  - Print current stepper position");
       Serial.println("f  - Move forward 10 steps");
       Serial.println("b  - Move backward 10 steps");
+      Serial.println("$  - Extended tuning-harness command (see tuning_handler.h)");
       Serial.println("================================\n");
       break;
     case 'h':

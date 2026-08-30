@@ -115,6 +115,32 @@ extern int stepperStreamSettleMsConfig;      // ms - quiet period (no new DDP co
 extern bool stepperSettingsPendingSave;
 void persistStepperSettingsIfPending();  // Call every loop() iteration
 
+// Skipped-step check: a deliberate diagnostic move (bypassing DDP/tracking-
+// mode entirely) toward a known physical reference point, watching whether
+// the homing switch fires *before* the step counter gets there. This is the
+// only real ground-truth signal available for detecting lost steps -
+// getCurrentPosition() is pulse-counting bookkeeping, not a position sensor,
+// so it has no way to notice a step that was commanded but didn't physically
+// happen. If earlier motion lost steps in the direction that moves *away*
+// from this reference, the counter will have over-counted that travel, so
+// commanding a return to the reference overshoots it physically before the
+// counter's own idea of "there" is reached - the switch trips early. See
+// startStepCheck()/updateStepCheck() in stepper_handler.cpp and the
+// $CHECKSTEPS command in tuning_handler.cpp.
+enum StepCheckState {
+  STEPCHECK_IDLE,
+  STEPCHECK_MOVING,
+};
+extern StepCheckState stepCheckState;
+extern bool stepCheckTripped;        // Result of the most recently completed check
+extern long stepCheckTripPosition;   // Counter value at the moment of an early trip, or final position if clean
+extern long stepCheckTargetPosition; // What we asked it to move to
+extern unsigned long stepCheckElapsedMs;
+
+bool isStepChecking();
+void startStepCheck(long targetPosition);  // Begins the move; refuses if homing/checking/moving already
+void updateStepCheck();                    // Call from loop(), before updateHoming()
+
 // Stepper functions
 void IRAM_ATTR handleHomingInterrupt();
 void startHoming();             // Start non-blocking homing

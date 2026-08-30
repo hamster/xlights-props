@@ -99,6 +99,8 @@ Type in serial monitor (115200 baud):
 - `f`/`b` - Move forward/backward 10 steps
 - `n` - Print connection status (brief)
 
+A separate `$`-prefixed extended protocol (`tuning_handler.h`/`.cpp`) exists alongside these single-character commands, for the bench-tuning harness (`tools/tuning_harness.py`): `$SET`/`$GET`/`$GET ALL`/`$STATUS`/`$HOME`/`$CHECKSTEPS`. See `tuning_handler.h` and `tools/README.md` for the full protocol.
+
 ## Important Patterns
 
 - The DDP handler updates `lastProtocolUpdateTime` for blank timeout tracking

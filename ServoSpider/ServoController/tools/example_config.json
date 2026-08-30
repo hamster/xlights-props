@@ -1,0 +1,14 @@
+{
+  "normalSpeed": 6500,
+  "normalAccel": 20000,
+  "trackEnabled": 1,
+  "trackThreshold": 2000,
+  "trackSpeed": 6500,
+  "trackAccel": 5000,
+  "trackMaxLag": 3000,
+  "trackMode": 0,
+  "coalesceMs": 250,
+  "coalesceSteps": 400,
+  "streamRateWindow": 250,
+  "streamSettle": 150
+}

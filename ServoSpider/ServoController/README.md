@@ -90,6 +90,7 @@ Access the device via its IP address (or `http://<hostname>.local`) in a web bro
 - Live LED preview (fetched separately from `/led-preview` to save bandwidth)
 - LED test pattern (LED Status box): drives a marching red/green/blue pattern out the pixel strip and ignores incoming DDP pixel data while enabled — for bench-testing a prop's pixel wiring without a controller pushing DDP. Doesn't affect stepper/DDP position control. Not persisted across reboot; disabling it blanks the strip.
 - Compact Motion Log (DDP/LED Status box, experimental/temporary): prints one compact CSV line per stepper motion event to serial — timestamp, commanded position, actual position, and the speed/tracking-profile decision made — for capturing real motion data to diagnose the Tracking Motion Strategy settings. Not persisted across reboot.
+- Automated bench-tuning: `tools/tuning_harness.py` drives the whole tune-a-setting/run-a-pan/inspect-the-log loop from a laptop over serial — see `tools/README.md`. Includes a ground-truth skipped-step check (the `$CHECKSTEPS` serial command) that catches real mechanical step loss by watching whether the physical homing switch fires before the step counter expects it to, which plain position tracking can't detect on its own.
 - Manual motor control (position and incremental movement)
 - Locate mode (blinks the status LED in an SOS pattern to help find the device)
 

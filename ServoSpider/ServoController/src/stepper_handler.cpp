@@ -18,6 +18,13 @@ HomingState homingState = HOMING_IDLE;
 unsigned long homingStateTime = 0;
 int homingCounter = 0;
 
+StepCheckState stepCheckState = STEPCHECK_IDLE;
+bool stepCheckTripped = false;
+long stepCheckTripPosition = 0;
+long stepCheckTargetPosition = 0;
+unsigned long stepCheckElapsedMs = 0;
+static unsigned long stepCheckStartMs = 0;
+
 // Stepper configuration variables
 int stepperSpeedConfig = stepperSpeed;
 int stepperAccelConfig = stepperAccel;
@@ -173,12 +180,86 @@ bool isHomingSwitchTripped() {
   return (digitalRead(homingSwitchPin) == HIGH);
 }
 
+bool isStepChecking() {
+  return stepCheckState != STEPCHECK_IDLE;
+}
+
+// Begins a deliberate verification move toward targetPosition, using the
+// normal (not tracking) profile, entirely independent of DDP/tracking-mode -
+// this is a direct diagnostic move, not something a control strategy under
+// test should be able to influence. Caller (tuning_handler.cpp) is expected
+// to have already checked homed/isHoming()/isRunning(); this only adds a
+// defensive re-check so it can't be started twice concurrently.
+void startStepCheck(long targetPosition) {
+  if (isStepChecking() || isHoming() || stepper->isRunning()) {
+    return;
+  }
+  stepCheckTargetPosition = targetPosition;
+  stepCheckTripped = false;
+  stepCheckTripPosition = stepper->getCurrentPosition();
+  stepCheckStartMs = millis();
+  stepper->setAcceleration(stepperAccelConfig);
+  stepper->setSpeedInHz(stepperSpeedConfig);
+  stepper->moveTo(targetPosition);
+  stepCheckState = STEPCHECK_MOVING;
+}
+
+// Call every loop() iteration, *before* updateHoming() - both react to the
+// same pendingForceStop flag, and this needs first refusal on it while a
+// check is in progress so updateHoming() doesn't instead treat the trip as
+// a generic "out of homing" event (which would stop the motor correctly but
+// never record where it happened or print the CHECKSTEPS_RESULT line the
+// harness/serial user is waiting for).
+void updateStepCheck() {
+  if (stepCheckState != STEPCHECK_MOVING) {
+    return;
+  }
+
+  if (pendingForceStop) {
+    pendingForceStop = false;
+    stepCheckTripPosition = stepper->getCurrentPosition();
+    stepper->forceStop();
+    stepCheckTripped = true;
+    stepCheckElapsedMs = millis() - stepCheckStartMs;
+    stepCheckState = STEPCHECK_IDLE;
+    // The switch firing here is only physically possible if it's genuinely
+    // at that location right now - which means our belief about where "0"
+    // (or wherever the target was) sits is stale. Same call as an
+    // unexpected trip during normal operation: require a fresh re-home
+    // before trusting position again.
+    homed = false;
+    Serial.print("CHECKSTEPS_RESULT tripped=1 tripPos=");
+    Serial.print(stepCheckTripPosition);
+    Serial.print(" target=");
+    Serial.print(stepCheckTargetPosition);
+    Serial.print(" elapsedMs=");
+    Serial.println(stepCheckElapsedMs);
+    return;
+  }
+
+  if (!stepper->isRunning()) {
+    stepCheckTripped = false;
+    stepCheckTripPosition = stepper->getCurrentPosition();
+    stepCheckElapsedMs = millis() - stepCheckStartMs;
+    stepCheckState = STEPCHECK_IDLE;
+    Serial.print("CHECKSTEPS_RESULT tripped=0 tripPos=");
+    Serial.print(stepCheckTripPosition);
+    Serial.print(" target=");
+    Serial.print(stepCheckTargetPosition);
+    Serial.print(" elapsedMs=");
+    Serial.println(stepCheckElapsedMs);
+  }
+}
+
 void updateHoming() {
   // Deferred from the ISR (see handleHomingInterrupt) - forceStop() isn't
   // IRAM-safe, so it's issued here instead, in normal task context, as soon
   // as we notice the flag. Checked and cleared *before* the "not homing"
   // early return below, and unconditionally - not just while homing is
-  // active. This used to be gated behind that early return, which meant a
+  // active. updateStepCheck() (called before this, from loop()) claims the
+  // flag first whenever a skipped-step check is in progress, so this path
+  // only ever sees it when nothing else was already handling it. This used
+  // to be gated behind that early return, which meant a
   // switch trip during normal (non-homing) operation left the flag stuck
   // true indefinitely (never consumed, since nothing here ran while idle).
   // The next time homing started, that stale flag would be treated as "the
