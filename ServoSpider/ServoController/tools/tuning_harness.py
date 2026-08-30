@@ -50,10 +50,18 @@ STATUS_KV_RE = re.compile(r"(\w+)=(-?\d+)")
 # Serial link to the device
 # --------------------------------------------------------------------------
 class DeviceLink:
-    def __init__(self, port, baud=115200, timeout=1.0):
+    def __init__(self, port, baud=115200, timeout=1.0, wait_ready=True):
         import serial  # deferred import so --help works without pyserial installed
         self.ser = serial.Serial(port, baud, timeout=timeout)
-        time.sleep(2.0)  # let an ESP32 reset-on-open finish booting
+        time.sleep(2.0)  # opening the port toggles DTR/RTS on most ESP32 boards
+                         # (that's how flashing/monitor tools reset it without a
+                         # physical button), which reboots the device - confirmed
+                         # on this hardware: disconnecting/reconnecting the serial
+                         # port causes a reboot and, if autoHomeOnBootConfig is
+                         # set, a full auto-home. 2s covers the boot itself; it
+                         # does NOT cover a subsequent auto-home, which can easily
+                         # take 15s+ - see wait_until_ready() below, called by
+                         # default unless wait_ready=False.
         self.ser.reset_input_buffer()
         self._write_lock = threading.Lock()
         self._capture = None
@@ -62,6 +70,39 @@ class DeviceLink:
         self._stop = False
         self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self._reader_thread.start()
+        if wait_ready:
+            self.wait_until_ready()
+
+    def wait_until_ready(self, boot_timeout=15.0, home_timeout=90.0):
+        """Waits for $STATUS to actually respond (the reset-on-open reboot
+        above can leave the device unresponsive for a couple seconds longer
+        than the fixed sleep in __init__ accounts for), then - if it comes up
+        already homing (autoHomeOnBootConfig) - waits for that to finish too,
+        so callers don't send commands into a device that's still mid-boot or
+        mid-homing and get confusing ERR/empty responses back."""
+        deadline = time.monotonic() + boot_timeout
+        status = None
+        while time.monotonic() < deadline:
+            status = self.get_status()
+            if status:
+                break
+            time.sleep(0.3)
+        if not status:
+            print(f"WARNING: no response to $STATUS within {boot_timeout}s of connecting - "
+                  f"device may still be booting, or port/baud is wrong", file=sys.stderr)
+            return False
+        if status.get("homing") == 1:
+            print("Device came up already homing (auto-home on boot) - waiting for it to finish...")
+            deadline = time.monotonic() + home_timeout
+            while time.monotonic() < deadline:
+                status = self.get_status()
+                if status and status.get("homing", 1) == 0:
+                    print(f"  auto-home finished: {status}")
+                    return True
+                time.sleep(1.0)
+            print("WARNING: auto-home on boot didn't finish within timeout", file=sys.stderr)
+            return False
+        return True
 
     def _reader_loop(self):
         while not self._stop:
