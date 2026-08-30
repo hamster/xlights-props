@@ -24,7 +24,7 @@
 //   $GET ALL              - one "VAL name=value" line per tunable, then "OK ALL".
 //   $STATUS               - one line: "STATUS homed=0/1 homing=0/1
 //                            checking=0/1 pos=<int> bottom=<int>
-//                            running=0/1 mode=0/1/2".
+//                            running=0/1 mode=0/1/2/3".
 //   $HOME                 - triggers startHoming(); responds "OK HOME".
 //   $CHECKSTEPS [target]  - ground-truth skipped-step check: commands a
 //                            direct move to `target` (default 0, the
@@ -59,7 +59,7 @@
 //   normalSpeed, normalAccel, jumpStart, trackEnabled, trackThreshold,
 //   trackSpeed, trackAccel, trackMaxLag, trackMode, coalesceMs,
 //   coalesceSteps, streamRateWindow, streamSettle, compactLog, protocolDebug,
-//   homeSpeed, homeAccel
+//   homeSpeed, homeAccel, lookaheadSteps, lookaheadSettle
 void handleExtendedSerialCommand(const String& line);
 
 #endif

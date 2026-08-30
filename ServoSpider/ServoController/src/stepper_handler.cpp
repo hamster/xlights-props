@@ -67,6 +67,13 @@ int stepperCoalesceStepsConfig = 400;
 int stepperStreamRateWindowMsConfig = 250;
 int stepperStreamSettleMsConfig = 150;
 
+// TRACK_MODE_LOOKAHEAD defaults. 5000 steps comfortably exceeds the worst-case
+// stopping distance (speed^2/(2*accel)) at the default tracking profile
+// (6500 Hz / 5000 steps/s^2 -> 4225 steps) - re-check this margin if either
+// is tuned to a lower accel or higher speed than the defaults.
+int stepperLookaheadStepsConfig = 5000;
+int stepperLookaheadSettleMsConfig = 150;
+
 bool stepperSettingsPendingSave = false;
 
 // Deferred flash write for Stepper Configuration settings - see the
@@ -96,6 +103,8 @@ void persistStepperSettingsIfPending() {
   preferences.putInt("stepCoalesceSt", stepperCoalesceStepsConfig);
   preferences.putInt("stepStreamRateW", stepperStreamRateWindowMsConfig);
   preferences.putInt("stepStreamSettl", stepperStreamSettleMsConfig);
+  preferences.putInt("stepLookaheadSt", stepperLookaheadStepsConfig);
+  preferences.putInt("stepLookaheadMs", stepperLookaheadSettleMsConfig);
 
   stepperSettingsPendingSave = false;
   Serial.println("Stepper settings persisted to flash (motor now idle)");
@@ -361,7 +370,8 @@ void updateHoming() {
         homingStateTime = currentTime;
       } else {
         // Forward didn't work, try backward
-        Serial.println("Didn't clear forward, trying backward...");
+        Serial.print("Didn't clear forward, trying backward... pos=");
+        Serial.println(stepper->getCurrentPosition());
         homingCounter = 0;
         homingState = HOMING_MOVE_OFF_BACKWARD;
         homingStateTime = currentTime;
@@ -386,7 +396,8 @@ void updateHoming() {
         homingStateTime = currentTime;
       } else {
         // Couldn't clear switch
-        Serial.println("ERROR: Homing switch stuck!");
+        Serial.print("ERROR: Homing switch stuck! pos=");
+        Serial.println(stepper->getCurrentPosition());
         stepper->forceStop();
         stepper->setAcceleration(stepperAccelConfig);
         stepper->setSpeedInHz(stepperSpeedConfig);
@@ -433,7 +444,14 @@ void updateHoming() {
   case HOMING_FIND_INITIAL:
     // Wait for interrupt or timeout
     if (currentTime - homingStateTime >= 500) {  // Print status every 500ms
-      Serial.print(".");
+      // Position (not just a dot) so a stuck/jammed search leaves a clear
+      // record of which direction it was actually moving (or not moving at
+      // all) - added after a real jam that couldn't be explained by the
+      // periodic dot-print alone (2026-08-30); see TODO.md.
+      Serial.print(". pos=");
+      Serial.print(stepper->getCurrentPosition());
+      Serial.print(" speed=");
+      Serial.println(stepper->getCurrentSpeedInMilliHz() / 1000);
       homingStateTime = currentTime;
       homingCounter++;
 
@@ -484,7 +502,11 @@ void updateHoming() {
   case HOMING_FIND_OTHER_END:
     // Wait for interrupt or timeout
     if (currentTime - homingStateTime >= 500) {  // Print status every 500ms
-      Serial.print(".");
+      // Position (not just a dot) - see the comment in HOMING_FIND_INITIAL.
+      Serial.print(". pos=");
+      Serial.print(stepper->getCurrentPosition());
+      Serial.print(" speed=");
+      Serial.println(stepper->getCurrentSpeedInMilliHz() / 1000);
       homingStateTime = currentTime;
       homingCounter++;
 

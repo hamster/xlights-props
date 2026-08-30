@@ -79,10 +79,13 @@ void handleRoot() {
   page.replace("{{TRACK_MODE_DIRECT_SEL}}", stepperTrackModeConfig == TRACK_MODE_DIRECT ? "selected" : "");
   page.replace("{{TRACK_MODE_COALESCE_SEL}}", stepperTrackModeConfig == TRACK_MODE_COALESCE ? "selected" : "");
   page.replace("{{TRACK_MODE_STREAMING_SEL}}", stepperTrackModeConfig == TRACK_MODE_STREAMING ? "selected" : "");
+  page.replace("{{TRACK_MODE_LOOKAHEAD_SEL}}", stepperTrackModeConfig == TRACK_MODE_LOOKAHEAD ? "selected" : "");
   page.replace("{{STEPPER_COALESCE_MS}}", String(stepperCoalesceMsConfig));
   page.replace("{{STEPPER_COALESCE_STEPS}}", String(stepperCoalesceStepsConfig));
   page.replace("{{STEPPER_STREAM_RATE_WINDOW}}", String(stepperStreamRateWindowMsConfig));
   page.replace("{{STEPPER_STREAM_SETTLE}}", String(stepperStreamSettleMsConfig));
+  page.replace("{{STEPPER_LOOKAHEAD_STEPS}}", String(stepperLookaheadStepsConfig));
+  page.replace("{{STEPPER_LOOKAHEAD_SETTLE}}", String(stepperLookaheadSettleMsConfig));
 
   // Protocol configuration values
   page.replace("{{STEPPER_CONTROL_CHECKED}}", stepperControlEnabled ? "checked" : "");
@@ -249,6 +252,12 @@ void handleSaveStepper() {
     }
     if (server.hasArg("stepperStreamSettle")) {
       stepperStreamSettleMsConfig = server.arg("stepperStreamSettle").toInt();
+    }
+    if (server.hasArg("stepperLookaheadSteps")) {
+      stepperLookaheadStepsConfig = server.arg("stepperLookaheadSteps").toInt();
+    }
+    if (server.hasArg("stepperLookaheadSettle")) {
+      stepperLookaheadSettleMsConfig = server.arg("stepperLookaheadSettle").toInt();
     }
 
     // Config variables are live immediately - the DDP position-handling

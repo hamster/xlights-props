@@ -333,9 +333,10 @@
               <option value="0" {{TRACK_MODE_DIRECT_SEL}}>Direct (moveTo every packet - original behavior)</option>
               <option value="1" {{TRACK_MODE_COALESCE_SEL}}>Coalesce (batch small updates into fewer, larger moves)</option>
               <option value="2" {{TRACK_MODE_STREAMING_SEL}}>Streaming (continuous speed, snaps to position once quiet) - NOT RECOMMENDED, see note</option>
+              <option value="3" {{TRACK_MODE_LOOKAHEAD_SEL}}>Lookahead (aims moveTo() past the target so it never plans to stop)</option>
             </select>
-            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Experimental - added to compare on the bench after log analysis showed Direct mode's jerkiness comes from moveTo() always planning to decelerate to a full stop at each new nearby target, not primarily from accel/speed tuning. All three still use the Tracking Speed/Acceleration/Threshold above.</p>
-            <p style="color: #b00; font-size: 12px; margin: 4px 0 0;"><strong>Streaming mode is currently shelved</strong> - bench-testing (2026-08-30) found it repeatedly stalled or froze the trolley for 15+ seconds at a time even after fixing two confirmed logic bugs, with a remaining issue that looks like a deeper stepper-library queue interaction rather than a quick fix. Direct (and Coalesce, which performed nearly identically to Direct in testing) are the validated, recommended choices - see TODO.md for the full writeup.</p>
+            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Experimental - added to compare on the bench after log analysis showed Direct mode's jerkiness comes from moveTo() always planning to decelerate to a full stop at each new nearby target, not primarily from accel/speed tuning. All four still use the Tracking Speed/Acceleration/Threshold above.</p>
+            <p style="color: #b00; font-size: 12px; margin: 4px 0 0;"><strong>Streaming mode is currently shelved</strong> - bench-testing (2026-08-30) found it repeatedly stalled or froze the trolley for 15+ seconds at a time even after fixing two confirmed logic bugs, with a remaining issue that looks like a deeper stepper-library queue interaction rather than a quick fix. Direct, Coalesce, and Lookahead (which performed nearly identically to Direct/Coalesce, or better, in testing) are the validated, recommended choices - see TODO.md for the full writeup.</p>
           </div>
 
           <div class="form-group" id="coalesceFieldsGroup">
@@ -350,6 +351,14 @@
             <input type="number" id="stepperStreamRateWindow" name="stepperStreamRateWindow" value="{{STEPPER_STREAM_RATE_WINDOW}}" min="20" max="5000" required>
             <label for="stepperStreamSettle" style="margin-top: 8px;">Streaming Settle Time (ms):</label>
             <input type="number" id="stepperStreamSettle" name="stepperStreamSettle" value="{{STEPPER_STREAM_SETTLE}}" min="20" max="5000" required>
+          </div>
+
+          <div class="form-group" id="lookaheadFieldsGroup">
+            <label for="stepperLookaheadSteps">Lookahead Distance (steps):</label>
+            <input type="number" id="stepperLookaheadSteps" name="stepperLookaheadSteps" value="{{STEPPER_LOOKAHEAD_STEPS}}" min="1" max="1000000" required>
+            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Must exceed the tracking profile's worst-case stopping distance (Tracking Speed&sup2; / (2 &times; Tracking Acceleration)) or the ramp generator can still catch up to the extended target and decelerate anyway.</p>
+            <label for="stepperLookaheadSettle" style="margin-top: 8px;">Lookahead Settle Time (ms):</label>
+            <input type="number" id="stepperLookaheadSettle" name="stepperLookaheadSettle" value="{{STEPPER_LOOKAHEAD_SETTLE}}" min="20" max="5000" required>
           </div>
 
           <div class="form-group">

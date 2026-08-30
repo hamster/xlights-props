@@ -101,14 +101,39 @@ enum StepperTrackMode {
   TRACK_MODE_DIRECT = 0,     // Current/original behavior: moveTo(new target) on every DDP packet.
   TRACK_MODE_COALESCE = 1,   // Batch several close updates into one less-frequent, larger moveTo(),
                               // so each move has real distance to accelerate through before planning a stop.
-  TRACK_MODE_STREAMING = 2   // While updates keep arriving, run continuously (runForward/runBackward) at a
+  TRACK_MODE_STREAMING = 2,  // While updates keep arriving, run continuously (runForward/runBackward) at a
                               // speed estimated from the recent rate of DDP change, instead of aiming to
                               // stop at each tiny target; snaps to an exact moveTo() once updates go quiet.
                               // Clamped to [0, bottomPosition] every step as a hard safety net - a rate-
                               // based estimate has no built-in "never overshoot" guarantee the way
                               // moveTo() does, confirmed by simulation showing exactly this failure mode.
+                              // SHELVED (2026-08-30): repeatedly stalled/froze the trolley on the bench
+                              // across two separate confirmed-and-fixed bugs, plus a third unresolved
+                              // instability (the stepper command queue appearing to wedge for 15+ seconds
+                              // at a time) that survived both fixes. Not recommended - see TODO.md.
+  TRACK_MODE_LOOKAHEAD = 3   // Like Direct - still dispatches via moveTo(), the same well-tested path
+                              // Direct/Coalesce use, not Streaming's separate runForward()/runBackward()
+                              // path - but instead of aiming at the literal commanded position, aims at
+                              // that position plus stepperLookaheadStepsConfig further in the current
+                              // direction of travel (clamped to [0, bottomPosition], so moveTo() itself
+                              // never overshoots - no external clamp-and-forceStop() safety net needed,
+                              // unlike Streaming). Because the target is always artificially far ahead,
+                              // the ramp generator has no reason to plan a decelerate-to-stop while
+                              // updates keep arriving - it just keeps accelerating/cruising. Snaps to an
+                              // exact moveTo() at the true commanded position once updates go quiet
+                              // (stepperLookaheadSettleMsConfig), same idea as Streaming's settle, without
+                              // Streaming's separate code path or its unresolved instability.
 };
 extern int stepperTrackModeConfig;
+
+// TRACK_MODE_LOOKAHEAD parameters
+extern int stepperLookaheadStepsConfig;     // steps - how far beyond the commanded position to aim, in the
+                                              // current direction of travel. Must exceed the worst-case
+                                              // stopping distance at the tracking profile's speed/accel
+                                              // (speed^2 / (2*accel)) or the ramp generator can still catch
+                                              // up to the extended target and plan a decel anyway.
+extern int stepperLookaheadSettleMsConfig;  // ms - quiet period (no new DDP command) before snapping to
+                                              // the exact final commanded position
 
 // TRACK_MODE_COALESCE parameters
 extern int stepperCoalesceMsConfig;     // ms - minimum time between committed moves

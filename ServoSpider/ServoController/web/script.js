@@ -24,6 +24,7 @@ function showNotification(message, isSuccess) {
       var mode = document.getElementById('stepperTrackMode').value;
       document.getElementById('coalesceFieldsGroup').style.display = (mode === '1') ? 'block' : 'none';
       document.getElementById('streamFieldsGroup').style.display = (mode === '2') ? 'block' : 'none';
+      document.getElementById('lookaheadFieldsGroup').style.display = (mode === '3') ? 'block' : 'none';
     }
 
     function clearTmcStall() {

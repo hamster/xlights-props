@@ -45,6 +45,14 @@ bool streamSettled = true;
 int streamCurrentDirection = 0;  // -1, 0, 1
 unsigned long lastStreamUpdateMs = 0;
 
+// --- TRACK_MODE_LOOKAHEAD state ---
+float lookaheadRawTarget = 0;       // true commanded position (calcPosition() output) - NOT the
+                                     // artificially-extended moveTo() target actually sent to the
+                                     // stepper; this is what logging/metrics should show as "commanded"
+int lookaheadDirection = 0;         // -1, 0, 1 - direction implied by the most recent real change in target
+bool lookaheadSettled = true;
+unsigned long lastLookaheadCommandMs = 0;
+
 // Applies the tracking-vs-normal profile decision (see stepperTrackThresholdConfig's
 // declaration comment) for a move toward newTarget, given the previous target this
 // decision was based on. Updates FastAccelStepper's live speed/accel. Returns true
@@ -113,7 +121,14 @@ void logCompactMotionPeriodic() {
   lastPeriodicLogMs = now;
 
   int curPos = stepper->getCurrentPosition();
-  int cmdPos = (int)stepper->targetPos();
+  // TRACK_MODE_LOOKAHEAD's actual stepper target is artificially extended
+  // past the true commanded position (see StepperTrackMode's declaration
+  // comment) - show the real commanded position here instead, or every
+  // plot/metric derived from this log would show a commanded curve that
+  // jumps ahead of and disagrees with what was actually asked for.
+  int cmdPos = (stepperTrackModeConfig == TRACK_MODE_LOOKAHEAD)
+                   ? (int)lookaheadRawTarget
+                   : (int)stepper->targetPos();
   // Heuristic, display-only: tracking and normal accel are expected to
   // differ (that's the whole point of the tracking profile), so use
   // acceleration rather than speed to tell them apart - trackSpeed and
@@ -301,6 +316,80 @@ void updateStreamingMode() {
                     stepper->getCurrentSpeedInMilliHz(), (int)speedHz);
 }
 
+// TRACK_MODE_LOOKAHEAD: called on every DDP command that changes the
+// commanded position - see StepperTrackMode's declaration comment for the
+// full rationale. Aims moveTo() at the true commanded position plus a
+// lookahead buffer further in the current direction of travel, instead of
+// the literal commanded position, so the ramp generator has no reason to
+// plan a decelerate-to-stop while updates keep arriving - unlike Direct
+// mode, which aims at the literal (nearby) target every time and is
+// therefore almost always within its own stopping distance of it.
+void handleLookaheadModeCommand(uint16_t ddpVal, float newTarget) {
+  if (newTarget > lookaheadRawTarget + 0.5f) {
+    lookaheadDirection = 1;
+  } else if (newTarget < lookaheadRawTarget - 0.5f) {
+    lookaheadDirection = -1;
+  }
+  // else: no real change in commanded position (or a sub-step rounding
+  // wobble) - keep whatever direction was already in effect.
+
+  float previousRawTarget = lookaheadRawTarget;
+  lookaheadRawTarget = newTarget;
+  lastLookaheadCommandMs = millis();
+  lookaheadSettled = false;
+
+  int curPosBeforeMove = stepper->getCurrentPosition();
+  int32_t curSpeedBeforeMove = stepper->getCurrentSpeedInMilliHz();
+  float commandDeltaForLog = fabs(newTarget - previousRawTarget);
+  float lagForLog = fabs(newTarget - (float)curPosBeforeMove);
+
+  int targetSpeedHz;
+  bool useTracking = applyTrackingProfileDecision(newTarget, previousRawTarget, targetSpeedHz);
+  lastCommandedTargetPosition = newTarget;
+
+  logCompactMotion(ddpVal, (int)newTarget, curPosBeforeMove, (int)commandDeltaForLog,
+                    (int)lagForLog, useTracking, curSpeedBeforeMove, targetSpeedHz);
+
+  float extendedTarget = newTarget + (float)(lookaheadDirection * stepperLookaheadStepsConfig);
+  if (extendedTarget < 0) extendedTarget = 0;
+  if (extendedTarget > bottomPosition) extendedTarget = (float)bottomPosition;
+
+  // moveTo() is authoritative about its own target - it will never drive
+  // the stepper past whatever position it's given, so clamping the target
+  // itself here is sufficient. No external clamp-and-forceStop() safety net
+  // needed the way Streaming's runForward()/runBackward() approach required
+  // (that clamp's own bug is what stalled the motor earlier this session).
+  stepper->moveTo((int32_t)extendedTarget);
+  stepperBlanked = false;
+}
+
+// TRACK_MODE_LOOKAHEAD: called every loop() iteration. handleLookaheadModeCommand()
+// above already keeps the stepper aimed at an extended target while updates
+// are arriving; this just watches for a quiet period (no new DDP command)
+// and then snaps to an exact moveTo() at the true final commanded position,
+// same idea as Streaming's settle logic.
+void updateLookaheadMode() {
+  if (lookaheadSettled) return;
+  unsigned long quietMs = millis() - lastLookaheadCommandMs;
+  if (quietMs < (unsigned long)stepperLookaheadSettleMsConfig) return;
+
+  int curPosBeforeMove = stepper->getCurrentPosition();
+  int32_t curSpeedBeforeMove = stepper->getCurrentSpeedInMilliHz();
+  float lagForLog = fabs(lookaheadRawTarget - (float)curPosBeforeMove);
+
+  int targetSpeedHz;
+  bool useTracking = applyTrackingProfileDecision(lookaheadRawTarget, lastCommandedTargetPosition, targetSpeedHz);
+  lastCommandedTargetPosition = lookaheadRawTarget;
+
+  logCompactMotion(oldPositionRequest, (int)lookaheadRawTarget, curPosBeforeMove, 0,
+                    (int)lagForLog, useTracking, curSpeedBeforeMove, targetSpeedHz);
+
+  stepper->moveTo((int32_t)lookaheadRawTarget);
+  stepperBlanked = false;
+  lookaheadSettled = true;
+  lookaheadDirection = 0;
+}
+
 // Uptime tracking
 unsigned long bootTime = 0;
 
@@ -379,6 +468,8 @@ void setup() {
   stepperCoalesceStepsConfig = preferences.getInt("stepCoalesceSt", 400);
   stepperStreamRateWindowMsConfig = preferences.getInt("stepStreamRateW", 250);
   stepperStreamSettleMsConfig = preferences.getInt("stepStreamSettl", 150);
+  stepperLookaheadStepsConfig = preferences.getInt("stepLookaheadSt", 5000);
+  stepperLookaheadSettleMsConfig = preferences.getInt("stepLookaheadMs", 150);
 
   // Load protocol configuration. Sanitize against stale NVS values from
   // before ArtNet was removed, when the enum was NONE=0/ARTNET=1/DDP=2 - a
@@ -557,6 +648,9 @@ void loop() {
             streamHistory[STREAM_HISTORY_SIZE - 1].pos = position;
           }
           break;
+        case TRACK_MODE_LOOKAHEAD:
+          handleLookaheadModeCommand(currentPositionRequest, position);
+          break;
         case TRACK_MODE_DIRECT:
         default:
           handleDirectModeCommand(currentPositionRequest, position);
@@ -566,13 +660,15 @@ void loop() {
     }
   }
 
-  // Per-loop-iteration processing for the batching/streaming modes (no-op
-  // unless that mode is active and homed/not-homing) - see StepperTrackMode.
+  // Per-loop-iteration processing for the batching/streaming/lookahead modes
+  // (no-op unless that mode is active and homed/not-homing) - see StepperTrackMode.
   if (homed && !isHoming()) {
     if (stepperTrackModeConfig == TRACK_MODE_COALESCE) {
       updateCoalesceMode();
     } else if (stepperTrackModeConfig == TRACK_MODE_STREAMING) {
       updateStreamingMode();
+    } else if (stepperTrackModeConfig == TRACK_MODE_LOOKAHEAD) {
+      updateLookaheadMode();
     }
   }
 

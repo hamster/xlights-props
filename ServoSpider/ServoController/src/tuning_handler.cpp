@@ -40,6 +40,8 @@ static bool getTunable(const String& name, String& valueOut) {
   if (name == "protocolDebug") { valueOut = String(protocolDebugConfig ? 1 : 0); return true; }
   if (name == "homeSpeed") { valueOut = String(stepperSpeedHomingConfig); return true; }
   if (name == "homeAccel") { valueOut = String(stepperAccelHomingConfig); return true; }
+  if (name == "lookaheadSteps") { valueOut = String(stepperLookaheadStepsConfig); return true; }
+  if (name == "lookaheadSettle") { valueOut = String(stepperLookaheadSettleMsConfig); return true; }
   return false;
 }
 
@@ -47,7 +49,7 @@ static const char* ALL_TUNABLE_NAMES[] = {
   "normalSpeed", "normalAccel", "jumpStart", "trackEnabled", "trackThreshold",
   "trackSpeed", "trackAccel", "trackMaxLag", "trackMode", "coalesceMs",
   "coalesceSteps", "streamRateWindow", "streamSettle", "compactLog", "protocolDebug",
-  "homeSpeed", "homeAccel"
+  "homeSpeed", "homeAccel", "lookaheadSteps", "lookaheadSettle"
 };
 static const int ALL_TUNABLE_COUNT = sizeof(ALL_TUNABLE_NAMES) / sizeof(ALL_TUNABLE_NAMES[0]);
 
@@ -77,6 +79,8 @@ static bool setTunable(const String& name, const String& valueStr) {
   // no immediate stepper call needed (matches every other tunable above).
   if (name == "homeSpeed") { stepperSpeedHomingConfig = v; return true; }
   if (name == "homeAccel") { stepperAccelHomingConfig = v; return true; }
+  if (name == "lookaheadSteps") { stepperLookaheadStepsConfig = v; return true; }
+  if (name == "lookaheadSettle") { stepperLookaheadSettleMsConfig = v; return true; }
   return false;
 }
 
