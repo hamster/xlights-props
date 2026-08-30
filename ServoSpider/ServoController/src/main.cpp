@@ -96,8 +96,21 @@ void setup() {
   stepperSpeedHomingConfig = preferences.getInt("stepSpeedHome", stepperSpeedHoming);
   stepperAccelHomingConfig = preferences.getInt("stepAccelHome", stepperAccelHoming);
 
-  // Load protocol configuration
-  protocolConfig = (protocolType)preferences.getInt("protocol", PROTOCOL_DDP);
+  // Load protocol configuration. Sanitize against stale NVS values from
+  // before ArtNet was removed, when the enum was NONE=0/ARTNET=1/DDP=2 - a
+  // device previously flashed with that firmware and saved as DDP(2) would
+  // load an unrecognized value here (today's enum only has NONE=0/DDP=1),
+  // silently fail the PROTOCOL_DDP check in loop(), and never process DDP
+  // at all despite packets arriving fine at the socket. DDP is the only
+  // protocol this firmware supports, so anything other than an explicit
+  // NONE(0) is treated as DDP.
+  int storedProtocol = preferences.getInt("protocol", PROTOCOL_DDP);
+  protocolConfig = (storedProtocol == PROTOCOL_NONE) ? PROTOCOL_NONE : PROTOCOL_DDP;
+  if (storedProtocol != PROTOCOL_NONE && storedProtocol != PROTOCOL_DDP) {
+    Serial.print("NOTE: stored protocol value (");
+    Serial.print(storedProtocol);
+    Serial.println(") doesn't match this firmware's protocol enum (likely stale from before ArtNet removal) - defaulting to DDP");
+  }
   stepperControlEnabled = preferences.getBool("stepperControl", true);
   control16BitConfig = preferences.getBool("control16Bit", false);
   protocolDebugConfig = preferences.getBool("protocolDebug", false);

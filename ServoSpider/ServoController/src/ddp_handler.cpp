@@ -79,10 +79,38 @@ void handleDDP() {
     Serial.println(header.dataOffset);
   }
 
-  // Read all channel data into a buffer for debug output and processing
-  uint8_t channelData[header.dataLen];
+  // Read all channel data into a buffer for debug output and processing.
+  //
+  // header.dataLen comes straight from the packet's own header bytes - it's
+  // untrusted network input, not a fact about how much data actually
+  // follows. A malformed or truncated packet can claim any 16-bit value
+  // (up to 65535) there regardless of the real UDP payload size. This used
+  // to size a stack-allocated VLA directly from that field, so a single
+  // packet claiming a large dataLen while sending little or no data would
+  // blow the stack - a crash triggerable by any non-conforming packet, not
+  // just a display/logic bug. Fixed by using a static buffer sized from
+  // DDP_MAX_DATA_SIZE and bounding the read length to what's actually
+  // available in this packet (packetSize), never to the untrusted header
+  // field.
+  static uint8_t channelData[DDP_MAX_DATA_SIZE];
+  int actualDataLen = packetSize - DDP_HEADER_SIZE;
+  if (actualDataLen < 0) {
+    actualDataLen = 0;
+  }
+  if (actualDataLen > DDP_MAX_DATA_SIZE) {
+    actualDataLen = DDP_MAX_DATA_SIZE;
+  }
+
+  if (protocolDebugConfig && header.dataLen != actualDataLen) {
+    Serial.print("DDP: header dataLen (");
+    Serial.print(header.dataLen);
+    Serial.print(") doesn't match actual packet payload (");
+    Serial.print(packetSize - DDP_HEADER_SIZE);
+    Serial.println(") - using actual packet size instead");
+  }
+
   uint16_t bytesRead = 0;
-  while (ddpUdp.available() && bytesRead < header.dataLen) {
+  while (ddpUdp.available() && bytesRead < actualDataLen) {
     channelData[bytesRead++] = ddpUdp.read();
   }
 

@@ -14,6 +14,12 @@ extern unsigned long ddpPacketsReceived;
 // DDP Protocol Constants
 #define DDP_PORT 4048
 #define DDP_HEADER_SIZE 10
+// Max payload bytes handled per packet (standard Ethernet MTU 1500 - 20
+// bytes IP - 8 bytes UDP = 1472). Real DDP senders fragment into packets
+// at or under this, so this is a hard safety cap, not a normal-case limit -
+// see handleDDP()'s comment on why the buffer must never be sized directly
+// from the packet's own (untrusted) header.dataLen field.
+#define DDP_MAX_DATA_SIZE 1472
 
 // DDP Packet Header Structure
 struct DDPHeader {
