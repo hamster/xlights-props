@@ -268,8 +268,13 @@ void loop() {
       // behind the commanded target (not just a momentary reversal
       // artifact), fall back to the normal profile to resync rather than
       // let it drift indefinitely.
+      // Captured before this command changes anything, for both the
+      // profile decision below and the compact CSV log.
+      int curPosBeforeMove = stepper->getCurrentPosition();
+      int32_t curSpeedMilliHzBeforeMove = stepper->getCurrentSpeedInMilliHz();
+
       float commandDelta = fabs(position - lastCommandedTargetPosition);
-      float lagFromActual = fabs(position - (float)stepper->getCurrentPosition());
+      float lagFromActual = fabs(position - (float)curPosBeforeMove);
       lastCommandedTargetPosition = position;
 
       bool useTracking = stepperTrackEnabledConfig
@@ -277,6 +282,7 @@ void loop() {
                           && commandDelta <= stepperTrackThresholdConfig
                           && lagFromActual <= stepperTrackMaxLagConfig;
 
+      int targetSpeedHz = useTracking ? stepperTrackSpeedConfig : stepperSpeedConfig;
       if (useTracking) {
         stepper->setSpeedInHz(stepperTrackSpeedConfig);
         stepper->setAcceleration(stepperTrackAccelConfig);
@@ -295,6 +301,28 @@ void loop() {
         Serial.print("%) -> ");
         Serial.print((int)position);
         Serial.println(useTracking ? " [tracking]" : " [normal]");
+      }
+
+      // Temporary compact CSV motion log, independent of protocolDebugConfig
+      // - see compactLogEnabled's declaration comment in protocol_common.h.
+      if (compactLogEnabled) {
+        Serial.print(millis());
+        Serial.print(",");
+        Serial.print(currentPositionRequest);
+        Serial.print(",");
+        Serial.print((int)position);
+        Serial.print(",");
+        Serial.print(curPosBeforeMove);
+        Serial.print(",");
+        Serial.print((int)commandDelta);
+        Serial.print(",");
+        Serial.print((int)lagFromActual);
+        Serial.print(",");
+        Serial.print(useTracking ? "T" : "N");
+        Serial.print(",");
+        Serial.print(curSpeedMilliHzBeforeMove / 1000);
+        Serial.print(",");
+        Serial.println(targetSpeedHz);
       }
 
       stepper->moveTo((int)position);

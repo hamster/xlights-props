@@ -564,6 +564,22 @@ void handleLedTest() {
   }
 }
 
+void handleCompactLog() {
+  if (server.hasArg("enable")) {
+    const String& enableArg = server.arg("enable");
+    bool enable = (enableArg.length() > 0 && enableArg[0] == 't');  // "true"
+    compactLogEnabled = enable;
+    if (enable) {
+      Serial.println("ms,ddpVal,cmdPos,curPos,delta,lag,profile,curSpeedHz,targetSpeedHz");
+    }
+    Serial.print("Compact motion log ");
+    Serial.println(enable ? "enabled" : "disabled");
+    server.send(200, "application/json", enable ? "{\"success\":true,\"compactLog\":true}" : "{\"success\":true,\"compactLog\":false}");
+  } else {
+    server.send(200, "application/json", compactLogEnabled ? "{\"compactLog\":true}" : "{\"compactLog\":false}");
+  }
+}
+
 // Static buffer for status data response (avoids heap allocation)
 static char statusDataBuffer[1700];
 
@@ -655,6 +671,7 @@ void handleStatusData() {
     "\"ledMaxPixelsReceived\":%d,"
     "\"ledsBlanked\":%s,"
     "\"ledTestMode\":%s,"
+    "\"compactLog\":%s,"
     "\"tmcEnabled\":%s,"
     "\"tmcConnected\":%s,"
     "\"tmcOverTempWarning\":%s,"
@@ -696,6 +713,7 @@ void handleStatusData() {
     ledMaxPixelsReceived,
     ledsBlanked ? "true" : "false",
     ledTestModeActive ? "true" : "false",
+    compactLogEnabled ? "true" : "false",
     tmcEnabledConfig ? "true" : "false",
     tmcConnected ? "true" : "false",
     tmcStatus.overTempWarning ? "true" : "false",
@@ -824,6 +842,9 @@ void startWebServer() {
 
   // LED test pattern (local bench testing without DDP)
   server.on("/led-test", HTTP_GET, handleLedTest);
+
+  // Temporary compact motion CSV log toggle
+  server.on("/compact-log", HTTP_GET, handleCompactLog);
 
   // TMC2209 stall fault acknowledgement
   server.on("/clear-tmc-stall", HTTP_GET, handleClearTmcStall);

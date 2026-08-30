@@ -28,6 +28,7 @@ void handleResetSettings();
 void handleHoming();
 void handleLocate();
 void handleLedTest();
+void handleCompactLog();
 void handleStatusData();
 void handleMove();
 void handleSetPosition();

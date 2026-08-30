@@ -6,6 +6,14 @@ Turn this into a standalone stepper-mover **+** pixel controller: one ESP32-S3 d
 
 Note: checked `git branch -a` / `git stash list` / `git log --all` — there is no leftover branch, stash, or commit anywhere in this repo with prior dual-core work. If there was earlier progress on splitting stepper/LED work across cores, it never made it into git, so treat this as a fresh design rather than something to dig up.
 
+## Open: tracking profile works at the extremes, not in the middle - eventually loses steps / drives into the end stop
+
+Reported after bench testing the fixes above: the tracking profile is good for fast moves and pretty good for slow moves, but there's a middle ground (speed-of-panning, not yet precisely characterized) where it isn't - eventually loses steps, or ends up commanded further than the rail actually allows and buzzes against the physical end stop. Not yet root-caused.
+
+Added a temporary diagnostic aid to help characterize it: a "Compact Motion Log" checkbox (DDP/LED Status box, `compactLogEnabled` in `protocol_common.h`) that prints one compact CSV line per processed DDP command instead of (or alongside) the verbose `protocolDebugConfig` dump - `ms,ddpVal,cmdPos,curPos,delta,lag,profile,curSpeedHz,targetSpeedHz`. Toggle via the checkbox or `GET /compact-log?enable=true/false`. Runtime-only, not persisted. **This is explicitly temporary** - remove it (or fold it into the planned Debug tab) once the underlying issue is understood and fixed; it shouldn't linger as permanent UI clutter.
+
+- [ ] Capture a compact log covering a "middle speed" pan through the failure and use it to find the actual mechanism - candidates worth checking against the data once it's available: whether `lagFromActual` grows unboundedly before hitting `stepperTrackMaxLagConfig` (i.e. the resync safety net firing too late or not at all), whether the DDP-commanded position itself is exceeding `[0, bottomPosition]` (an xLights curve or channel math issue, not a firmware motion-control issue), or whether steps are being lost mechanically (torque/acceleration still too aggressive somewhere in this specific speed range even after the 1/4-normal tuning).
+
 ## Added: small-move "tracking" profile for smooth slow panning
 
 Reported symptom: commanding small, frequent position changes (e.g. xLights slowly panning a DDP value, observed incrementing by ~1 unit / ~60 steps every 150-300ms) produced visibly jerky motion, not a smooth glide.
