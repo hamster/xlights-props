@@ -75,6 +75,7 @@ void handleRoot() {
   page.replace("{{STEPPER_TRACK_THRESHOLD}}", String(stepperTrackThresholdConfig));
   page.replace("{{STEPPER_TRACK_SPEED}}", String(stepperTrackSpeedConfig));
   page.replace("{{STEPPER_TRACK_ACCEL}}", String(stepperTrackAccelConfig));
+  page.replace("{{STEPPER_TRACK_MAX_LAG}}", String(stepperTrackMaxLagConfig));
 
   // Protocol configuration values
   page.replace("{{STEPPER_CONTROL_CHECKED}}", stepperControlEnabled ? "checked" : "");
@@ -224,26 +225,28 @@ void handleSaveStepper() {
     if (server.hasArg("stepperTrackAccel")) {
       stepperTrackAccelConfig = server.arg("stepperTrackAccel").toInt();
     }
+    if (server.hasArg("stepperTrackMaxLag")) {
+      stepperTrackMaxLagConfig = server.arg("stepperTrackMaxLag").toInt();
+    }
 
-    preferences.putInt("stepperSpeed", stepperSpeedConfig);
-    preferences.putInt("stepperAccel", stepperAccelConfig);
-    preferences.putInt("jumpStart", jumpStartConfig);
-    preferences.putBool("autoHomeOnBoot", autoHomeOnBootConfig);
-    // NVS keys are capped at 15 chars - "stepperSpeedHoming"/"stepperAccelHoming"
-    // (18 chars each) silently fail to write and never persist across reboot.
-    preferences.putInt("stepSpeedHome", stepperSpeedHomingConfig);
-    preferences.putInt("stepAccelHome", stepperAccelHomingConfig);
-    preferences.putBool("stepTrackEn", stepperTrackEnabledConfig);
-    preferences.putInt("stepTrackThresh", stepperTrackThresholdConfig);
-    preferences.putInt("stepTrackSpeed", stepperTrackSpeedConfig);
-    preferences.putInt("stepTrackAccel", stepperTrackAccelConfig);
-
-    // Apply the new settings immediately
-    stepper->setSpeedInHz(stepperSpeedConfig);
-    stepper->setAcceleration(stepperAccelConfig);
+    // Config variables are live immediately - the DDP position-handling
+    // loop reads them fresh on every packet, and jumpStart applies to the
+    // next move regardless. The actual flash write is deferred to
+    // persistStepperSettingsIfPending() (called from loop()) rather than
+    // done here synchronously: a Preferences write briefly disables the
+    // flash cache, and FastAccelStepper's step-generation interrupt fires
+    // continuously while the motor is moving, making a crash likely if
+    // this were written immediately mid-move (see the header comment on
+    // stepperSettingsPendingSave). Deliberately NOT calling
+    // stepper->setSpeedInHz()/setAcceleration() here either - forcing the
+    // "normal" profile onto an actively-moving stepper that might
+    // currently be cruising in tracking mode would itself be a jerk; the
+    // next DDP update (or a manual move, which sets its own profile)
+    // picks the right one naturally.
     stepper->setJumpStart(jumpStartConfig);
+    stepperSettingsPendingSave = true;
 
-    Serial.println("Stepper configuration saved!");
+    Serial.println("Stepper configuration updated (will save to flash once the motor is idle)");
     Serial.print("Speed: ");
     Serial.print(stepperSpeedConfig);
     Serial.print(" Hz, Acceleration: ");
@@ -259,7 +262,11 @@ void handleSaveStepper() {
     Serial.println(" Hz/s (takes effect on next homing run)");
 
     // Send JSON response
-    server.send(200, "application/json", "{\"success\":true,\"message\":\"Stepper settings saved and applied immediately!\"}");
+    if (stepper->isRunning()) {
+      server.send(200, "application/json", "{\"success\":true,\"message\":\"Stepper settings applied! Will finish saving to flash once the motor is idle.\"}");
+    } else {
+      server.send(200, "application/json", "{\"success\":true,\"message\":\"Stepper settings saved and applied immediately!\"}");
+    }
   } else {
     server.send(400, "application/json", "{\"success\":false,\"message\":\"Error: Missing stepper parameters\"}");
   }

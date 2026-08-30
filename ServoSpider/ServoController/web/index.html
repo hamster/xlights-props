@@ -301,7 +301,13 @@
           <div class="form-group">
             <label for="stepperTrackThreshold">Tracking Threshold (steps):</label>
             <input type="number" id="stepperTrackThreshold" name="stepperTrackThreshold" value="{{STEPPER_TRACK_THRESHOLD}}" min="1" max="100000" required>
-            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Moves at or below this size use the tracking profile; anything bigger uses the normal profile.</p>
+            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Moves at or below this size (measured from the previous commanded position, not the motor's actual position) use the tracking profile; anything bigger uses the normal profile.</p>
+          </div>
+
+          <div class="form-group">
+            <label for="stepperTrackMaxLag">Tracking Max Lag (steps):</label>
+            <input type="number" id="stepperTrackMaxLag" name="stepperTrackMaxLag" value="{{STEPPER_TRACK_MAX_LAG}}" min="1" max="1000000" required>
+            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Safety net: if the motor's actual position ever falls this far behind the commanded target, the normal profile is used regardless of the setting above, to resync rather than let it drift indefinitely.</p>
           </div>
 
           <div class="form-group">

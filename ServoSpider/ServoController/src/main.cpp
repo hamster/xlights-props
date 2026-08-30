@@ -23,6 +23,7 @@ Preferences preferences;
 // Variables for position tracking
 uint16_t oldPositionRequest = 0;
 float position = 0;
+float lastCommandedTargetPosition = 0;  // Previous DDP-commanded target, steps - see tracking-profile note in loop()
 
 // Uptime tracking
 unsigned long bootTime = 0;
@@ -96,9 +97,10 @@ void setup() {
   stepperSpeedHomingConfig = preferences.getInt("stepSpeedHome", stepperSpeedHoming);
   stepperAccelHomingConfig = preferences.getInt("stepAccelHome", stepperAccelHoming);
   stepperTrackEnabledConfig = preferences.getBool("stepTrackEn", true);
-  stepperTrackThresholdConfig = preferences.getInt("stepTrackThresh", 300);
-  stepperTrackSpeedConfig = preferences.getInt("stepTrackSpeed", 1000);
-  stepperTrackAccelConfig = preferences.getInt("stepTrackAccel", 3000);
+  stepperTrackThresholdConfig = preferences.getInt("stepTrackThresh", 2000);
+  stepperTrackSpeedConfig = preferences.getInt("stepTrackSpeed", stepperSpeed);
+  stepperTrackAccelConfig = preferences.getInt("stepTrackAccel", stepperAccel / 4);
+  stepperTrackMaxLagConfig = preferences.getInt("stepTrackMaxLag", 3000);
 
   // Load protocol configuration. Sanitize against stale NVS values from
   // before ArtNet was removed, when the enum was NONE=0/ARTNET=1/DDP=2 - a
@@ -206,6 +208,10 @@ void loop() {
   // Poll TMC2209 diagnostics / stall detection (no-op if not enabled)
   updateTmc();
 
+  // Finish saving Stepper Configuration to flash once the motor is idle,
+  // if a save is pending (no-op otherwise) - see stepperSettingsPendingSave.
+  persistStepperSettingsIfPending();
+
   server.handleClient();
   handleSerialCommands();
 
@@ -249,8 +255,27 @@ void loop() {
       // small updates blend into continuous motion; anything bigger (a
       // deliberate jump) still gets full Speed/Acceleration for a snappy
       // repositioning move.
-      int moveDelta = abs((int)position - stepper->getCurrentPosition());
-      bool useTracking = stepperTrackEnabledConfig && moveDelta > 0 && moveDelta <= stepperTrackThresholdConfig;
+      //
+      // The size of "this move" is measured as the change from the
+      // previous *commanded* target, not from the stepper's current actual
+      // position - using actual position caused a spurious speed burst at
+      // the ends of travel: near a reversal, the stepper is still
+      // physically travelling in the old direction while DDP starts
+      // commanding the new direction, so the gap to actual position
+      // balloons even though each individual DDP increment is still
+      // small. stepperTrackMaxLagConfig is a separate, much larger safety
+      // net: if the stepper's actual position ever falls genuinely far
+      // behind the commanded target (not just a momentary reversal
+      // artifact), fall back to the normal profile to resync rather than
+      // let it drift indefinitely.
+      float commandDelta = fabs(position - lastCommandedTargetPosition);
+      float lagFromActual = fabs(position - (float)stepper->getCurrentPosition());
+      lastCommandedTargetPosition = position;
+
+      bool useTracking = stepperTrackEnabledConfig
+                          && commandDelta > 0
+                          && commandDelta <= stepperTrackThresholdConfig
+                          && lagFromActual <= stepperTrackMaxLagConfig;
 
       if (useTracking) {
         stepper->setSpeedInHz(stepperTrackSpeedConfig);

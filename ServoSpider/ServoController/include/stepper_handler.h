@@ -64,6 +64,25 @@ extern int stepperTrackAccelConfig;      // steps/s^2 - keep well below stepperA
                                           // demand at the start of a move scales with this, not with
                                           // the (lower) target speed, so it must be independently gentle
                                           // or the motor can stall/skip steps starting from near-rest.
+// The tracking-vs-normal decision is based on the size of the *commanded*
+// increment (new target vs. previous target), not on how far the stepper's
+// actual position currently is from that target - using actual-position
+// distance caused a spurious burst of full-speed motion at the ends of
+// travel, where a lagging stepper (still catching up in the old direction
+// as DDP starts commanding the reverse direction) sees a large gap to the
+// new target even though each individual DDP increment is still small.
+// This is a separate, much larger safety threshold: if the stepper's
+// actual position ever falls this far behind the commanded target
+// (genuine sustained lag, not a momentary reversal artifact), the normal
+// profile is used regardless, to resync rather than drift indefinitely.
+extern int stepperTrackMaxLagConfig;     // steps
+
+// Set by handleSaveStepper() instead of writing to flash immediately, since
+// a Preferences write briefly disables the flash cache and FastAccelStepper's
+// step-generation interrupt fires continuously while moving - see
+// persistStepperSettingsIfPending().
+extern bool stepperSettingsPendingSave;
+void persistStepperSettingsIfPending();  // Call every loop() iteration
 
 // Stepper functions
 void IRAM_ATTR handleHomingInterrupt();

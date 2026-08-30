@@ -1,6 +1,8 @@
 #include "stepper_handler.h"
 #include <Preferences.h>
 
+extern Preferences preferences;
+
 // Stepper global variables
 FastAccelStepperEngine engine = FastAccelStepperEngine();
 FastAccelStepper *stepper = NULL;
@@ -24,16 +26,49 @@ bool autoHomeOnBootConfig = true;
 int stepperSpeedHomingConfig = stepperSpeedHoming;
 int stepperAccelHomingConfig = stepperAccelHoming;
 
-// Small-move tracking profile defaults - deliberately much gentler than the
-// main Speed/Acceleration, not just a scaled-down version of them. Starting
-// guesses only; needs on-bench tuning against the actual trolley's mass and
-// rope tension. Too high and it stalls/skips steps trying to move from
-// near-rest on every small update; too low and the trolley visibly lags
-// behind a fast-panning DDP curve.
+// Small-move tracking profile defaults. Validated on real hardware (not
+// just a theoretical guess): same speed as the normal profile, but
+// acceleration cut to roughly 1/4, with a 2000-step threshold. What
+// matters most for avoiding stalls/skipped steps is the lower
+// acceleration specifically - target speed barely matters for small
+// moves since they rarely get anywhere near cruise speed anyway. Still
+// worth re-tuning per prop: too aggressive an accel stalls/skips steps
+// moving from near-rest on every small update; too gentle and the
+// trolley visibly lags behind a fast-panning DDP curve.
 bool stepperTrackEnabledConfig = true;
-int stepperTrackThresholdConfig = 300;
-int stepperTrackSpeedConfig = 1000;
-int stepperTrackAccelConfig = 3000;
+int stepperTrackThresholdConfig = 2000;
+int stepperTrackSpeedConfig = stepperSpeed;
+int stepperTrackAccelConfig = stepperAccel / 4;
+int stepperTrackMaxLagConfig = 3000;
+
+bool stepperSettingsPendingSave = false;
+
+// Deferred flash write for Stepper Configuration settings - see the
+// declaration comment in stepper_handler.h for why this can't just happen
+// synchronously inside the save handler.
+void persistStepperSettingsIfPending() {
+  if (!stepperSettingsPendingSave) {
+    return;
+  }
+  if (stepper != NULL && stepper->isRunning()) {
+    return;  // wait for a quiet moment - values are already live in RAM
+  }
+
+  preferences.putInt("stepperSpeed", stepperSpeedConfig);
+  preferences.putInt("stepperAccel", stepperAccelConfig);
+  preferences.putInt("jumpStart", jumpStartConfig);
+  preferences.putBool("autoHomeOnBoot", autoHomeOnBootConfig);
+  preferences.putInt("stepSpeedHome", stepperSpeedHomingConfig);
+  preferences.putInt("stepAccelHome", stepperAccelHomingConfig);
+  preferences.putBool("stepTrackEn", stepperTrackEnabledConfig);
+  preferences.putInt("stepTrackThresh", stepperTrackThresholdConfig);
+  preferences.putInt("stepTrackSpeed", stepperTrackSpeedConfig);
+  preferences.putInt("stepTrackAccel", stepperTrackAccelConfig);
+  preferences.putInt("stepTrackMaxLag", stepperTrackMaxLagConfig);
+
+  stepperSettingsPendingSave = false;
+  Serial.println("Stepper settings persisted to flash (motor now idle)");
+}
 
 // Homing switch interrupt
 //
