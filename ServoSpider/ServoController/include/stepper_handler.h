@@ -34,8 +34,14 @@ enum HomingState {
   HOMING_MOVE_OFF_BACKWARD,
   HOMING_WAIT_CLEAR_SWITCH,
   HOMING_FIND_INITIAL,
+  HOMING_SETTLE_AFTER_INITIAL,  // Wait for forceStop() to genuinely finish before the next move -
+                                // forceStop() isn't instantaneous, so issuing move(2500) immediately
+                                // assumed the motor was already at rest when it could still be
+                                // coasting/decelerating from the search, producing a visible
+                                // decelerate-reverse-reaccelerate "pause" (2026-08-30)
   HOMING_MOVE_OFF_INITIAL,      // Move off the switch after finding initial position
   HOMING_FIND_OTHER_END,
+  HOMING_SETTLE_AFTER_OTHER_END,  // Same as HOMING_SETTLE_AFTER_INITIAL, other end
   HOMING_MOVE_OFF_OTHER_END,    // Move off the switch after finding other end
   HOMING_RETURN_TO_ZERO,
   HOMING_COMPLETE,

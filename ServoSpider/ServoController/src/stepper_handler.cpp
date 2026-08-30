@@ -273,6 +273,24 @@ void updateStepCheck() {
   }
 }
 
+static unsigned long lastWaitClearPrintMs = 0;
+
+// Shared periodic position/speed print for the three "wait for a move-off-
+// switch move to finish" states, to directly see a reported "pauses
+// partway through, then continues" symptom rather than guessing at it
+// (2026-08-30). Uses its own timer, separate from homingStateTime (which
+// these states also use for their own timeouts).
+static void printWaitClearDiag(unsigned long currentTime) {
+  if (currentTime - lastWaitClearPrintMs < 100) return;
+  lastWaitClearPrintMs = currentTime;
+  Serial.print("  [wait clear switch] pos=");
+  Serial.print(stepper->getCurrentPosition());
+  Serial.print(" speed=");
+  Serial.print(stepper->getCurrentSpeedInMilliHz() / 1000);
+  Serial.print(" running=");
+  Serial.println(stepper->isRunning() ? 1 : 0);
+}
+
 void updateHoming() {
   // Deferred from the ISR (see handleHomingInterrupt) - forceStop() isn't
   // IRAM-safe, so it's issued here instead, in normal task context, as soon
@@ -436,7 +454,8 @@ void updateHoming() {
     break;
 
   case HOMING_WAIT_CLEAR_SWITCH:
-    // Wait for the move-off-switch movement to complete
+    // Wait for the move-off-switch movement to complete.
+    printWaitClearDiag(currentTime);
     if (!stepper->isRunning()) {
       Serial.println("Cleared switch, starting homing search...");
       homingState = HOMING_FIND_INITIAL;
@@ -497,22 +516,45 @@ void updateHoming() {
 
     if (interruptTriggered) {
       Serial.println("\nFound initial homing position");
-      // Motor is already stopped by interrupt
+      // Safe to relabel the pulse count immediately - setCurrentPosition()
+      // is just bookkeeping, not a motion command, so it doesn't need to
+      // wait for anything.
       stepper->setCurrentPosition(0);
       interruptTriggered = false;
+      homingState = HOMING_SETTLE_AFTER_INITIAL;
+      homingStateTime = currentTime;
+    }
+    break;
 
-      // Move off the switch before reversing
+  case HOMING_SETTLE_AFTER_INITIAL:
+    // Wait for the interrupt-triggered forceStop() to actually finish before
+    // issuing the next move - forceStop() isn't instantaneous, and issuing
+    // move(2500) immediately used to assume the motor was already at rest
+    // when it could still be coasting/decelerating from the search. That
+    // produced a real, visible decelerate-reverse-reaccelerate "pause" once
+    // stepperAccelHomingConfig was lowered enough (from the earlier stall
+    // fix) to make it perceptible instead of instantaneous (2026-08-30).
+    printWaitClearDiag(currentTime);
+    if (!stepper->isRunning()) {
       Serial.println("Moving off switch...");
       stepper->move(2500);  // Move forward 2500 steps
       tmcResetStallRampTimer();
       homingState = HOMING_MOVE_OFF_INITIAL;
       homingStateTime = currentTime;
       homingCounter = 0;
+    } else if (currentTime - homingStateTime >= 2000) {  // shouldn't take long - safety net
+      Serial.println("ERROR: Timed out waiting for stop to settle after finding initial position!");
+      stepper->forceStop();
+      stepper->setAcceleration(stepperAccelConfig);
+      stepper->setSpeedInHz(stepperSpeedConfig);
+      homingState = HOMING_ERROR;
+      homed = false;
     }
     break;
 
   case HOMING_MOVE_OFF_INITIAL:
     // Wait for move to complete and switch to clear
+    printWaitClearDiag(currentTime);
     if (!stepper->isRunning() && digitalRead(homingSwitchPin) == LOW) {
       Serial.println("Switch cleared, reversing...");
       stepper->runForward();
@@ -554,25 +596,43 @@ void updateHoming() {
 
     if (interruptTriggered) {
       Serial.println();
+      // Capture the position right away, at the moment the interrupt is
+      // noticed - accurate to the actual trigger point. bottomPosition
+      // must be computed from this now, not after waiting to settle below
+      // (residual coasting would move it further before it's read).
       int endPosition = stepper->getCurrentPosition();
       Serial.print("Found other end at position ");
       Serial.println(endPosition);
-
-      // Motor is already stopped by interrupt
       bottomPosition = endPosition / 2;
       interruptTriggered = false;
+      homingState = HOMING_SETTLE_AFTER_OTHER_END;
+      homingStateTime = currentTime;
+    }
+    break;
 
-      // Move off the switch before returning to center
+  case HOMING_SETTLE_AFTER_OTHER_END:
+    // Wait for the interrupt-triggered forceStop() to actually finish -
+    // see the comment in HOMING_SETTLE_AFTER_INITIAL for why.
+    printWaitClearDiag(currentTime);
+    if (!stepper->isRunning()) {
       Serial.println("Moving off switch...");
       stepper->move(-2500);  // Move backward 2500 steps
       tmcResetStallRampTimer();
       homingState = HOMING_MOVE_OFF_OTHER_END;
       homingStateTime = currentTime;
+    } else if (currentTime - homingStateTime >= 2000) {  // shouldn't take long - safety net
+      Serial.println("ERROR: Timed out waiting for stop to settle after finding other end!");
+      stepper->forceStop();
+      stepper->setAcceleration(stepperAccelConfig);
+      stepper->setSpeedInHz(stepperSpeedConfig);
+      homingState = HOMING_ERROR;
+      homed = false;
     }
     break;
 
   case HOMING_MOVE_OFF_OTHER_END:
     // Wait for move to complete and switch to clear
+    printWaitClearDiag(currentTime);
     if (!stepper->isRunning() && digitalRead(homingSwitchPin) == LOW) {
       Serial.println("Switch cleared, returning to home position");
       stepper->setAcceleration(stepperAccelConfig);
