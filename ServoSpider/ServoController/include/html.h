@@ -1483,9 +1483,10 @@ function showNotification(message, isSuccess) {
             <select id="stepperTrackMode" name="stepperTrackMode" onchange="toggleTrackModeFields()" style="width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box; border: 2px solid #ddd; border-radius: 4px;">
               <option value="0" {{TRACK_MODE_DIRECT_SEL}}>Direct (moveTo every packet - original behavior)</option>
               <option value="1" {{TRACK_MODE_COALESCE_SEL}}>Coalesce (batch small updates into fewer, larger moves)</option>
-              <option value="2" {{TRACK_MODE_STREAMING_SEL}}>Streaming (continuous speed, snaps to position once quiet)</option>
+              <option value="2" {{TRACK_MODE_STREAMING_SEL}}>Streaming (continuous speed, snaps to position once quiet) - NOT RECOMMENDED, see note</option>
             </select>
             <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Experimental - added to compare on the bench after log analysis showed Direct mode's jerkiness comes from moveTo() always planning to decelerate to a full stop at each new nearby target, not primarily from accel/speed tuning. All three still use the Tracking Speed/Acceleration/Threshold above.</p>
+            <p style="color: #b00; font-size: 12px; margin: 4px 0 0;"><strong>Streaming mode is currently shelved</strong> - bench-testing (2026-08-30) found it repeatedly stalled or froze the trolley for 15+ seconds at a time even after fixing two confirmed logic bugs, with a remaining issue that looks like a deeper stepper-library queue interaction rather than a quick fix. Direct (and Coalesce, which performed nearly identically to Direct in testing) are the validated, recommended choices - see TODO.md for the full writeup.</p>
           </div>
 
           <div class="form-group" id="coalesceFieldsGroup">
