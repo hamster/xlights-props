@@ -5,3 +5,4 @@
 .vscode/ipch
 build/
 tools/__pycache__/
+*.log
