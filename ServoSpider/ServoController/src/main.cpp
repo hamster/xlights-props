@@ -194,7 +194,21 @@ void updateCoalesceMode() {
 void updateStreamingMode() {
   if (stepper->isRunning()) {
     int curPos = stepper->getCurrentPosition();
-    if (curPos <= 0 || curPos >= bottomPosition) {
+    // Strictly past the boundary, not at-or-past: sitting exactly at 0 or
+    // bottomPosition is the normal resting position at either extreme (every
+    // run starts there), not an overshoot. Using <=/>= here was confirmed on
+    // the bench (2026-08-30) to force-stop the instant a move starts from
+    // position 0, and since the restart logic below re-issues
+    // runForward()/runBackward() again on the very next tick whenever
+    // !stepper->isRunning() (true immediately after that forceStop()), the
+    // two together looped: start, immediately force-stop before completing
+    // even one clean ramp, restart, repeat - never actually reaching a
+    // sustained run. That rapid stop/restart cycling is exactly the kind of
+    // "asked to move without a clean ramp" pattern that stalls a stepper,
+    // and is what actually happened - the trolley stalled/stuck attempting
+    // this. Only genuinely overshooting past either boundary should trip
+    // the clamp.
+    if (curPos < 0 || curPos > bottomPosition) {
       stepper->forceStop();
     }
   }
