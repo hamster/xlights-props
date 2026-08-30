@@ -191,6 +191,11 @@ void updateCoalesceMode() {
 // "never overshoot" guarantee the way moveTo() does - confirmed by
 // simulation against real logged DDP data showing exactly this failure
 // mode before this clamp was added.
+// Set whenever this function calls forceStop() itself, so the restart logic
+// below waits for that stop to genuinely finish before issuing a fresh
+// runForward()/runBackward() - see the full explanation at the restart site.
+static bool streamStopSettling = false;
+
 void updateStreamingMode() {
   if (stepper->isRunning()) {
     int curPos = stepper->getCurrentPosition();
@@ -198,18 +203,11 @@ void updateStreamingMode() {
     // bottomPosition is the normal resting position at either extreme (every
     // run starts there), not an overshoot. Using <=/>= here was confirmed on
     // the bench (2026-08-30) to force-stop the instant a move starts from
-    // position 0, and since the restart logic below re-issues
-    // runForward()/runBackward() again on the very next tick whenever
-    // !stepper->isRunning() (true immediately after that forceStop()), the
-    // two together looped: start, immediately force-stop before completing
-    // even one clean ramp, restart, repeat - never actually reaching a
-    // sustained run. That rapid stop/restart cycling is exactly the kind of
-    // "asked to move without a clean ramp" pattern that stalls a stepper,
-    // and is what actually happened - the trolley stalled/stuck attempting
-    // this. Only genuinely overshooting past either boundary should trip
-    // the clamp.
+    // position 0. Only genuinely overshooting past either boundary should
+    // trip the clamp.
     if (curPos < 0 || curPos > bottomPosition) {
       stepper->forceStop();
+      streamStopSettling = true;
     }
   }
 
@@ -257,6 +255,24 @@ void updateStreamingMode() {
   stepper->setAcceleration(stepperTrackAccelConfig);
   stepper->setSpeedInHz(speedHz);
 
+  if (streamStopSettling) {
+    // A forceStop() was issued (above, or below on a prior tick) and hasn't
+    // been confirmed finished yet. FastAccelStepper's forceStop() is not
+    // guaranteed complete within a single tick (the library tracks this
+    // internally as an "incomplete immediate stop"), and re-issuing
+    // runForward()/runBackward() before the ramp generator has actually
+    // settled back to idle skips the ramp-up entirely - the new command
+    // just continues whatever speed the generator's internal state still
+    // reflects, commanding full target speed with no built-up momentum.
+    // Confirmed on the bench (2026-08-30): this is what actually stalled
+    // the motor ("moving too fast to get it started... no momentum built
+    // up yet so it could not actually move"), not just a log/UI artifact.
+    // So: once we've asked for a stop, wait for isRunning() to actually go
+    // false before allowing any restart below.
+    if (stepper->isRunning()) return;
+    streamStopSettling = false;
+  }
+
   if (newDirection != streamCurrentDirection || !stepper->isRunning()) {
     if (newDirection > 0) {
       stepper->runForward();
@@ -264,8 +280,20 @@ void updateStreamingMode() {
       stepper->runBackward();
     } else {
       stepper->forceStop();
+      streamStopSettling = true;
     }
     streamCurrentDirection = newDirection;
+  } else {
+    // Already running in the same direction - per FastAccelStepper's own
+    // docs, setSpeedInHz()/setAcceleration() above only take effect after
+    // move/moveTo/runForward/runBackward/applySpeedAcceleration(), NOT on
+    // their own. Without this, only the very first speed estimate (the one
+    // in effect when runForward()/runBackward() was actually called) ever
+    // reached the motor - confirmed on the bench (2026-08-30): actual speed
+    // rode the ramp up to the configured max once and then never changed
+    // again for the rest of a 12s run, ignoring every subsequent (lower)
+    // rate estimate, producing a huge, growing position error.
+    stepper->applySpeedAcceleration();
   }
 
   logCompactMotion(oldPositionRequest, (int)streamRawTarget, stepper->getCurrentPosition(), 0,
