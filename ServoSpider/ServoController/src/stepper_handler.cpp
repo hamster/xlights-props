@@ -373,6 +373,22 @@ void updateHoming() {
     pendingForceStop = false;
     long tripPosition = stepper->getCurrentPosition();
     stepper->forceStop();
+    if (homingState == HOMING_CLEAR_STUCK_SWITCH) {
+      // The switch is already known HIGH throughout this state (that's why
+      // we're here) - a RISING edge firing again this soon is suspicious,
+      // not a real "found the far end" event. Most likely explanation: EMI
+      // from the stepper driver's own current inrush right as runForward()/
+      // runBackward() starts, coupling into the switch's GPIO line (no
+      // hardware debounce cap on this input, just the pullup) and reading
+      // as a spurious edge - which forceStop()s the just-started move
+      // before it ever ramps up, so the move silently never happens and
+      // this state times out. Seen once on the bench (2026-08-30);
+      // flagged explicitly here instead of only being inferable from the
+      // move never showing any speed in the diagnostic log.
+      Serial.print("NOTE: Switch interrupt fired again during stuck-switch clearing (pos=");
+      Serial.print(tripPosition);
+      Serial.println(") - likely spurious/EMI, not a real trip. The just-issued move was force-stopped before it could start; this attempt will likely time out and retry the other direction.");
+    }
     if (!isHoming() && homed) {
       const long ZERO_TRIP_TOLERANCE = 200;  // steps
       if (labs(tripPosition) > ZERO_TRIP_TOLERANCE) {
