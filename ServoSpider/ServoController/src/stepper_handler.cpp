@@ -375,20 +375,32 @@ void updateHoming() {
     pendingForceStop = false;
     long tripPosition = stepper->getCurrentPosition();
 
-    // A trip while normal (non-homing) motion is already carrying the
-    // stepper *away* from the switch (positive speed - see the sign
-    // convention noted elsewhere: runForward()/increasing position is away
-    // from the switch, runBackward()/decreasing position is toward it)
-    // can't be a genuine new arrival - moving away and arriving somewhere
-    // are contradictory. Found on the bench (2026-08-30): commanding a move
-    // away while resting right on the switch immediately killed the move,
-    // because a normal DDP-commanded departure from that position is
-    // exactly the case where switch contact bounce (make-break-make as the
-    // actuator lifts off) is most likely, and every one of those bounces is
-    // a RISING edge the ISR can't help but catch. Restricted to non-homing
-    // operation - an active homing search must still stop on any trip
-    // regardless of direction, since detecting the trip *is* the search.
-    if (!isHoming() && stepper->getCurrentSpeedInMilliHz() > 0) {
+    // A trip while normal (non-homing) motion is headed *away* from the
+    // switch can't be a genuine new arrival - moving away and arriving
+    // somewhere are contradictory. Found on the bench (2026-08-30):
+    // commanding a move away while resting right on the switch immediately
+    // killed the move, because a normal DDP-commanded departure from that
+    // position is exactly the case where switch contact bounce
+    // (make-break-make as the actuator lifts off) is most likely, and every
+    // one of those bounces is a RISING edge the ISR can't help but catch.
+    //
+    // Checked two ways, either one enough to call it a bounce:
+    //  - stepper->targetPos() vs. tripPosition: where the move is *headed*,
+    //    known the instant it's issued regardless of ramp state. This is
+    //    the primary signal - a bounce right at the very start of a move
+    //    (as seen on the bench: tripPosition just a few steps from where
+    //    the move began) can fire before getCurrentSpeedInMilliHz() has
+    //    any measurable speed to report yet, so target alone already
+    //    catches what speed alone missed.
+    //  - getCurrentSpeedInMilliHz() > 0: kept as a secondary check for the
+    //    (probably rare) case where target isn't meaningful for some other
+    //    reason but real motion is already measurably underway.
+    // Restricted to non-homing operation - an active homing search must
+    // still stop on any trip regardless of direction, since detecting the
+    // trip *is* the search, and targetPos() isn't kept updated during a
+    // continuous run() search anyway (see FastAccelStepper.h's own note on
+    // "keep running" mode).
+    if (!isHoming() && (stepper->targetPos() > tripPosition || stepper->getCurrentSpeedInMilliHz() > 0)) {
       Serial.print("Switch interrupt while moving away from switch (pos=");
       Serial.print(tripPosition);
       Serial.println(") - treating as contact bounce, not a real trip; move not stopped");
