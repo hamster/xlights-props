@@ -74,9 +74,9 @@ static bool setTunable(const String& name, const String& valueStr) {
   if (name == "streamSettle") { stepperStreamSettleMsConfig = v; return true; }
   if (name == "compactLog") { compactLogEnabled = (v != 0); return true; }
   if (name == "protocolDebug") { protocolDebugConfig = (v != 0); return true; }
-  // Applied fresh by startHoming()/HOMING_WAIT_CLEAR_SWITCH each time a
-  // search actually begins, so just updating the config var here is enough -
-  // no immediate stepper call needed (matches every other tunable above).
+  // Applied fresh by startHoming()/HOMING_SETTLE each time a search
+  // actually begins, so just updating the config var here is enough - no
+  // immediate stepper call needed (matches every other tunable above).
   if (name == "homeSpeed") { stepperSpeedHomingConfig = v; return true; }
   if (name == "homeAccel") { stepperAccelHomingConfig = v; return true; }
   if (name == "lookaheadSteps") { stepperLookaheadStepsConfig = v; return true; }

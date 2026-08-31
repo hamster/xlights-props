@@ -26,27 +26,50 @@
 #define stepperSpeed 6500
 #define stepperSpeedHoming 6000
 
-// Homing states
+// Homing states. Simplified 2026-08-30 from an earlier 14-state version that
+// inserted a fixed-distance "move off the switch, wait, re-verify clear"
+// detour between finding each end and starting the next search/return. That
+// detour was never actually necessary - once the switch has tripped and
+// we're reversing direction, we're moving away from it by definition, and
+// the trigger is a RISING edge that physically can't fire again until the
+// far end. It also directly caused a real, reported bug: a visible pause
+// right after moving off the switch, since the detour was itself a discrete
+// move that fully decelerated to a stop before the next command was issued.
+// Removing it fixes that pause at the root instead of tuning around it, and
+// matches the mechanical procedure as actually described (find initial ->
+// immediately reverse and count -> find other end -> half the count is the
+// bottom -> return to zero), with no separate "clear the switch" leg in
+// between except the one genuinely needed at boot if the switch already
+// reads triggered.
 enum HomingState {
   HOMING_IDLE,
   HOMING_CHECK_SWITCH,
-  HOMING_MOVE_OFF_FORWARD,
-  HOMING_MOVE_OFF_BACKWARD,
-  HOMING_WAIT_CLEAR_SWITCH,
-  HOMING_FIND_INITIAL,
-  HOMING_SETTLE_AFTER_INITIAL,  // Wait for forceStop() to genuinely finish before the next move -
-                                // forceStop() isn't instantaneous, so issuing move(2500) immediately
-                                // assumed the motor was already at rest when it could still be
-                                // coasting/decelerating from the search, producing a visible
-                                // decelerate-reverse-reaccelerate "pause" (2026-08-30)
-  HOMING_MOVE_OFF_INITIAL,      // Move off the switch after finding initial position
-  HOMING_FIND_OTHER_END,
-  HOMING_SETTLE_AFTER_OTHER_END,  // Same as HOMING_SETTLE_AFTER_INITIAL, other end
-  HOMING_MOVE_OFF_OTHER_END,    // Move off the switch after finding other end
+  HOMING_CLEAR_STUCK_SWITCH,  // Switch already reads triggered at boot, so which direction actually
+                              // moves off it is unknown - try one direction with a short timeout, and
+                              // if it doesn't clear, try the other; if neither clears, the switch
+                              // itself is stuck (HOMING_ERROR). One continuous slow run per direction,
+                              // not a series of tiny incremental moves.
+  HOMING_FIND_INITIAL,        // Search toward the switch (runBackward()) until it trips.
+  HOMING_SETTLE,              // Wait for a genuine stop - forceStop() isn't instantaneous, so
+                               // starting the next move immediately can still be fighting the tail
+                               // end of the previous move's deceleration. Reused for both ends;
+                               // homingSettleAction says what to do once actually stopped.
+  HOMING_FIND_OTHER_END,       // Reverse (runForward()) and search until the switch trips again.
   HOMING_RETURN_TO_ZERO,
   HOMING_COMPLETE,
   HOMING_ERROR
 };
+
+// What HOMING_SETTLE should do once the motor has genuinely come to a stop -
+// it's reused at every "come to a stop, then do something specific" point
+// in the sequence, which each need a different next action.
+enum HomingSettleAction {
+  SETTLE_THEN_CLEAR_BACKWARD,   // Forward didn't clear a stuck-at-boot switch - try backward instead.
+  SETTLE_THEN_FIND_INITIAL,     // Cleared a stuck switch (or it wasn't stuck) - search for the initial position.
+  SETTLE_THEN_FIND_OTHER_END,   // Just found the initial position - reverse and search for the other end.
+  SETTLE_THEN_RETURN_TO_ZERO,   // Just found the other end - bottomPosition is known, return to 0.
+};
+extern HomingSettleAction homingSettleAction;
 
 // Stepper global variables
 extern FastAccelStepperEngine engine;

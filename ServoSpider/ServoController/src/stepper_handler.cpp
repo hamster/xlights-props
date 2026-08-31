@@ -19,6 +19,30 @@ bool homed = false;
 HomingState homingState = HOMING_IDLE;
 unsigned long homingStateTime = 0;
 int homingCounter = 0;
+HomingSettleAction homingSettleAction = SETTLE_THEN_FIND_INITIAL;
+
+// Overall homing watchdog (2026-08-30 simplification, replacing a pile of
+// separate 10s/30s/2s per-state timeouts that could stack to 90+ seconds
+// worst case before erroring out - exactly what happened during a real
+// bench session). Reference point, from the actual hardware: at 6500 Hz the
+// trolley makes a full down-and-up round trip in about 5 seconds, so ~15s
+// (3x that) at 6500 Hz is a reasonable "something is wrong" cutoff. A
+// slower configured homing speed takes proportionally longer to cover the
+// same physical distance, so the timeout scales inversely with speed
+// (computed fresh in startHoming(), from whatever stepperSpeedHomingConfig
+// actually is - not the compiled default) rather than staying a fixed
+// constant that would false-trip at a deliberately gentler homing speed.
+static const float HOMING_TIMEOUT_REFERENCE_SPEED_HZ = 6500.0f;
+static const unsigned long HOMING_TIMEOUT_REFERENCE_MS = 15000;
+static const unsigned long HOMING_TIMEOUT_MIN_MS = 8000;  // floor, in case speed is configured very high
+static unsigned long homingOverallTimeoutMs = HOMING_TIMEOUT_REFERENCE_MS;
+static unsigned long homingStartTime = 0;
+
+// Short, fixed budget for clearing a switch that already reads triggered at
+// boot - this is a tiny fraction of full travel (a handful of seconds at
+// most), not related to a full round-trip, so it isn't scaled the way the
+// main search watchdog above is.
+static const unsigned long HOMING_CLEAR_STUCK_TIMEOUT_MS = 2000;
 
 StepCheckState stepCheckState = STEPCHECK_IDLE;
 bool stepCheckTripped = false;
@@ -184,12 +208,24 @@ void startHoming() {
   homed = false;
   homingState = HOMING_CHECK_SWITCH;
   homingStateTime = millis();
+  homingStartTime = homingStateTime;
   homingCounter = 0;
   interruptTriggered = false;
   pendingForceStop = false;  // Defensive: never let a stale flag from before this attempt fire mid-sequence
 
   stepper->setAcceleration(stepperAccelHomingConfig);
   stepper->setSpeedInHz(stepperSpeedHomingConfig);
+
+  // Scale the overall watchdog to the speed we're actually about to home
+  // at - see the comment above homingOverallTimeoutMs.
+  float speedHz = (stepperSpeedHomingConfig > 0) ? (float)stepperSpeedHomingConfig : HOMING_TIMEOUT_REFERENCE_SPEED_HZ;
+  homingOverallTimeoutMs = (unsigned long)(HOMING_TIMEOUT_REFERENCE_MS * (HOMING_TIMEOUT_REFERENCE_SPEED_HZ / speedHz));
+  if (homingOverallTimeoutMs < HOMING_TIMEOUT_MIN_MS) homingOverallTimeoutMs = HOMING_TIMEOUT_MIN_MS;
+  Serial.print("Homing watchdog: ");
+  Serial.print(homingOverallTimeoutMs);
+  Serial.print(" ms (homing speed ");
+  Serial.print(stepperSpeedHomingConfig);
+  Serial.println(" Hz)");
 }
 
 bool isHoming() {
@@ -273,17 +309,20 @@ void updateStepCheck() {
   }
 }
 
-static unsigned long lastWaitClearPrintMs = 0;
+static unsigned long lastHomingDiagPrintMs = 0;
 
-// Shared periodic position/speed print for the three "wait for a move-off-
-// switch move to finish" states, to directly see a reported "pauses
-// partway through, then continues" symptom rather than guessing at it
-// (2026-08-30). Uses its own timer, separate from homingStateTime (which
-// these states also use for their own timeouts).
-static void printWaitClearDiag(unsigned long currentTime) {
-  if (currentTime - lastWaitClearPrintMs < 100) return;
-  lastWaitClearPrintMs = currentTime;
-  Serial.print("  [wait clear switch] pos=");
+// Shared periodic position/speed print for every homing state that's
+// waiting on something (a search interrupt, a genuine stop, a switch
+// clearing) - added (2026-08-30) to directly see symptoms like "pauses
+// partway through, then continues" or a real stall rather than guessing at
+// them. Uses its own timer, separate from homingStateTime (which these
+// states also use for their own timeouts).
+static void printHomingDiag(unsigned long currentTime) {
+  if (currentTime - lastHomingDiagPrintMs < 100) return;
+  lastHomingDiagPrintMs = currentTime;
+  Serial.print("  [homing] state=");
+  Serial.print((int)homingState);
+  Serial.print(" pos=");
   Serial.print(stepper->getCurrentPosition());
   Serial.print(" speed=");
   Serial.print(stepper->getCurrentSpeedInMilliHz() / 1000);
@@ -375,14 +414,31 @@ void updateHoming() {
 
   unsigned long currentTime = millis();
 
+  // Single overall homing watchdog - see homingOverallTimeoutMs's comment.
+  // Replaces what used to be six separate per-state timeouts (10s/30s/2s
+  // each) that could stack to 90+ seconds worst case.
+  if (isHoming() && (currentTime - homingStartTime >= homingOverallTimeoutMs)) {
+    Serial.print("ERROR: Homing timed out after ");
+    Serial.print(currentTime - homingStartTime);
+    Serial.println(" ms - aborting");
+    stepper->forceStop();
+    stepper->setAcceleration(stepperAccelConfig);
+    stepper->setSpeedInHz(stepperSpeedConfig);
+    homingState = HOMING_ERROR;
+    homed = false;
+    return;
+  }
+
   switch (homingState) {
   case HOMING_CHECK_SWITCH:
     // Check if switch is already triggered at startup
     // Based on actual hardware: HIGH = switch triggered, LOW = switch not triggered
     if (digitalRead(homingSwitchPin) == HIGH) {
-      Serial.println("Homing switch triggered at bootup, will move off switch...");
-      homingState = HOMING_MOVE_OFF_FORWARD;
-      homingCounter = 0;
+      Serial.println("Homing switch triggered at bootup, clearing it...");
+      homingCounter = 0;  // 0 = trying forward first, 1 = trying backward (retry)
+      stepper->runForward();
+      tmcResetStallRampTimer();
+      homingState = HOMING_CLEAR_STUCK_SWITCH;
       homingStateTime = currentTime;
     } else {
       // Switch is clear, go directly to finding initial position
@@ -395,207 +451,60 @@ void updateHoming() {
     }
     break;
 
-  case HOMING_MOVE_OFF_FORWARD:
-    // Try moving forward to clear the switch
-    // Based on actual hardware: HIGH = switch triggered, LOW = switch not triggered
-    if (currentTime - homingStateTime >= 100) {  // Check every 100ms
-      if (digitalRead(homingSwitchPin) == LOW) {
-        // Switch cleared (pin went LOW), move a bit more to get fully off
-        Serial.println("Forward worked! Moving clear of switch...");
-        stepper->move(2500);
-        tmcResetStallRampTimer();
-        homingState = HOMING_WAIT_CLEAR_SWITCH;
-        homingStateTime = currentTime;
-      } else if (homingCounter < 25) {
-        // Still on switch (pin still HIGH), keep moving forward
-        stepper->moveTo(10 * homingCounter);
-        tmcResetStallRampTimer();
-        homingCounter++;
-        homingStateTime = currentTime;
-      } else {
-        // Forward didn't work, try backward
-        Serial.print("Didn't clear forward, trying backward... pos=");
-        Serial.println(stepper->getCurrentPosition());
-        homingCounter = 0;
-        homingState = HOMING_MOVE_OFF_BACKWARD;
-        homingStateTime = currentTime;
-      }
-    }
-    break;
-
-  case HOMING_MOVE_OFF_BACKWARD:
-    // Try moving backward to clear the switch
-    // Based on actual hardware: HIGH = switch triggered, LOW = switch not triggered
-    if (currentTime - homingStateTime >= 100) {  // Check every 100ms
-      if (digitalRead(homingSwitchPin) == LOW) {
-        // Switch cleared (pin went LOW), move a bit more to get fully off
-        Serial.println("Reverse worked! Moving clear of switch...");
-        stepper->move(-2500);
-        tmcResetStallRampTimer();
-        homingState = HOMING_WAIT_CLEAR_SWITCH;
-        homingStateTime = currentTime;
-      } else if (homingCounter < 25) {
-        // Still on switch (pin still HIGH), keep moving backward
-        stepper->moveTo(-10 * homingCounter);
-        tmcResetStallRampTimer();
-        homingCounter++;
+  case HOMING_CLEAR_STUCK_SWITCH:
+    // Which direction actually moves off a switch that's already triggered
+    // at boot isn't known in advance, so try one direction with a short
+    // timeout, then the other, then give up - one continuous slow run per
+    // direction (not a series of tiny incremental moves; that was more
+    // complicated than this needs to be).
+    printHomingDiag(currentTime);
+    if (digitalRead(homingSwitchPin) == LOW) {
+      Serial.println("Switch cleared.");
+      stepper->forceStop();
+      homingSettleAction = SETTLE_THEN_FIND_INITIAL;
+      homingState = HOMING_SETTLE;
+      homingStateTime = currentTime;
+    } else if (currentTime - homingStateTime >= HOMING_CLEAR_STUCK_TIMEOUT_MS) {
+      if (homingCounter == 0) {
+        Serial.println("Didn't clear forward, trying backward...");
+        stepper->forceStop();
+        homingSettleAction = SETTLE_THEN_CLEAR_BACKWARD;
+        homingState = HOMING_SETTLE;
         homingStateTime = currentTime;
       } else {
-        // Couldn't clear switch
-        Serial.print("ERROR: Homing switch stuck! pos=");
-        Serial.println(stepper->getCurrentPosition());
+        Serial.println("ERROR: Homing switch stuck - didn't clear in either direction!");
         stepper->forceStop();
         stepper->setAcceleration(stepperAccelConfig);
         stepper->setSpeedInHz(stepperSpeedConfig);
         homingState = HOMING_ERROR;
         homed = false;
       }
-    }
-    break;
-
-  case HOMING_WAIT_CLEAR_SWITCH:
-    // Wait for the move-off-switch movement to complete.
-    printWaitClearDiag(currentTime);
-    if (!stepper->isRunning()) {
-      Serial.println("Cleared switch, starting homing search...");
-      homingState = HOMING_FIND_INITIAL;
-      interruptTriggered = false;
-
-      // Reset to homing speed/accel before searching
-      stepper->setAcceleration(stepperAccelHomingConfig);
-      stepper->setSpeedInHz(stepperSpeedHomingConfig);
-
-      Serial.print("Starting runBackward() with speed ");
-      Serial.print(stepperSpeedHomingConfig);
-      Serial.print(" Hz, accel ");
-      Serial.print(stepperAccelHomingConfig);
-      Serial.println(" Hz/s");
-
-      stepper->runBackward();
-      tmcResetStallRampTimer();
-
-      Serial.print("Stepper isRunning: ");
-      Serial.println(stepper->isRunning() ? "true" : "false");
-
-      homingStateTime = currentTime;
-      homingCounter = 0;
-    } else if (currentTime - homingStateTime >= 10000) {  // 10 second timeout
-      Serial.println("ERROR: Timed out moving off switch!");
-      stepper->forceStop();
-      stepper->setAcceleration(stepperAccelConfig);
-      stepper->setSpeedInHz(stepperSpeedConfig);
-      homingState = HOMING_ERROR;
-      homed = false;
     }
     break;
 
   case HOMING_FIND_INITIAL:
-    // Wait for interrupt or timeout
-    if (currentTime - homingStateTime >= 500) {  // Print status every 500ms
-      // Position (not just a dot) so a stuck/jammed search leaves a clear
-      // record of which direction it was actually moving (or not moving at
-      // all) - added after a real jam that couldn't be explained by the
-      // periodic dot-print alone (2026-08-30); see TODO.md.
-      Serial.print(". pos=");
-      Serial.print(stepper->getCurrentPosition());
-      Serial.print(" speed=");
-      Serial.println(stepper->getCurrentSpeedInMilliHz() / 1000);
-      homingStateTime = currentTime;
-      homingCounter++;
-
-      if (homingCounter > 60) {  // 30 second timeout
-        Serial.println("\nERROR: Timed out finding initial position!");
-        stepper->forceStop();
-        stepper->setAcceleration(stepperAccelConfig);
-        stepper->setSpeedInHz(stepperSpeedConfig);
-        homingState = HOMING_ERROR;
-        homed = false;
-        return;
-      }
-    }
-
+    // Search toward the switch. Wait for the interrupt; the overall
+    // watchdog above covers the "never triggers" case, and TMC2209 stall
+    // detection (when enabled) catches a genuine jam almost instantly.
+    printHomingDiag(currentTime);
     if (interruptTriggered) {
-      Serial.println("\nFound initial homing position");
+      Serial.println("Found initial homing position");
       // Safe to relabel the pulse count immediately - setCurrentPosition()
       // is just bookkeeping, not a motion command, so it doesn't need to
-      // wait for anything.
+      // wait for anything. The pendingForceStop consumption block above
+      // has already called forceStop() this same loop() iteration.
       stepper->setCurrentPosition(0);
       interruptTriggered = false;
-      homingState = HOMING_SETTLE_AFTER_INITIAL;
+      homingSettleAction = SETTLE_THEN_FIND_OTHER_END;
+      homingState = HOMING_SETTLE;
       homingStateTime = currentTime;
-    }
-    break;
-
-  case HOMING_SETTLE_AFTER_INITIAL:
-    // Wait for the interrupt-triggered forceStop() to actually finish before
-    // issuing the next move - forceStop() isn't instantaneous, and issuing
-    // move(2500) immediately used to assume the motor was already at rest
-    // when it could still be coasting/decelerating from the search. That
-    // produced a real, visible decelerate-reverse-reaccelerate "pause" once
-    // stepperAccelHomingConfig was lowered enough (from the earlier stall
-    // fix) to make it perceptible instead of instantaneous (2026-08-30).
-    printWaitClearDiag(currentTime);
-    if (!stepper->isRunning()) {
-      Serial.println("Moving off switch...");
-      stepper->move(2500);  // Move forward 2500 steps
-      tmcResetStallRampTimer();
-      homingState = HOMING_MOVE_OFF_INITIAL;
-      homingStateTime = currentTime;
-      homingCounter = 0;
-    } else if (currentTime - homingStateTime >= 2000) {  // shouldn't take long - safety net
-      Serial.println("ERROR: Timed out waiting for stop to settle after finding initial position!");
-      stepper->forceStop();
-      stepper->setAcceleration(stepperAccelConfig);
-      stepper->setSpeedInHz(stepperSpeedConfig);
-      homingState = HOMING_ERROR;
-      homed = false;
-    }
-    break;
-
-  case HOMING_MOVE_OFF_INITIAL:
-    // Wait for move to complete and switch to clear
-    printWaitClearDiag(currentTime);
-    if (!stepper->isRunning() && digitalRead(homingSwitchPin) == LOW) {
-      Serial.println("Switch cleared, reversing...");
-      stepper->runForward();
-      tmcResetStallRampTimer();
-      homingState = HOMING_FIND_OTHER_END;
-      homingStateTime = currentTime;
-      homingCounter = 0;
-    } else if (currentTime - homingStateTime >= 10000) {  // 10 second timeout
-      Serial.println("ERROR: Timed out moving off initial switch!");
-      stepper->forceStop();
-      stepper->setAcceleration(stepperAccelConfig);
-      stepper->setSpeedInHz(stepperSpeedConfig);
-      homingState = HOMING_ERROR;
-      homed = false;
     }
     break;
 
   case HOMING_FIND_OTHER_END:
-    // Wait for interrupt or timeout
-    if (currentTime - homingStateTime >= 500) {  // Print status every 500ms
-      // Position (not just a dot) - see the comment in HOMING_FIND_INITIAL.
-      Serial.print(". pos=");
-      Serial.print(stepper->getCurrentPosition());
-      Serial.print(" speed=");
-      Serial.println(stepper->getCurrentSpeedInMilliHz() / 1000);
-      homingStateTime = currentTime;
-      homingCounter++;
-
-      if (homingCounter > 60) {  // 30 second timeout
-        Serial.println("\nERROR: Timed out finding other end!");
-        stepper->forceStop();
-        stepper->setAcceleration(stepperAccelConfig);
-        stepper->setSpeedInHz(stepperSpeedConfig);
-        homingState = HOMING_ERROR;
-        homed = false;
-        return;
-      }
-    }
-
+    // Reverse and search until the switch trips again.
+    printHomingDiag(currentTime);
     if (interruptTriggered) {
-      Serial.println();
       // Capture the position right away, at the moment the interrupt is
       // noticed - accurate to the actual trigger point. bottomPosition
       // must be computed from this now, not after waiting to settle below
@@ -605,44 +514,57 @@ void updateHoming() {
       Serial.println(endPosition);
       bottomPosition = endPosition / 2;
       interruptTriggered = false;
-      homingState = HOMING_SETTLE_AFTER_OTHER_END;
+      homingSettleAction = SETTLE_THEN_RETURN_TO_ZERO;
+      homingState = HOMING_SETTLE;
       homingStateTime = currentTime;
     }
     break;
 
-  case HOMING_SETTLE_AFTER_OTHER_END:
-    // Wait for the interrupt-triggered forceStop() to actually finish -
-    // see the comment in HOMING_SETTLE_AFTER_INITIAL for why.
-    printWaitClearDiag(currentTime);
+  case HOMING_SETTLE:
+    // Wait for a genuine stop before issuing the next move -
+    // forceStop() isn't instantaneous, and issuing the next command
+    // immediately used to assume the motor was already at rest when it
+    // could still be coasting/decelerating from the previous move. That
+    // produced a real, visible decelerate-reverse-reaccelerate "pause"
+    // once stepperAccelHomingConfig was lowered enough (from the earlier
+    // stall fix) to make it perceptible instead of instantaneous
+    // (2026-08-30). homingSettleAction (set by whichever state transitioned
+    // in) says what to actually do once stopped.
+    printHomingDiag(currentTime);
     if (!stepper->isRunning()) {
-      Serial.println("Moving off switch...");
-      stepper->move(-2500);  // Move backward 2500 steps
-      tmcResetStallRampTimer();
-      homingState = HOMING_MOVE_OFF_OTHER_END;
+      switch (homingSettleAction) {
+      case SETTLE_THEN_CLEAR_BACKWARD:
+        Serial.println("Trying backward...");
+        homingCounter = 1;
+        stepper->runBackward();
+        tmcResetStallRampTimer();
+        homingState = HOMING_CLEAR_STUCK_SWITCH;
+        break;
+      case SETTLE_THEN_FIND_INITIAL:
+        Serial.println("Searching for initial position...");
+        interruptTriggered = false;
+        stepper->runBackward();
+        tmcResetStallRampTimer();
+        homingState = HOMING_FIND_INITIAL;
+        break;
+      case SETTLE_THEN_FIND_OTHER_END:
+        Serial.println("Searching for other end...");
+        stepper->runForward();
+        tmcResetStallRampTimer();
+        homingState = HOMING_FIND_OTHER_END;
+        break;
+      case SETTLE_THEN_RETURN_TO_ZERO:
+        Serial.println("Returning to home position...");
+        stepper->setAcceleration(stepperAccelConfig);
+        stepper->setSpeedInHz(stepperSpeedConfig);
+        stepper->moveTo(0);
+        tmcResetStallRampTimer();
+        homingState = HOMING_RETURN_TO_ZERO;
+        break;
+      }
       homingStateTime = currentTime;
     } else if (currentTime - homingStateTime >= 2000) {  // shouldn't take long - safety net
-      Serial.println("ERROR: Timed out waiting for stop to settle after finding other end!");
-      stepper->forceStop();
-      stepper->setAcceleration(stepperAccelConfig);
-      stepper->setSpeedInHz(stepperSpeedConfig);
-      homingState = HOMING_ERROR;
-      homed = false;
-    }
-    break;
-
-  case HOMING_MOVE_OFF_OTHER_END:
-    // Wait for move to complete and switch to clear
-    printWaitClearDiag(currentTime);
-    if (!stepper->isRunning() && digitalRead(homingSwitchPin) == LOW) {
-      Serial.println("Switch cleared, returning to home position");
-      stepper->setAcceleration(stepperAccelConfig);
-      stepper->setSpeedInHz(stepperSpeedConfig);
-      stepper->moveTo(0);
-      tmcResetStallRampTimer();
-      homingState = HOMING_RETURN_TO_ZERO;
-      homingStateTime = currentTime;
-    } else if (currentTime - homingStateTime >= 10000) {  // 10 second timeout
-      Serial.println("ERROR: Timed out moving off other end switch!");
+      Serial.println("ERROR: Timed out waiting for stop to settle!");
       stepper->forceStop();
       stepper->setAcceleration(stepperAccelConfig);
       stepper->setSpeedInHz(stepperSpeedConfig);
@@ -670,15 +592,7 @@ void updateHoming() {
         Serial.println(", moving to zero again...");
         stepper->moveTo(0);
         tmcResetStallRampTimer();
-        homingStateTime = currentTime;  // Reset timeout
       }
-    } else if (currentTime - homingStateTime >= 30000) {  // 30 second timeout
-      Serial.println("ERROR: Timed out returning to zero!");
-      Serial.print("Final position: ");
-      Serial.println(stepper->getCurrentPosition());
-      stepper->forceStop();
-      homingState = HOMING_ERROR;
-      homed = false;
     }
     break;
 
