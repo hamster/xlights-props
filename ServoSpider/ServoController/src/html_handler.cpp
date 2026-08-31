@@ -822,6 +822,19 @@ void handleSetPosition() {
     server.send(400, "text/plain", "Cannot move - homing in progress");
     return;
   }
+  // Absolute position is meaningless without a trusted zero reference -
+  // same reasoning DDP's position handling already applies (see main.cpp).
+  // Unlike handleMove()'s relative jog (kept ungated - it's the intended
+  // recovery tool for nudging the trolley back near the switch when not
+  // homed, and doesn't depend on trusting [0, bottomPosition] at all),
+  // this drives moveTo() against that same range, so it needs the same
+  // guard DDP already has. Found missing (2026-08-30): a drift-triggered
+  // "not homed" still let Set Position drive to an arbitrary absolute
+  // target immediately afterward.
+  if (!homed) {
+    server.send(400, "text/plain", "Cannot move to position - system not homed");
+    return;
+  }
 
   if (server.hasArg("position")) {
     int position = server.arg("position").toInt();

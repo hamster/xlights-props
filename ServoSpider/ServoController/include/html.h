@@ -710,10 +710,13 @@ function showNotification(message, isSuccess) {
       }
 
       fetch('/set-position?position=' + position)
-        .then(response => response.text())
-        .then(data => {
-          console.log('Move command sent');
-        });
+        .then(response => response.text().then(text => {
+          if (!response.ok) {
+            showNotification(text, false);
+          } else {
+            console.log('Move command sent');
+          }
+        }));
     }
 
     function moveSteps(direction) {
@@ -741,10 +744,13 @@ function showNotification(message, isSuccess) {
       }
 
       fetch('/set-position?position=' + position)
-        .then(response => response.text())
-        .then(data => {
-          console.log('Move command sent');
-        });
+        .then(response => response.text().then(text => {
+          if (!response.ok) {
+            showNotification(text, false);
+          } else {
+            console.log('Move command sent');
+          }
+        }));
     }
 
     function homeServo() {
