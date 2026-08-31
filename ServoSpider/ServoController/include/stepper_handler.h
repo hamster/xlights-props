@@ -93,6 +93,17 @@ extern bool homed;
 extern HomingState homingState;
 extern unsigned long homingStateTime;
 extern int homingCounter;
+// Latches true whenever a homing attempt ends in HOMING_ERROR (stuck switch,
+// stall, timeout, etc.) - HOMING_ERROR itself is transient (updateHoming()
+// falls through it back to HOMING_IDLE the same/next loop iteration), so
+// this is what the web UI actually reads to show a persistent "Homing
+// Error" indicator instead of silently reverting to a plain "Not Homed"
+// the instant the error state is left. Cleared at the start of every fresh
+// startHoming() attempt (isHoming() covers the UI during the attempt
+// itself); set in updateHoming()'s HOMING_ERROR case, so every error path
+// in the state machine is covered from one place instead of needing to be
+// set at each individual "homingState = HOMING_ERROR" site.
+extern bool homingErrorLatched;
 
 // Stepper configuration variables
 extern int stepperSpeedConfig;

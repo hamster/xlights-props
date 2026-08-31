@@ -684,6 +684,7 @@ void handleStatusData() {
     "\"uptimeSecs\":%lu,"
     "\"homed\":%s,"
     "\"isHoming\":%s,"
+    "\"homingError\":%s,"
     "\"homingSwitchTripped\":%s,"
     "\"position\":%d,"
     "\"positionPercent\":%d,"
@@ -726,6 +727,7 @@ void handleStatusData() {
     uptimeDays, uptimeHours, uptimeMins, uptimeSecs,
     homed ? "true" : "false",
     isHoming() ? "true" : "false",
+    homingErrorLatched ? "true" : "false",
     homingSwitchTripped ? "true" : "false",
     currentPosition,
     positionPercent,

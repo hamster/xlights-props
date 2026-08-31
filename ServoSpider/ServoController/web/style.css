@@ -209,6 +209,11 @@ body {
       background-color: #fff3cd;
       color: #856404;
     }
+    .homing-error {
+      background-color: #f8d7da;
+      color: #721c24;
+      font-weight: bold;
+    }
     input[type="text"], input[type="password"], input[type="number"] {
       width: 100%;
       padding: 12px;

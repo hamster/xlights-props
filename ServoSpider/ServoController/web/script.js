@@ -420,6 +420,9 @@ function showNotification(message, isSuccess) {
           if (data.isHoming) {
             document.getElementById('homed-status-text').textContent = 'Homing...';
             document.getElementById('homed-status-text').className = 'status not-homed';
+          } else if (data.homingError) {
+            document.getElementById('homed-status-text').textContent = 'Homing Error';
+            document.getElementById('homed-status-text').className = 'status homing-error';
           } else {
             document.getElementById('homed-status-text').textContent = data.homed ? 'Homed' : 'Not Homed';
             document.getElementById('homed-status-text').className = 'status ' + (data.homed ? 'homed' : 'not-homed');

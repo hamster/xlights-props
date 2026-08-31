@@ -16,6 +16,7 @@ volatile bool homingStallDetected = false;
 volatile bool pendingForceStop = false;
 int bottomPosition = 0;
 bool homed = false;
+bool homingErrorLatched = false;
 HomingState homingState = HOMING_IDLE;
 unsigned long homingStateTime = 0;
 int homingCounter = 0;
@@ -206,6 +207,7 @@ void startHoming() {
 
   Serial.println("Starting non-blocking homing...");
   homed = false;
+  homingErrorLatched = false;  // Give this fresh attempt a clean slate - isHoming() covers the UI meanwhile
   homingState = HOMING_CHECK_SWITCH;
   homingStateTime = millis();
   homingStartTime = homingStateTime;
@@ -618,7 +620,11 @@ void updateHoming() {
     break;
 
   case HOMING_ERROR:
-    // Error occurred, return to idle
+    // Error occurred, return to idle. Latch it first - this state itself is
+    // transient (falls through to IDLE the same/next iteration), but the
+    // web UI needs something persistent to show "Homing Error" instead of
+    // silently reverting to a plain "Not Homed" the instant this is left.
+    homingErrorLatched = true;
     homingState = HOMING_IDLE;
     break;
 
