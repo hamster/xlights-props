@@ -374,6 +374,27 @@ void updateHoming() {
   if (pendingForceStop) {
     pendingForceStop = false;
     long tripPosition = stepper->getCurrentPosition();
+
+    // A trip while normal (non-homing) motion is already carrying the
+    // stepper *away* from the switch (positive speed - see the sign
+    // convention noted elsewhere: runForward()/increasing position is away
+    // from the switch, runBackward()/decreasing position is toward it)
+    // can't be a genuine new arrival - moving away and arriving somewhere
+    // are contradictory. Found on the bench (2026-08-30): commanding a move
+    // away while resting right on the switch immediately killed the move,
+    // because a normal DDP-commanded departure from that position is
+    // exactly the case where switch contact bounce (make-break-make as the
+    // actuator lifts off) is most likely, and every one of those bounces is
+    // a RISING edge the ISR can't help but catch. Restricted to non-homing
+    // operation - an active homing search must still stop on any trip
+    // regardless of direction, since detecting the trip *is* the search.
+    if (!isHoming() && stepper->getCurrentSpeedInMilliHz() > 0) {
+      Serial.print("Switch interrupt while moving away from switch (pos=");
+      Serial.print(tripPosition);
+      Serial.println(") - treating as contact bounce, not a real trip; move not stopped");
+      return;
+    }
+
     stepper->forceStop();
     if (homingState == HOMING_CLEAR_STUCK_SWITCH) {
       // The switch is already known HIGH throughout this state (that's why
