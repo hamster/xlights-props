@@ -14,6 +14,7 @@
 #include "protocol_common.h"
 #include "tmc_handler.h"
 #include "tuning_handler.h"
+#include "encoder_handler.h"
 
 // Watchdog timeout in seconds
 #define WDT_TIMEOUT 10
@@ -514,6 +515,7 @@ void setup() {
 
   // Initialize stepper
   initializeStepper();
+  initEncoder();
 
   // Initialize TMC2209 UART link (no-op if tmcEnabledConfig is false)
   initTmc();
@@ -570,6 +572,11 @@ void loop() {
 
   // Check WiFi connection and reconnect if needed
   checkWifiConnection();
+
+  // Poll the encoder's raw PCNT counter - see encoder_handler.h for why
+  // this is polling-based rather than interrupt-driven. No-op if the
+  // encoder never initialized.
+  updateEncoder();
 
   // Periodic compact-log sample, so any significant move (a single large
   // DDP jump, or a diagnostic moveTo() like $CHECKSTEPS's that bypasses
