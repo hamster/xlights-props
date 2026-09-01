@@ -101,7 +101,12 @@ void logCompactMotion(uint16_t ddpVal, int cmdPos, int curPos, int delta, int la
   Serial.print(",");
   Serial.print(curSpeedMilliHz / 1000);
   Serial.print(",");
-  Serial.println(targetSpeedHz);
+  Serial.print(targetSpeedHz);
+  Serial.print(",");
+  // Ground-truth encoder position alongside the step-counted curPos above -
+  // 0 if no encoder is wired/initialized, so existing logs without an
+  // encoder still parse the same way, just with this column always 0.
+  Serial.println(getEncoderCount());
 }
 
 // Periodic compact-log tick, independent of the DDP/tracking-mode dispatch
@@ -966,6 +971,23 @@ void printFullStatus() {
 
   Serial.print("DDP Packets Received: ");
   Serial.println(ddpPacketsReceived);
+
+  // Stepper/homing status
+  Serial.println("\n--- Stepper Status ---");
+  Serial.print("Homed: ");
+  Serial.println(homed ? "Yes" : "No");
+  Serial.print("Homing In Progress: ");
+  Serial.println(isHoming() ? "Yes" : "No");
+  Serial.print("Current Position: ");
+  Serial.println(stepper->getCurrentPosition());
+  Serial.print("Bottom Position: ");
+  Serial.println(bottomPosition);
+  Serial.print("Encoder: ");
+  if (isEncoderInitialized()) {
+    Serial.println(getEncoderCount());
+  } else {
+    Serial.println("Not initialized");
+  }
 
   // TMC2209 driver info
   Serial.println("\n--- TMC2209 Driver Status ---");

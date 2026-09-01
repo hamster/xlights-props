@@ -1,6 +1,7 @@
 #include "tuning_handler.h"
 #include "stepper_handler.h"
 #include "protocol_common.h"
+#include "encoder_handler.h"
 
 // Splits `line` on spaces into up to 3 tokens (command, name, value).
 // Returns the number of tokens found. Good enough for this simple protocol -
@@ -148,7 +149,9 @@ void handleExtendedSerialCommand(const String& line) {
     Serial.print(" running=");
     Serial.print(stepper->isRunning() ? 1 : 0);
     Serial.print(" mode=");
-    Serial.println(stepperTrackModeConfig);
+    Serial.print(stepperTrackModeConfig);
+    Serial.print(" encoder=");
+    Serial.println(getEncoderCount());
     return;
   }
 
