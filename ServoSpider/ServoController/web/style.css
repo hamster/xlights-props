@@ -214,6 +214,10 @@ body {
       color: #721c24;
       font-weight: bold;
     }
+    .option-disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
     input[type="text"], input[type="password"], input[type="number"] {
       width: 100%;
       padding: 12px;

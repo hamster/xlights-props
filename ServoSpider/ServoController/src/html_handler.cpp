@@ -822,20 +822,23 @@ void handleSetPosition() {
     server.send(400, "text/plain", "Cannot move - homing in progress");
     return;
   }
-  // Absolute position is meaningless without a trusted zero reference -
-  // same reasoning DDP's position handling already applies (see main.cpp).
-  // Unlike handleMove()'s relative jog (kept ungated - it's the intended
-  // recovery tool for nudging the trolley back near the switch when not
-  // homed, and doesn't depend on trusting [0, bottomPosition] at all),
-  // this drives moveTo() against that same range, so it needs the same
-  // guard DDP already has. Found missing (2026-08-30): a drift-triggered
-  // "not homed" still let Set Position drive to an arbitrary absolute
-  // target immediately afterward.
-  if (!homed) {
-    server.send(400, "text/plain", "Cannot move to position - system not homed");
-    return;
-  }
-
+  // Was unconditionally gated on `homed` here (2026-08-30, after a
+  // drift-triggered "not homed" still let Set Position drive to an
+  // arbitrary absolute target immediately afterward) - relaxed back
+  // (2026-09-01) after that made it impossible to move the trolley at all
+  // for bench testing/verification while not homed, with no way to get it
+  // moving again short of a physical nudge or a successful home (which may
+  // itself be what's being diagnosed). A raw step count here is really the
+  // same category of manual/human-operated control as handleMove()'s
+  // relative jog (already ungated, for exactly this reason) - not
+  // something DDP's automated position handling can fall back on, so it
+  // doesn't need DDP's strict server-side enforcement. The one target this
+  // endpoint receives that's genuinely meaningless without a trusted
+  // bottomPosition - a *percent* position - is converted to steps
+  // client-side before the request is even sent, so the server has no way
+  // to tell steps and percent requests apart here anyway; the UI disables
+  // the Percent option while not homed instead (see
+  // updatePercentModeAvailability() in script.js).
   if (server.hasArg("position")) {
     int position = server.arg("position").toInt();
     // Manual moves always use the normal profile, not whatever DDP's

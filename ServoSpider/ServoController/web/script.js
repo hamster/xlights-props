@@ -212,6 +212,32 @@ function showNotification(message, isSuccess) {
         });
     }
 
+    // Percent mode means nothing without a trusted bottomPosition (only
+    // established by a completed home), unlike a raw step count, which is
+    // still meaningful enough for bench testing/jogging even when not
+    // homed - the same reasoning handleMove()'s relative jog has always
+    // used server-side. Disables both "Percent" radios (Status tab and
+    // Settings tab) when not homed, and falls back to "Steps" mode if
+    // Percent happened to be selected already, so a stale selection can't
+    // silently misbehave. Called from the status poll whenever data.homed
+    // changes.
+    function updatePercentModeAvailability(homed) {
+      [
+        {radio: 'positionModePercentStatus', label: 'positionModePercentLabelStatus', group: 'positionModeStatus'},
+        {radio: 'positionModePercent', label: 'positionModePercentLabel', group: 'positionMode'}
+      ].forEach(function(entry) {
+        var radio = document.getElementById(entry.radio);
+        var label = document.getElementById(entry.label);
+        if (!radio || !label) return;
+        radio.disabled = !homed;
+        label.classList.toggle('option-disabled', !homed);
+        if (!homed && radio.checked) {
+          var stepsRadio = document.querySelector('input[name="' + entry.group + '"][value="steps"]');
+          if (stepsRadio) stepsRadio.checked = true;
+        }
+      });
+    }
+
     function setPositionStatus() {
       var inputValue = document.getElementById("setPositionInputStatus").value;
       var mode = document.querySelector('input[name="positionModeStatus"]:checked').value;
@@ -433,6 +459,7 @@ function showNotification(message, isSuccess) {
             document.getElementById('homed-status-text').textContent = data.homed ? 'Homed' : 'Not Homed';
             document.getElementById('homed-status-text').className = 'status ' + (data.homed ? 'homed' : 'not-homed');
           }
+          updatePercentModeAvailability(data.homed);
 
           // Update homing switch status
           var homingSwitchElement = document.getElementById('homing-switch-status');
