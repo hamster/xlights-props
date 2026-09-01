@@ -489,7 +489,18 @@ void updateHoming() {
     if (digitalRead(homingSwitchPin) == HIGH) {
       Serial.println("Homing switch triggered at bootup, clearing it...");
       homingCounter = 0;  // 0 = trying forward first, 1 = trying backward (retry)
-      stepper->runForward();
+      // runForward()/runBackward() return a MoveResultCode (silently
+      // discarded at every other call site in this file too) - logged here
+      // since this exact transition has twice now produced zero motion for
+      // the full CLEAR_STUCK_SWITCH timeout with no other explanation
+      // (2026-08-31/09-01) - if the ramp generator itself refused the move
+      // (MOVE_ERR_SPEED_IS_UNDEFINED / MOVE_ERR_ACCELERATION_IS_UNDEFINED /
+      // MOVE_ERR_NO_DIRECTION_PIN), this is the only place that would show it.
+      MoveResultCode runResult = stepper->runForward();
+      Serial.print("runForward() result=");
+      Serial.print((int)runResult);
+      Serial.print(" isRunning=");
+      Serial.println(stepper->isRunning() ? 1 : 0);
       tmcResetStallRampTimer();
       homingState = HOMING_CLEAR_STUCK_SWITCH;
       homingStateTime = currentTime;
@@ -586,13 +597,18 @@ void updateHoming() {
     printHomingDiag(currentTime);
     if (!stepper->isRunning()) {
       switch (homingSettleAction) {
-      case SETTLE_THEN_CLEAR_BACKWARD:
+      case SETTLE_THEN_CLEAR_BACKWARD: {
         Serial.println("Trying backward...");
         homingCounter = 1;
-        stepper->runBackward();
+        MoveResultCode runResult = stepper->runBackward();
+        Serial.print("runBackward() result=");
+        Serial.print((int)runResult);
+        Serial.print(" isRunning=");
+        Serial.println(stepper->isRunning() ? 1 : 0);
         tmcResetStallRampTimer();
         homingState = HOMING_CLEAR_STUCK_SWITCH;
         break;
+      }
       case SETTLE_THEN_FIND_INITIAL:
         Serial.println("Searching for initial position...");
         interruptTriggered = false;
