@@ -121,14 +121,16 @@ Access the device via its IP address (or `http://<hostname>.local`) in a web bro
 
 ### Homing Process
 
-The controller uses a non-blocking state machine for homing. The hardware design is a single wheel with a rope running to the prop trolley. We attempt to wind the wheel so that we find both 'ends', allowing the rope to wrap around backwards. The middle point is then the 'bottom', and actual usage of the controller will only wind the rope in one direction.
+The controller uses a non-blocking state machine for homing. The hardware is a trolley running up and down an extrusion (rod), pulled by a rope wound onto a pulley the stepper drives through a worm gear. Winding the rope onto the pulley pulls the trolley **up**; letting rope out lets gravity pull it **down**. There is exactly **one** homing switch, at the **top** of the stroke only — no second switch at the bottom.
+
+Homing works by unwinding the rope until the trolley falls to the bottom under gravity, then continuing to turn the pulley in that *same* rotational direction: once the rope is fully paid out, it starts winding back onto the pulley from the other side, which pulls the trolley back **up** the rod until it trips the *same* top switch a second time. That second trigger position, halved, gives the real bottom of the rod (the point furthest from the switch) — the down-then-up trip is symmetric around it, so no separate "find the bottom" step or a second switch is needed.
 
 1. **Initial Check** - Verifies switch state at startup
-2. **Clear Switch** - Moves off switch if initially triggered
-3. **Find Initial Position** - Moves backward until switch triggers
-4. **Find Opposite End** - Moves forward until switch triggers again
-5. **Calculate Center** - Determines midpoint as "bottom position"
-6. **Return to Zero** - Moves to initial switch position
+2. **Clear Switch** - Moves off the switch if it's already triggered at boot (direction isn't known in advance, so one direction is tried, then the other)
+3. **Find Initial Position** - Lets the trolley down until the switch triggers
+4. **Find Bottom** - Continues in the same direction (rope reverses wrap direction once fully paid out) until the *same* switch triggers again
+5. **Calculate Bottom** - Halves that second trigger's step count to get the real bottom position
+6. **Return to Zero** - Moves back up to the switch position
 
 **Homing States**:
 - Auto-homing on boot (if enabled)

@@ -62,7 +62,7 @@ DDP packet → ddp_handler → positionRequest (shared variable) → main loop �
 | `ota_handler` | HTTP OTA firmware updates with chunked upload |
 
 ### Homing State Machine
-The stepper uses a non-blocking state machine (`HomingState` enum) that finds both ends of travel by winding/unwinding a rope spool. The center point becomes `bottomPosition`. Call `updateHoming()` every loop iteration.
+The trolley hangs on a rope wound onto a pulley the stepper drives through a worm gear - winding pulls it **up**, letting rope out lets gravity pull it **down**. There is exactly **one** homing switch, at the **top** of the stroke only (no second switch at the bottom). Homing lets the trolley down until that switch trips, then keeps turning the pulley the *same* direction - once the rope is fully paid out it starts winding back on from the other side, pulling the trolley back up until it trips the *same* switch a second time. Halving that second trigger's step count gives `bottomPosition` (the real bottom of the rod), since the down-then-up trip is symmetric around it - no second switch or separate "find the bottom" step needed. Full sequence lives in the `HomingState` enum/`updateHoming()` (`stepper_handler.h`/`.cpp`); call `updateHoming()` every loop iteration. See README.md's "Homing Process" section for the numbered state list.
 
 ### Configuration Storage
 All settings stored in ESP32 Preferences (NVS flash):
