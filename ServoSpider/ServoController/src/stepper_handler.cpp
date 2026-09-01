@@ -313,6 +313,13 @@ void updateStepCheck() {
 
 static unsigned long lastHomingDiagPrintMs = 0;
 
+// Retry throttle for HOMING_CLEAR_STUCK_SWITCH's "the move died before
+// producing any motion" recovery - see the case body for why this exists.
+// Reset (to currentTime) at both places that issue a fresh runForward()/
+// runBackward() into that state, so a retry can't fire on the very same
+// iteration the original request was just made.
+static unsigned long lastClearStuckRetryMs = 0;
+
 // Shared periodic position/speed print for every homing state that's
 // waiting on something (a search interrupt, a genuine stop, a switch
 // clearing) - added (2026-08-30) to directly see symptoms like "pauses
@@ -523,6 +530,7 @@ void updateHoming() {
       tmcResetStallRampTimer();
       homingState = HOMING_CLEAR_STUCK_SWITCH;
       homingStateTime = currentTime;
+      lastClearStuckRetryMs = currentTime;
     } else {
       // Switch is clear, go directly to finding initial position
       Serial.println("Moving to find initial homing position...");
@@ -562,6 +570,33 @@ void updateHoming() {
         homingState = HOMING_ERROR;
         homed = false;
       }
+    } else if (!stepper->isRunning() && (currentTime - lastClearStuckRetryMs >= 100)) {
+      // FastAccelStepper's own ramp generator has, more than once now on
+      // the bench (2026-09-01), silently abandoned a just-accepted
+      // runForward()/runBackward() request before it ever filled the step
+      // queue or produced a single step: MOVE_OK was returned and
+      // isRunning() read true immediately after the call, but
+      // isRampGeneratorActive() then cleared itself on its own within
+      // ~100-200ms with the queue still completely empty (isQueueEmpty()
+      // stayed true throughout) - and with no forceStop() call anywhere in
+      // this codebase's own logging involved (confirmed via the
+      // qRunning/qEmpty/rampActive breakdown added for exactly this
+      // investigation). This looks like a genuine FastAccelStepper-internal
+      // timing issue, not anything decided at the application level - not
+      // something fixable from here. But it's cheap and safe to detect
+      // (isRunning() false while still within this state's own timeout,
+      // i.e. not because we asked it to stop) and just retry the same
+      // request, rather than silently burn the whole 2s timeout waiting on
+      // a move that's already dead - this resolves in well under 200ms
+      // typically instead of running out the clock.
+      lastClearStuckRetryMs = currentTime;
+      Serial.println("Move died before producing any motion - retrying...");
+      if (homingCounter == 0) {
+        stepper->runForward();
+      } else {
+        stepper->runBackward();
+      }
+      tmcResetStallRampTimer();
     }
     break;
 
@@ -632,6 +667,7 @@ void updateHoming() {
         Serial.println(stepper->isRampGeneratorActive() ? 1 : 0);
         tmcResetStallRampTimer();
         homingState = HOMING_CLEAR_STUCK_SWITCH;
+        lastClearStuckRetryMs = currentTime;
         break;
       }
       case SETTLE_THEN_FIND_INITIAL:
