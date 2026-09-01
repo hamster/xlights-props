@@ -510,6 +510,26 @@ void updateHoming() {
   if (homingStallDetected) {
     homingStallDetected = false;
     if (isHoming()) {
+      // HOMING_CLEAR_STUCK_SWITCH's own "try forward, then backward, then
+      // give up" logic (see that case body) previously only fired on a
+      // *timeout* (2s with no trigger) - a real stall is typically caught
+      // by TMC2209 StallGuard in well under a second, so it almost always
+      // won this race and fell straight through to the unconditional abort
+      // below, never letting the second direction get tried at all (found
+      // 2026-09-02, reasoning through a real report: "we'll end up stuck
+      // on the far end of the pulley" if the first direction we happen to
+      // try is the one that jams against it). Treat a stall on the first
+      // attempt exactly like a timeout - try the other direction - and
+      // only actually conclude something is genuinely wrong once *both*
+      // directions have failed, whether by stall or timeout.
+      if (homingState == HOMING_CLEAR_STUCK_SWITCH && homingCounter == 0) {
+        Serial.println("Stall detected trying to clear the switch forward - trying backward...");
+        stepper->forceStop();
+        homingSettleAction = SETTLE_THEN_CLEAR_BACKWARD;
+        homingState = HOMING_SETTLE;
+        homingStateTime = millis();
+        return;
+      }
       Serial.println("ERROR: Stall detected during homing search (motor commanded to move but not turning) - aborting");
       stepper->forceStop();
       stepper->setAcceleration(stepperAccelConfig);
