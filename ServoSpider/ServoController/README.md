@@ -132,6 +132,8 @@ Homing works by unwinding the rope until the trolley falls to the bottom under g
 5. **Calculate Bottom** - Halves that second trigger's step count to get the real bottom position
 6. **Return to Zero** - Moves back up to the switch position
 
+**Drivetrain**: 1.8°/step stepper (200 full steps/rev) through a **1:10 worm gear** to the pulley - confirmed on the bench (2026-09-02) by cross-checking a rotary encoder mounted on the pulley hub against `bottomPosition`, not just assumed from the worm's spec. That measurement also found the pulley itself only turns **~1.9 revolutions** across the full 0-100% stroke - worth knowing before mounting any future sensor on either shaft, since resolution-per-revolution needs are very different on the motor side (fast, many revs/stroke) vs. the pulley side (slow, ~2 revs/stroke). See `include/encoder_handler.h` for the current encoder implementation and its resolution tradeoffs.
+
 **Homing States**:
 - Auto-homing on boot (if enabled)
 - Manual homing via web interface or `h` serial command

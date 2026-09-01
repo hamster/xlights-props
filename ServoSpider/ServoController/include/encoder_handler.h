@@ -30,10 +30,17 @@
 // Resolution note (confirmed on the bench, 2026-09-02): the encoder is
 // coupled directly to the pulley hub with no step-up gearing, and the
 // pulley itself only turns ~1.9 revolutions across the full 0-100% travel
-// range - so the full-range count is inherently coarse (~154 counts end to
-// end with this encoder's PPR), nowhere near step-count resolution. Fine
-// for a coarse sanity cross-check; not fine-grained enough to catch a
-// single lost step the way $CHECKSTEPS's switch-based approach can.
+// range (see README.md's "Drivetrain" note - this cross-check is also what
+// pinned the worm gear down to an actual 1:10 ratio, not the 1:20 originally
+// assumed) - so the full-range count is inherently coarse (~154 counts end
+// to end with this encoder's PPR), nowhere near step-count resolution. Fine
+// for a coarse sanity cross-check (this session's real tracking-mode data
+// showed control-loop lag on the order of hundreds to ~1700 steps - far
+// above this encoder's resolution floor); not fine-grained enough to catch
+// a single lost step the way $CHECKSTEPS's switch-based approach can.
+// Mounting the same encoder on the motor shaft instead (upstream of the
+// 1:10 worm reduction) would multiply resolution ~10x for free - not done
+// yet, a mechanical/mounting change rather than a firmware one.
 #define encoderPinA D0
 #define encoderPinB D9
 
