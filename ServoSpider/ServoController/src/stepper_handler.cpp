@@ -329,7 +329,20 @@ static void printHomingDiag(unsigned long currentTime) {
   Serial.print(" speed=");
   Serial.print(stepper->getCurrentSpeedInMilliHz() / 1000);
   Serial.print(" running=");
-  Serial.println(stepper->isRunning() ? 1 : 0);
+  Serial.print(stepper->isRunning() ? 1 : 0);
+  // isRunning() is just isQueueRunning() || isRampGeneratorActive() ||
+  // !isQueueEmpty() under the hood - broken out here to see which of the
+  // three actually flips when a CLEAR_STUCK_SWITCH move goes from running=1
+  // (confirmed immediately after runForward()/runBackward()) to running=0
+  // a moment later with no forceStop() call anywhere in this codebase's own
+  // logging (2026-09-01) - narrows down whether the ramp generator itself
+  // is stopping, or the queue is (somehow) never getting filled.
+  Serial.print(" qRunning=");
+  Serial.print(stepper->isQueueRunning() ? 1 : 0);
+  Serial.print(" qEmpty=");
+  Serial.print(stepper->isQueueEmpty() ? 1 : 0);
+  Serial.print(" rampActive=");
+  Serial.println(stepper->isRampGeneratorActive() ? 1 : 0);
 }
 
 void updateHoming() {
@@ -500,7 +513,13 @@ void updateHoming() {
       Serial.print("runForward() result=");
       Serial.print((int)runResult);
       Serial.print(" isRunning=");
-      Serial.println(stepper->isRunning() ? 1 : 0);
+      Serial.print(stepper->isRunning() ? 1 : 0);
+      Serial.print(" qRunning=");
+      Serial.print(stepper->isQueueRunning() ? 1 : 0);
+      Serial.print(" qEmpty=");
+      Serial.print(stepper->isQueueEmpty() ? 1 : 0);
+      Serial.print(" rampActive=");
+      Serial.println(stepper->isRampGeneratorActive() ? 1 : 0);
       tmcResetStallRampTimer();
       homingState = HOMING_CLEAR_STUCK_SWITCH;
       homingStateTime = currentTime;
@@ -604,7 +623,13 @@ void updateHoming() {
         Serial.print("runBackward() result=");
         Serial.print((int)runResult);
         Serial.print(" isRunning=");
-        Serial.println(stepper->isRunning() ? 1 : 0);
+        Serial.print(stepper->isRunning() ? 1 : 0);
+        Serial.print(" qRunning=");
+        Serial.print(stepper->isQueueRunning() ? 1 : 0);
+        Serial.print(" qEmpty=");
+        Serial.print(stepper->isQueueEmpty() ? 1 : 0);
+        Serial.print(" rampActive=");
+        Serial.println(stepper->isRampGeneratorActive() ? 1 : 0);
         tmcResetStallRampTimer();
         homingState = HOMING_CLEAR_STUCK_SWITCH;
         break;
