@@ -25,11 +25,18 @@
 // jump - almost certainly a missed edge, i.e. the poll rate wasn't fast
 // enough to catch an intermediate state) maps to 0 and is conservatively
 // ignored rather than guessed at.
+//
+// Signed so that increasing count matches stepper_handler's convention
+// (increasing position = moving away from the switch) - confirmed on the
+// bench (2026-09-02) that the raw wiring produced the opposite sign, so
+// this table is the physical wiring's table negated, not the "natural"
+// one - see resetEncoderCount()'s calibration note if the physical
+// mounting ever changes and this needs re-checking.
 static const int8_t QUAD_TABLE[16] = {
-   0,  1, -1,  0,
-  -1,  0,  0,  1,
+   0, -1,  1,  0,
    1,  0,  0, -1,
-   0, -1,  1,  0
+  -1,  0,  0,  1,
+   0,  1, -1,  0
 };
 
 static uint8_t lastQuadState = 0;
