@@ -1291,16 +1291,16 @@ function showNotification(message, isSuccess) {
             <div class="form-group">
               <label for="setPositionInputStatus">Move to Position:</label>
               <div class="position-input-group">
-                <input type="number" id="setPositionInputStatus" name="setPositionInputStatus" value="0" min="0">
+                <input type="number" id="setPositionInputStatus" name="setPositionInputStatus" value="0" min="0" max="200">
                 <div class="position-controls">
                   <div class="position-mode-selector">
                     <label>
                       <input type="radio" name="positionModeStatus" value="steps" checked>
                       Steps
                     </label>
-                    <label id="positionModePercentLabelStatus">
+                    <label id="positionModePercentLabelStatus" title="0-100% is normal travel range. 100-200% deliberately overshoots past the bottom to the far switch-trigger point (the rope wrapped the other way) - for setting up a starting position to test homing from, not normal operation.">
                       <input type="radio" name="positionModeStatus" value="percent" id="positionModePercentStatus">
-                      Percent
+                      Percent (0-200%)
                     </label>
                   </div>
                   <button onclick="setPositionStatus()" class="btn-warning">Go</button>
@@ -1575,16 +1575,16 @@ function showNotification(message, isSuccess) {
         <div class="form-group">
           <label for="setPositionInput">Set Position:</label>
           <div class="position-input-group">
-            <input type="number" id="setPositionInput" name="setPositionInput" value="0" min="0">
+            <input type="number" id="setPositionInput" name="setPositionInput" value="0" min="0" max="200">
             <div class="position-controls">
               <div class="position-mode-selector">
                 <label>
                   <input type="radio" name="positionMode" value="steps" checked>
                   Steps
                 </label>
-                <label id="positionModePercentLabel">
+                <label id="positionModePercentLabel" title="0-100% is normal travel range. 100-200% deliberately overshoots past the bottom to the far switch-trigger point (the rope wrapped the other way) - for setting up a starting position to test homing from, not normal operation.">
                   <input type="radio" name="positionMode" value="percent" id="positionModePercent">
-                  Percent
+                  Percent (0-200%)
                 </label>
               </div>
               <button onclick="setPosition()" class="btn-warning">Go</button>
