@@ -105,6 +105,20 @@ extern int homingCounter;
 // set at each individual "homingState = HOMING_ERROR" site.
 extern bool homingErrorLatched;
 
+// Real physical speed limit, from the last completed HOMING_FIND_OTHER_END
+// leg - the continuous run from the initial switch trip (position 0) all
+// the way to the second trip (endPosition, i.e. 2*bottomPosition), covering
+// the same "full down-and-up round trip" distance homingOverallTimeoutMs's
+// reference point is based on (stepper_handler.cpp). Meant to answer "how
+// fast can this prop actually move between two positions" for whoever is
+// timing cues to music - see TODO.md. Persists across homing attempts (not
+// cleared at startHoming()) so the web UI can keep showing the last known
+// figure; homingTravelValid is false only before the very first successful
+// homing since boot.
+extern bool homingTravelValid;
+extern long homingTravelSteps;         // endPosition from that leg
+extern unsigned long homingTravelMs;   // wall-clock elapsed time for that leg
+
 // Stepper configuration variables
 extern int stepperSpeedConfig;
 extern int stepperAccelConfig;

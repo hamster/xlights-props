@@ -982,6 +982,17 @@ void printFullStatus() {
   Serial.println(stepper->getCurrentPosition());
   Serial.print("Bottom Position: ");
   Serial.println(bottomPosition);
+  Serial.print("Full Travel: ");
+  if (homingTravelValid && homingTravelMs > 0) {
+    Serial.print(homingTravelSteps);
+    Serial.print(" steps in ");
+    Serial.print(homingTravelMs);
+    Serial.print(" ms (~");
+    Serial.print((float)homingTravelSteps * 1000.0f / (float)homingTravelMs, 0);
+    Serial.println(" steps/s average)");
+  } else {
+    Serial.println("Not yet measured");
+  }
   Serial.print("Encoder: ");
   if (isEncoderInitialized()) {
     Serial.println(getEncoderCount());

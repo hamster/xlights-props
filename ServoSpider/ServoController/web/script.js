@@ -475,6 +475,20 @@ function showNotification(message, isSuccess) {
           document.getElementById('position-percent').textContent = data.positionPercent;
           document.getElementById('bottom-position').textContent = data.bottomPosition;
 
+          // Real physical speed limit, from the last completed homing
+          // round trip (see homingTravelMs's declaration comment,
+          // stepper_handler.h) - lets whoever is timing cues to music know
+          // the device's actual achievable speed, not just "seems fast
+          // enough on the bench".
+          var homingTravelElement = document.getElementById('homing-travel');
+          if (data.homingTravelValid && data.homingTravelMs > 0) {
+            var travelSecs = (data.homingTravelMs / 1000).toFixed(1);
+            var stepsPerSec = Math.round(data.homingTravelSteps * 1000 / data.homingTravelMs);
+            homingTravelElement.textContent = data.homingTravelSteps + ' steps in ' + travelSecs + 's (~' + stepsPerSec + ' steps/s)';
+          } else {
+            homingTravelElement.textContent = 'Not yet measured';
+          }
+
           // Update Stepper position command
           document.getElementById('position-command').textContent = data.protocolLastCommand;
           document.getElementById('position-command-percent').textContent = data.protocolLastCommandPercent;

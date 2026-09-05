@@ -52,6 +52,13 @@ void handleRoot() {
   page.replace("{{CURRENT_POSITION}}", String(currentPosition));
   page.replace("{{POSITION_PERCENT}}", String(positionPercent, 1));
   page.replace("{{BOTTOM_POSITION}}", String(bottomPosition));
+  if (homingTravelValid && homingTravelMs > 0) {
+    float stepsPerSec = (float)homingTravelSteps * 1000.0f / (float)homingTravelMs;
+    page.replace("{{HOMING_TRAVEL}}", String(homingTravelSteps) + " steps in " +
+      String(homingTravelMs / 1000.0f, 1) + "s (~" + String(stepsPerSec, 0) + " steps/s)");
+  } else {
+    page.replace("{{HOMING_TRAVEL}}", "Not yet measured");
+  }
   page.replace("{{AUTO_HOME_STATUS}}", autoHomeOnBootConfig ? "Enabled" : "Disabled");
 
   // Configuration values
@@ -612,7 +619,7 @@ void handleCompactLog() {
 }
 
 // Static buffer for status data response (avoids heap allocation)
-static char statusDataBuffer[1700];
+static char statusDataBuffer[1800];
 
 void handleStatusData() {
 
@@ -689,6 +696,9 @@ void handleStatusData() {
     "\"position\":%d,"
     "\"positionPercent\":%d,"
     "\"bottomPosition\":%d,"
+    "\"homingTravelValid\":%s,"
+    "\"homingTravelSteps\":%ld,"
+    "\"homingTravelMs\":%lu,"
     "\"control16Bit\":%s,"
     "\"protocolPacketsReceived\":%lu,"
     "\"protocolLastCommand\":%u,"
@@ -732,6 +742,9 @@ void handleStatusData() {
     currentPosition,
     positionPercent,
     bottomPosition,
+    homingTravelValid ? "true" : "false",
+    homingTravelSteps,
+    homingTravelMs,
     control16BitConfig ? "true" : "false",
     packetsReceived,
     currentPositionRequest,

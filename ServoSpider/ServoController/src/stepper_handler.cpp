@@ -22,6 +22,13 @@ unsigned long homingStateTime = 0;
 int homingCounter = 0;
 HomingSettleAction homingSettleAction = SETTLE_THEN_FIND_INITIAL;
 
+bool homingTravelValid = false;
+long homingTravelSteps = 0;
+unsigned long homingTravelMs = 0;
+// When the HOMING_FIND_OTHER_END leg actually started (runForward() issued
+// out of HOMING_SETTLE) - see homingTravelMs's declaration comment.
+static unsigned long otherEndSearchStartMs = 0;
+
 // Overall homing watchdog (2026-08-30 simplification, replacing a pile of
 // separate 10s/30s/2s per-state timeouts that could stack to 90+ seconds
 // worst case before erroring out - exactly what happened during a real
@@ -674,6 +681,24 @@ void updateHoming() {
       Serial.print("Found other end at position ");
       Serial.println(endPosition);
       bottomPosition = endPosition / 2;
+
+      // Real physical speed limit: this leg (initial trip at 0 -> this
+      // second trip at endPosition) is the same continuous "full
+      // down-and-up round trip" homingOverallTimeoutMs's reference point is
+      // based on - see homingTravelMs's declaration comment (stepper_handler.h).
+      homingTravelSteps = endPosition;
+      homingTravelMs = currentTime - otherEndSearchStartMs;
+      homingTravelValid = true;
+      if (homingTravelMs > 0) {
+        Serial.print("Full round-trip travel: ");
+        Serial.print(homingTravelSteps);
+        Serial.print(" steps in ");
+        Serial.print(homingTravelMs);
+        Serial.print(" ms (~");
+        Serial.print((float)homingTravelSteps * 1000.0f / (float)homingTravelMs, 0);
+        Serial.println(" steps/s average)");
+      }
+
       interruptTriggered = false;
       homingSettleAction = SETTLE_THEN_RETURN_TO_ZERO;
       homingState = HOMING_SETTLE;
@@ -734,6 +759,7 @@ void updateHoming() {
         tmcResetStallRampTimer();
         homingState = HOMING_FIND_OTHER_END;
         lastRunRetryMs = currentTime;
+        otherEndSearchStartMs = currentTime;  // start of the full round-trip timing leg
         break;
       case SETTLE_THEN_RETURN_TO_ZERO:
         Serial.println("Returning to home position...");

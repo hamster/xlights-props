@@ -962,6 +962,20 @@ function showNotification(message, isSuccess) {
           document.getElementById('position-percent').textContent = data.positionPercent;
           document.getElementById('bottom-position').textContent = data.bottomPosition;
 
+          // Real physical speed limit, from the last completed homing
+          // round trip (see homingTravelMs's declaration comment,
+          // stepper_handler.h) - lets whoever is timing cues to music know
+          // the device's actual achievable speed, not just "seems fast
+          // enough on the bench".
+          var homingTravelElement = document.getElementById('homing-travel');
+          if (data.homingTravelValid && data.homingTravelMs > 0) {
+            var travelSecs = (data.homingTravelMs / 1000).toFixed(1);
+            var stepsPerSec = Math.round(data.homingTravelSteps * 1000 / data.homingTravelMs);
+            homingTravelElement.textContent = data.homingTravelSteps + ' steps in ' + travelSecs + 's (~' + stepsPerSec + ' steps/s)';
+          } else {
+            homingTravelElement.textContent = 'Not yet measured';
+          }
+
           // Update Stepper position command
           document.getElementById('position-command').textContent = data.protocolLastCommand;
           document.getElementById('position-command-percent').textContent = data.protocolLastCommandPercent;
@@ -1281,6 +1295,7 @@ function showNotification(message, isSuccess) {
         <p><strong>Position Command:</strong> <span id="position-command">0</span> (<span id="position-command-percent">0.0</span>%)</p>
         <p><strong>Current Position:</strong> <span id="current-position">{{CURRENT_POSITION}}</span> steps (<span id="position-percent">{{POSITION_PERCENT}}</span>%)</p>
         <p><strong>Bottom Position:</strong> <span id="bottom-position">{{BOTTOM_POSITION}}</span> steps</p>
+        <p><strong>Full Travel:</strong> <span id="homing-travel">{{HOMING_TRAVEL}}</span></p>
         <p><strong>Auto Home on Boot:</strong> <span id="auto-home-on-boot">{{AUTO_HOME_STATUS}}</span></p>
 
         <button class="collapsible" onclick="toggleCollapsible(this)">Manual Stepper Control</button>
