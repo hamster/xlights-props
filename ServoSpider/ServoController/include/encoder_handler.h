@@ -10,11 +10,10 @@
 // ($CHECKSTEPS / stepper_handler.h's StepCheckState are indirect
 // workarounds that exist because of that gap) - the encoder can.
 //
-// Wired: channel A = D0, channel B = D9 - standard two-wire quadrature.
-// channel B is no longer used by the current implementation (see below) -
-// still physically wired, just not read.
+// Wired: channel A = D0, channel B = D9 - standard two-wire quadrature, both
+// channels read by the current implementation (see below).
 //
-// Firmware went through five implementations chasing an accurate count:
+// Firmware went through six implementations chasing an accurate count:
 //   1-2. ESP32 PCNT peripheral (interrupt-driven, then polling-only for the
 //        overflow) - both caused a severe regression: FastAccelStepper's own
 //        MCPWM+PCNT backend (the DRIVER_DONT_CARE default on this chip)
@@ -33,88 +32,81 @@
 //      real (~10-13 per full-range leg, every leg) - and neither pinning
 //      the ISR to Core 0 (away from FastAccelStepper's Core-1-affine PCNT
 //      interrupt) nor removing the web status poll from Core 0 meaningfully
-//      reduced it. That ruled out "competing with a specific busy
-//      neighbor" as the cause - pointing instead at something intrinsic to
-//      edge-triggered GPIO interrupts here (either a genuinely tight-spaced
-//      noise/bounce event, or a baseline ESP32 interrupt-dispatch latency
-//      floor), not fixable by juggling task/core placement.
-//   5. Current: ESP32 RMT peripheral, RX mode, channel A only (see below).
+//      reduced it.
+//   5. ESP32 RMT peripheral, RX mode, channel A only, direction inferred
+//      from the stepper's own commanded direction - chosen because RMT
+//      timestamps edges in hardware rather than depending on interrupt
+//      latency, and because the toolchain here only has the older, ring-
+//      buffer-based driver/rmt.h API (not the modern per-edge-callback
+//      channel-handle API), which made merging two independently-flushed
+//      channels back into one timeline (for real X4 direction) look too
+//      fragile to bother with. This turned out to be a mistake: bench
+//      testing 2026-09-06 found the RMT RX overflow condition ("RMT RX
+//      BUFFER FULL", from a single long continuous move exceeding the
+//      hardware's on-chip memory before any idle gap triggers a flush) has
+//      a real, non-deterministic chance of hard-crashing *both* cores
+//      (Core 0 interrupt wdt timeout). Raising mem_block_num to survive
+//      longer continuous runs made it worse, not better, on two different
+//      channels (one silently stopped capturing anything at all; the other
+//      still crashed). Lowering the idle-flush threshold to shrink a
+//      separate direction-at-reversal race also crashed the device.
+//      Isolating every one of those changes back out (WiFi on/off, RMT
+//      channel/mem_block_num/idle_threshold, a settle-wait before trusting
+//      a drain) failed to find a single reliable culprit - the crash
+//      reproduced even with every setting back at its original, first-
+//      light-of-day values. Conclusion: the crash isn't tied to any one
+//      knob, it's inherent to this driver's overflow-recovery path under
+//      sustained continuous motion, and the session's one clean run was
+//      luck, not a stable baseline. Abandoned.
+//   6. Current: hardware timer poll, both channels, in software. See below.
 //
-// Why RMT, and why only one channel: RMT's receive mode timestamps every
-// level change in dedicated hardware, with a real hardware glitch filter
-// (filter_ticks_thresh - discards pulses shorter than this before they're
-// ever recorded) - it doesn't depend on an interrupt being serviced
-// promptly the way GPIO edge-interrupts or a periodic poll both do, so it
-// can't repeat implementation #4's failure mode. The toolchain actually
-// available here only has the older, ring-buffer-based driver/rmt.h API
-// (checked directly - the modern per-edge-callback channel-handle API
-// FastLED's own IDF5 code assumes doesn't exist in this specific
-// arduino-esp32 package, and upgrading the platform doesn't change that -
-// see TODO.md), and each RMT channel only watches one GPIO. Running RMT on
-// *both* A and B and merging their independently-flushed ring-buffer
-// streams back into a combined timeline (to reconstruct real X4 direction)
-// is possible but genuinely fragile - real synchronization complexity for
-// code that isn't meant to be permanent. Instead: RMT captures channel A
-// only (hardware-filtered edge count, X2 resolution - both rising and
-// falling edges), and direction is taken from the stepper's own currently
-// commanded direction (stepper->getCurrentSpeedInMilliHz()'s sign) rather
-// than sampled from channel B. This is a deliberate, accepted scope
-// reduction: it can no longer independently detect the shaft spinning the
-// "wrong way" relative to what's commanded (never actually observed or
-// suspected in this whole investigation), but it fully preserves what this
-// tool has actually been used for - catching a real *count/magnitude*
-// mismatch - while removing the cross-channel timing-correlation problem
-// entirely. Resolution drops from ~10 steps/count (X4) to roughly
-// ~20 steps/count (X2) - still far finer than the hundreds-of-steps lag
-// this is meant to catch.
+// Why a timer poll instead of any interrupt-driven scheme: every ISR-driven
+// approach tried above (GPIO edge interrupts, RMT) turned out to have a real
+// failure mode tied to servicing edges promptly or to on-chip buffering.
+// A periodic hardware timer ISR sidesteps both - no ring buffer, no
+// dependency on FreeRTOS task scheduling, and the poll rate is chosen with
+// enormous headroom over the real signal: this project's own bench data
+// (a full-range move's total encoder counts divided by its measured
+// duration) puts the real edge rate under 200Hz even at the fastest tested
+// stepper speed, so a 4kHz poll (see ENCODER_POLL_HZ, encoder_handler.cpp)
+// gives roughly 20x oversampling - a missed transition at that margin would
+// require the ISR itself to be starved for over 5ms, which would show up
+// directly in core0_task.h's own gap instrumentation. Both channels are
+// read every tick and decoded with the standard X4 state-transition table,
+// so direction is genuinely measured again (not inferred from the stepper's
+// commanded direction, as implementation #5 was reduced to) - this also
+// directly answers whether this approach generalizes to real DDP/tracking-
+// mode tuning with mid-flight reversals: yes, because direction no longer
+// depends on there being an idle checkpoint at all.
 #define encoderPinA D0
-#define encoderPinB D9  // wired, not read by the current (RMT) implementation
+#define encoderPinB D9
 
-void initEncoder();    // Call from setup() (or a Core 0 task, per core0_task.h) - configures and starts RMT RX on channel A
+void initEncoder();    // Call from setup() (or a Core 0 task, per core0_task.h) - configures and starts the hardware timer poll
 
-// Call periodically (e.g. every ~10-20ms) to drain RMT's ring buffer and
-// fold newly-captured edges into cumulativeCount. Unlike the GPIO-ISR
-// version, this one does need a per-loop update call - RMT's ring buffer
-// is drained by the application, not delivered via a per-edge callback.
-// See core0_task.cpp, where this is called from the Core 0 task's own loop.
-//
-// Also safe (and expected) to call directly, synchronously, from wherever
-// the stepper's commanded direction is about to change - found necessary
-// on the bench (2026-09-06): if any real captured data is still sitting in
-// the ring buffer at the moment a move finishes, and nothing drains it
-// before the *next* (opposite-direction) move is issued, that whole
-// leftover batch gets attributed the new, wrong direction once the Core 0
-// task's periodic drain eventually gets to it - not a rare 1-2-edge
-// rounding error as originally estimated, but entire legs' worth of data,
-// ~19% of legs in one real sweep. Calling this right after detecting the
-// stepper has stopped (encoder_diag.cpp's updateEncoderDiag() does this)
-// and before issuing the reversed move flushes any straggler under the
-// *old*, still-correct direction - stepper->getCurrentSpeedInMilliHz()
-// reads 0 at that exact instant, so the "keep last known direction"
-// fallback below does the right thing automatically. Thread-safe (a
-// portMUX_TYPE spinlock guards the shared counters) specifically to make
-// this multi-context calling pattern safe.
+// No-op in the current (timer-poll) implementation - counting happens
+// directly in the timer ISR, not via a periodic drain. Kept as a real
+// function (rather than removed) so core0_task.cpp's periodic call and
+// encoder_diag.cpp's synchronous call don't need to change; see this
+// file's top-of-file history comment for why a periodic drain call
+// mattered for the RMT implementation this replaced, and doesn't anymore.
 void updateEncoder();
 
-// Cumulative edge count (X2 - both rising and falling edges on channel A
-// only, see the file comment for why) since boot or the last
-// resetEncoderCount(), signed - direction applied per drained batch from
-// the stepper's own currently commanded direction. Sign convention matches
-// stepper_handler's (increasing count = increasing stepper position,
-// moving away from the switch) by construction, since direction is taken
-// directly from the stepper rather than independently measured.
+// Cumulative X4 quadrature count (both channels, every real transition)
+// since boot or the last resetEncoderCount(), signed - direction is
+// measured directly from the A/B phase relationship, not inferred. Sign
+// convention matches stepper_handler's (increasing count = increasing
+// stepper position, moving away from the switch) - confirmed on the bench,
+// not just assumed; see the encoder sign-flip history in TODO.md if this
+// ever needs re-deriving after a wiring change.
 int32_t getEncoderCount();
 
-// Heuristic diagnostic, not a precise count: increments if a single drain
-// call pulls an unusually large batch of edges (see ENCODER_BACKLOG_THRESHOLD
-// in encoder_handler.cpp) - suggestive of updateEncoder() not being called
-// often enough and a backlog building up in the software ring buffer. RMT's
-// own hardware-to-ring-buffer path is serviced by ESP-IDF's installed
-// driver ISR independent of this code's own scheduling, so actual data loss
-// here would require the *software* ring buffer itself (sized generously in
-// initEncoder()) to fill - structurally a much smaller risk than
-// implementation #4's per-edge ISR-latency loss, but not zero, hence this
-// stays as a real (if approximate) health signal rather than being removed.
+// Real (not heuristic) diagnostic: counts genuine skipped transitions - the
+// timer ISR sampled a state where *both* quadrature bits changed since the
+// last sample, which a valid signal can't do in one real step (it takes two
+// real edges to get there). At ~20x oversampling this should be ~0 for the
+// life of the device; a nonzero value means the poll rate genuinely isn't
+// keeping up (or the timer ISR itself is being starved - cross-check
+// core0_task.h's own gap instrumentation).
 uint32_t getMissedTransitionCount();
 
 // Zero the count - mirrors stepper->setCurrentPosition(0), for calibrating

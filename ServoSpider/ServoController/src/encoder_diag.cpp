@@ -13,6 +13,15 @@ static int encDiagRunIndex = 0;      // 1-based, which of the 8 runs at the curr
 static bool encDiagHeadingTo100 = true;  // What the just-issued move was targeting - true=100%, false=0%
 static int encDiagSavedSpeed = 0;
 static int encDiagSavedAccel = 0;
+// A settle-wait state (waiting out RMT_IDLE_THRESHOLD_TICKS before trusting
+// the encoder count after a stop) was tried here 2026-09-06 to fix the
+// direction-at-reversal bug - every bench run that included it crashed
+// (Core 0 interrupt wdt timeout), regardless of RMT channel/mem_block_num/
+// idle_threshold or WiFi on/off, while the one run that predates it did
+// not crash. Reverted back to the original immediate-drain-on-stop
+// behavior pending a real root-cause of that crash - see TODO.md. The
+// direction-at-reversal bug this was meant to fix is real and still
+// unfixed.
 
 bool isEncoderDiagRunning() {
   return encDiagState != ENCDIAG_IDLE;
@@ -89,7 +98,12 @@ void updateEncoderDiag() {
   // (encoder_handler.h) for why this matters: the stepper reads 0 speed at
   // this exact instant (just stopped), so this flushes any real data still
   // sitting in the ring buffer under the *correct*, just-finished
-  // direction, before anything about to change could make it wrong.
+  // direction, before anything about to change could make it wrong. (Real
+  // residual risk here - the RMT hardware itself may not have flushed this
+  // run's final tail yet, since that only happens after
+  // RMT_IDLE_THRESHOLD_TICKS of true silence - see that constant's comment
+  // in encoder_handler.cpp. An explicit wait for that was tried and
+  // reverted; see this file's top-of-function history note.)
   updateEncoder();
 
   int freqHz = ENCDIAG_FREQS[encDiagFreqIndex];
