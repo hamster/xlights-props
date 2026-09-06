@@ -962,11 +962,11 @@ function showNotification(message, isSuccess) {
           document.getElementById('position-percent').textContent = data.positionPercent;
           document.getElementById('bottom-position').textContent = data.bottomPosition;
 
-          // Real physical speed limit, from the last completed homing
-          // round trip (see homingTravelMs's declaration comment,
-          // stepper_handler.h) - lets whoever is timing cues to music know
-          // the device's actual achievable speed, not just "seems fast
-          // enough on the bench".
+          // Real physical speed limit, one-way (0-100%) - derived from the
+          // last completed homing cycle (see homingTravelMs's declaration
+          // comment, stepper_handler.h) - lets whoever is timing cues to
+          // music know the device's actual achievable speed, not just
+          // "seems fast enough on the bench".
           var homingTravelElement = document.getElementById('homing-travel');
           if (data.homingTravelValid && data.homingTravelMs > 0) {
             var travelSecs = (data.homingTravelMs / 1000).toFixed(1);
@@ -975,6 +975,18 @@ function showNotification(message, isSuccess) {
           } else {
             homingTravelElement.textContent = 'Not yet measured';
           }
+
+          // Rotary encoder on the motor shaft - ground-truth position cross-
+          // check, independent of the stepper's own step-count bookkeeping.
+          // Resyncs to 0 at the end of every successful homing (see
+          // resetEncoderCount()'s call site, stepper_handler.cpp).
+          // encoderMissed is a lifetime count of "illegal 2-bit jump" ISR
+          // events - a real quadrature edge that was never sampled and is
+          // permanently lost (see getMissedTransitionCount()'s declaration
+          // comment, encoder_handler.h). Near 0 across a real test means
+          // firmware isn't the source of any remaining drift/noise.
+          document.getElementById('encoder-count').textContent = data.encoderInitialized ?
+            (data.encoderCount + ' (' + data.encoderMissed + ' missed)') : 'N/A';
 
           // Update Stepper position command
           document.getElementById('position-command').textContent = data.protocolLastCommand;
@@ -1296,6 +1308,7 @@ function showNotification(message, isSuccess) {
         <p><strong>Current Position:</strong> <span id="current-position">{{CURRENT_POSITION}}</span> steps (<span id="position-percent">{{POSITION_PERCENT}}</span>%)</p>
         <p><strong>Bottom Position:</strong> <span id="bottom-position">{{BOTTOM_POSITION}}</span> steps</p>
         <p><strong>Full Travel:</strong> <span id="homing-travel">{{HOMING_TRAVEL}}</span></p>
+        <p><strong>Encoder Count:</strong> <span id="encoder-count">{{ENCODER_COUNT}}</span></p>
         <p><strong>Auto Home on Boot:</strong> <span id="auto-home-on-boot">{{AUTO_HOME_STATUS}}</span></p>
 
         <button class="collapsible" onclick="toggleCollapsible(this)">Manual Stepper Control</button>

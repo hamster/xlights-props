@@ -54,6 +54,21 @@
 //                            system not-homed, same as any unexpected trip
 //                            outside of homing - re-run $HOME before relying
 //                            on position again.
+//   $ENCDIAG               - encoder diagnostic sweep: repeats a
+//                            0%->100%->0% cycle 8 times at each of four
+//                            stepper speeds (3000/4000/5000/6500 Hz),
+//                            direct moveTo() calls bypassing DDP/tracking-
+//                            mode, same as $CHECKSTEPS. Requires homed=1 and
+//                            the stepper idle first, or replies "ERR ...".
+//                            Prints "ENCDIAG_START", then a CSV header
+//                            (freqHz,run,phase,stepperPos,encoderCount,
+//                            missedTotal) followed by one row per leg (16
+//                            legs per frequency x 4 = 64 rows total: phase
+//                            100 or 0 marks which end of that leg was just
+//                            reached), then "ENCDIAG_DONE" once the whole
+//                            sweep finishes and the stepper's original
+//                            speed/accel are restored. Takes a few minutes
+//                            end to end - it's a full-range move x 64.
 //
 // Tunable names (see tools/README.md for the matching Python-side names):
 //   normalSpeed, normalAccel, jumpStart, trackEnabled, trackThreshold,

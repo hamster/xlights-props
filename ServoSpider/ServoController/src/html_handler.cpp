@@ -8,6 +8,7 @@
 #include "led_handler.h"
 #include "protocol_common.h"
 #include "tmc_handler.h"
+#include "encoder_handler.h"
 #include "main.h"
 #include <WiFi.h>
 #include <Preferences.h>
@@ -60,6 +61,8 @@ void handleRoot() {
     page.replace("{{HOMING_TRAVEL}}", "Not yet measured");
   }
   page.replace("{{AUTO_HOME_STATUS}}", autoHomeOnBootConfig ? "Enabled" : "Disabled");
+  page.replace("{{ENCODER_COUNT}}", isEncoderInitialized() ?
+    String(getEncoderCount()) + " (" + String(getMissedTransitionCount()) + " missed)" : "N/A");
 
   // Configuration values
   page.replace("{{HOSTNAME}}", hostname);
@@ -619,7 +622,7 @@ void handleCompactLog() {
 }
 
 // Static buffer for status data response (avoids heap allocation)
-static char statusDataBuffer[1800];
+static char statusDataBuffer[1900];
 
 void handleStatusData() {
 
@@ -699,6 +702,9 @@ void handleStatusData() {
     "\"homingTravelValid\":%s,"
     "\"homingTravelSteps\":%ld,"
     "\"homingTravelMs\":%lu,"
+    "\"encoderInitialized\":%s,"
+    "\"encoderCount\":%ld,"
+    "\"encoderMissed\":%lu,"
     "\"control16Bit\":%s,"
     "\"protocolPacketsReceived\":%lu,"
     "\"protocolLastCommand\":%u,"
@@ -745,6 +751,9 @@ void handleStatusData() {
     homingTravelValid ? "true" : "false",
     homingTravelSteps,
     homingTravelMs,
+    isEncoderInitialized() ? "true" : "false",
+    (long)getEncoderCount(),
+    (unsigned long)getMissedTransitionCount(),
     control16BitConfig ? "true" : "false",
     packetsReceived,
     currentPositionRequest,

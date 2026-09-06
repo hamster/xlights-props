@@ -28,6 +28,10 @@ $HOME                     -> OK HOME
 $CHECKSTEPS [target]      -> OK CHECKSTEPS started target=0
                               ... then, async once the move finishes ...
                               CHECKSTEPS_RESULT tripped=0 tripPos=0 target=0 elapsedMs=1830
+$ENCDIAG                  -> ENCDIAG_START
+                              freqHz,run,phase,stepperPos,encoderCount,missedTotal
+                              ... 64 CSV rows ...
+                              ENCDIAG_DONE
 ```
 
 ### Detecting real step loss: `$CHECKSTEPS`
@@ -65,6 +69,20 @@ both ends of travel from scratch), so `tuning_harness.py` uses it as the
 default check between every stress-test run - see below - reserving a full
 re-home for either session start or as the automatic recovery step once a
 check reports `tripped=1`.
+
+### Bulk encoder characterization: `$ENCDIAG`
+
+Automates the manual "run a 0%->100%->0% cycle a handful of times, write
+down the encoder readings" process used to chase down the encoder drift/
+noise investigation (see TODO.md's encoder section for the whole saga).
+Requires `homed=1` and the stepper idle first (same as `$CHECKSTEPS`).
+Repeats a direct `moveTo()` 0%->100%->0% cycle 8 times at each of four
+stepper speeds (3000/4000/5000/6500 Hz), printing one CSV row per leg
+(`stepperPos`, `encoderCount`, and the lifetime `missedTotal` diagnostic
+from `encoder_handler.h`'s `getMissedTransitionCount()`) so a full sweep
+can be captured and analyzed at once instead of transcribed by hand one
+run at a time. Restores the stepper's original speed/accel when done.
+Takes a few minutes end to end (64 full-range moves).
 
 `$SET` only changes the live in-RAM config - it does **not** write to
 flash, so rapid iterative tuning doesn't wear the flash and doesn't

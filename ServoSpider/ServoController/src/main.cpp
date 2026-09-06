@@ -15,6 +15,7 @@
 #include "tmc_handler.h"
 #include "tuning_handler.h"
 #include "encoder_handler.h"
+#include "encoder_diag.h"
 
 // Watchdog timeout in seconds
 #define WDT_TIMEOUT 10
@@ -578,11 +579,6 @@ void loop() {
   // Check WiFi connection and reconnect if needed
   checkWifiConnection();
 
-  // Poll the encoder's raw PCNT counter - see encoder_handler.h for why
-  // this is polling-based rather than interrupt-driven. No-op if the
-  // encoder never initialized.
-  updateEncoder();
-
   // Periodic compact-log sample, so any significant move (a single large
   // DDP jump, or a diagnostic moveTo() like $CHECKSTEPS's that bypasses
   // this DDP dispatch entirely) gets a full speed-over-time trace instead
@@ -594,6 +590,12 @@ void loop() {
   // pendingForceStop flag, and this one needs first refusal on it (see
   // updateStepCheck()'s comment in stepper_handler.cpp).
   updateStepCheck();
+
+  // Update the encoder diagnostic sweep, if one is in progress ($ENCDIAG) -
+  // no first-refusal ordering requirement like updateStepCheck() above (see
+  // its declaration comment, stepper_handler.h), just grouped with the
+  // other diagnostic update calls for consistency.
+  updateEncoderDiag();
 
   // Update non-blocking homing state machine
   updateHoming();
@@ -995,7 +997,10 @@ void printFullStatus() {
   }
   Serial.print("Encoder: ");
   if (isEncoderInitialized()) {
-    Serial.println(getEncoderCount());
+    Serial.print(getEncoderCount());
+    Serial.print(" (missed transitions: ");
+    Serial.print(getMissedTransitionCount());
+    Serial.println(")");
   } else {
     Serial.println("Not initialized");
   }

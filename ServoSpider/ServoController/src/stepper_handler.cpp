@@ -1,5 +1,6 @@
 #include "stepper_handler.h"
 #include "tmc_handler.h"
+#include "encoder_handler.h"
 #include <Preferences.h>
 
 extern Preferences preferences;
@@ -682,15 +683,25 @@ void updateHoming() {
       Serial.println(endPosition);
       bottomPosition = endPosition / 2;
 
-      // Real physical speed limit: this leg (initial trip at 0 -> this
-      // second trip at endPosition) is the same continuous "full
-      // down-and-up round trip" homingOverallTimeoutMs's reference point is
-      // based on - see homingTravelMs's declaration comment (stepper_handler.h).
-      homingTravelSteps = endPosition;
-      homingTravelMs = currentTime - otherEndSearchStartMs;
+      // Real physical speed limit, wanted as a one-way 0-100% figure (what
+      // whoever is timing cues to music actually needs), not the full
+      // down-and-up round trip this leg physically covers. This whole leg
+      // is one continuous, unbroken runForward() at a constant commanded
+      // speed - the trolley's direction reverses at the midpoint as a
+      // passive consequence of the rope re-wrapping on the pulley, but the
+      // stepper itself never stops, decelerates, or changes speed there -
+      // so distance and elapsed time both split evenly at the midpoint,
+      // and halving both of this leg's totals is a well-justified
+      // approximation of the one-way figure, not a rough guess. (The small
+      // ramp-up at the very start of the leg falls entirely within the
+      // first half either way, so it doesn't skew this any more than it
+      // already would.)
+      unsigned long fullLegMs = currentTime - otherEndSearchStartMs;
+      homingTravelSteps = endPosition / 2;  // same value as bottomPosition, computed the same way
+      homingTravelMs = fullLegMs / 2;
       homingTravelValid = true;
       if (homingTravelMs > 0) {
-        Serial.print("Full round-trip travel: ");
+        Serial.print("One-way (0-100%) travel: ");
         Serial.print(homingTravelSteps);
         Serial.print(" steps in ");
         Serial.print(homingTravelMs);
@@ -792,6 +803,11 @@ void updateHoming() {
         Serial.print("Final position: ");
         Serial.println(currentPos);
         homed = true;
+        // Resync the encoder's zero reference to the stepper's freshly-
+        // confirmed position 0, now that it's actually trusted - otherwise
+        // the encoder count keeps drifting from whatever it happened to
+        // read at boot (or after a prior, possibly-imperfect homing).
+        resetEncoderCount();
         homingState = HOMING_COMPLETE;
       } else {
         // Stepper stopped but not at zero, try again
