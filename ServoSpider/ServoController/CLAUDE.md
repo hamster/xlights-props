@@ -32,10 +32,11 @@ Build artifacts are auto-copied to `build/ServoController-<version>.bin`. Versio
 
 ## Architecture
 
-### Single-Core Design (current — not yet using the S3's second core)
-- **Core 1 (Main)**: WiFi, web server, stepper control, DDP parsing, LED updates (main loop)
-- FastLED.show() is called directly from the DDP handler for immediate LED updates
-- The move to ESP32-S3 was meant to split stepper/protocol handling from WS2812 output across both cores, since `FastLED.show()` blocks its calling core for the WS2812 transmission time (~30µs/pixel). That split has never been implemented — everything still runs serially in `loop()` on one core. Tracked in [TODO.md](TODO.md).
+### Dual-Core Split (in progress — see TODO.md's Priority 1 for the full design and why the original justification below turned out to be only partly right)
+- **Core 1 (Main)**: WiFi, web server, stepper control (including FastAccelStepper's own background task, explicitly pinned via `engine.init(1)`), DDP parsing, LED updates (main loop)
+- **Core 0**: a dedicated task (`core0_task.h`/`.cpp`), currently just hosting the rotary encoder's GPIO interrupt (see `encoder_handler.h`) so it doesn't contend with FastAccelStepper's own Core-1-affine interrupt — not yet doing anything with LEDs
+- FastLED.show() is still called directly from the DDP handler for immediate LED updates — moving that to the Core 0 task is designed but not yet implemented
+- The move to ESP32-S3 was originally understood as splitting stepper/protocol handling from WS2812 output because `FastLED.show()` blocks its calling core for the WS2812 transmission time (~30µs/pixel) — checking the actual vendored driver source showed that's mostly not true on this hardware (it's async - see TODO.md); the real, current justification is explicit core allocation so nothing on Core 1 (stepper dispatch, DDP, web, TMC UART) contends with anything else, which is why the encoder moved first rather than LEDs.
 
 ### Key Data Flow
 ```

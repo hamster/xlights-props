@@ -176,7 +176,17 @@ void IRAM_ATTR handleHomingInterrupt() {
 // Halfway is the bottom point.
 void initializeStepper() {
   // Setup stepper controller
-  engine.init();
+  // Explicitly pinned to Core 1 (was plain engine.init() - unpinned,
+  // xTaskCreate() with tskNO_AFFINITY, left to the scheduler). FastAccelStepper
+  // runs its own background task here (queue/ramp-refill housekeeping - the
+  // actual step pulses are hardware/MCPWM-generated, independent of any
+  // core) and, on this chip, its MCPWM+PCNT backend installs its own raw
+  // PCNT interrupt via esp_intr_alloc() too - both core-affine to wherever
+  // this function runs, which is setup(), Core 1. Making that explicit
+  // rather than implicit, and keeping it on Core 1 alongside loop()/DDP/web,
+  // now that Core 0 is being used deliberately for other things (see
+  // core0_task.h) instead of left to chance.
+  engine.init(1);
   stepper = engine.stepperConnectToPin(stepperStepPin);
   if (stepper) {
     stepper->setDirectionPin(stepperDirectionPin, LOW);

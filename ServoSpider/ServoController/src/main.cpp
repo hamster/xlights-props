@@ -16,6 +16,7 @@
 #include "tuning_handler.h"
 #include "encoder_handler.h"
 #include "encoder_diag.h"
+#include "core0_task.h"
 
 // Watchdog timeout in seconds
 #define WDT_TIMEOUT 10
@@ -521,7 +522,12 @@ void setup() {
 
   // Initialize stepper
   initializeStepper();
-  initEncoder();
+
+  // Starts the Core 0 task, which calls initEncoder() itself (not here) so
+  // the encoder's GPIO interrupt ends up Core-0-affine, physically
+  // separated from FastAccelStepper's own Core-1-affine PCNT interrupt -
+  // see core0_task.h.
+  startCore0Task();
 
   // Initialize TMC2209 UART link (no-op if tmcEnabledConfig is false)
   initTmc();
