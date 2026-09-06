@@ -59,6 +59,23 @@ static bool getTunable(const String& name, String& valueOut) {
   // characterization) - see setTunable()'s handling of this name for why
   // it's kept separate from /save-tmc's full-settings path.
   if (name == "tmcRunCurrent") { valueOut = String(tmcRunCurrentConfig); return true; }
+  // Same rationale as tmcRunCurrent - a plain RAM boolean gate (no register
+  // write needed, unlike current/microsteps/etc.), so toggling it here is
+  // trivially safe and avoids /save-tmc's full-form reconstruction risk -
+  // added after that risk turned from theoretical to real (2026-09-06): a
+  // web UI save re-enabled StallGuard as a side effect of an unrelated
+  // settings change, silently reintroducing the false-positive stalls it
+  // was deliberately disabled for earlier this session.
+  if (name == "tmcStallEnabled") { valueOut = String(tmcStallEnabledConfig ? 1 : 0); return true; }
+  // Read-only (no setTunable() branch - a fake position command bypassing
+  // real DDP parsing would be misleading, not useful). Added 2026-09-06 for
+  // verifying a UDP DDP packet actually landed from a bench test script -
+  // DDP has no ack, so a lost packet otherwise silently leaves this stale,
+  // corrupting whatever step-response test assumed it just changed. Lighter
+  // than polling /status-data's equivalent (protocolLastCommand) over HTTP,
+  // which competes with the same single-threaded WebServer everything else
+  // on the device shares.
+  if (name == "positionRequest") { valueOut = String(positionRequest); return true; }
   return false;
 }
 
@@ -67,7 +84,8 @@ static const char* ALL_TUNABLE_NAMES[] = {
   "trackSpeed", "trackAccel", "trackMaxLag", "trackMode", "coalesceMs",
   "coalesceSteps", "streamRateWindow", "streamSettle", "compactLog", "protocolDebug",
   "homeSpeed", "homeAccel", "lookaheadSteps", "lookaheadSettle",
-  "pidKp", "pidKi", "pidKd", "pidMaxSpeed", "pidAccel", "pidDeadband", "tmcRunCurrent"
+  "pidKp", "pidKi", "pidKd", "pidMaxSpeed", "pidAccel", "pidDeadband", "tmcRunCurrent",
+  "tmcStallEnabled", "positionRequest"
 };
 static const int ALL_TUNABLE_COUNT = sizeof(ALL_TUNABLE_NAMES) / sizeof(ALL_TUNABLE_NAMES[0]);
 
@@ -122,6 +140,14 @@ static bool setTunable(const String& name, const String& valueStr) {
   // new current - same "RAM-only, no flash wear, no side effects on
   // anything else" contract every other tunable in this file already has.
   if (name == "tmcRunCurrent") { tmcRunCurrentConfig = v; applyTmcSettings(); return true; }
+  // Plain RAM boolean gate (checked directly in tmc_handler.cpp's stall
+  // cutoff, no register write involved) - safe to flip with no other side
+  // effects, unlike a /save-tmc round trip. Added 2026-09-06 after a web UI
+  // save for an unrelated setting silently re-enabled StallGuard (an absent
+  // checkbox arg there means false, so it must have been checked when that
+  // form was submitted) - reintroducing the false-positive stalls this was
+  // deliberately disabled for earlier the same session.
+  if (name == "tmcStallEnabled") { tmcStallEnabledConfig = (v != 0); return true; }
   return false;
 }
 

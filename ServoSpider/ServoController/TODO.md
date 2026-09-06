@@ -515,7 +515,38 @@ Ad hoc scripts (not yet folded into `tuning_harness.py` proper - `accel_sweep.py
 - [ ] Not yet re-verified: whether jumpStart matters at `homeAccel=20,000` (homing's own, separate, much lower accel setting) - the A/B test above was only done at `normalAccel=200,000`.
 
 - [x] **Acceleration-characterization sweep done** (see above) - acceleration was not the constraint; done in the same session with a follow-up cruise-speed sweep instead, which found the real (asymmetric) boundary.
-- [ ] **Not yet done**: PID gain tuning (Kp/Ki/Kd), now informed by both sweeps above - acceleration can be generous (no stall risk found up to 50,000 at 6500 Hz), and `pidMaxSpeedConfig` has real, quantified margin at its current 6500 Hz default in both directions. Current gains are still an untuned, conservative starting point only.
+### PID gain tuning (2026-09-06)
+
+Raised `pidAccel` from its 2500 placeholder to 50,000 (vetted clean by the accel sweep) so gain tuning tests the control loop itself, not an arbitrarily slow ramp. Step-response methodology (`pid_kp_sweep.py`, scratch area, not yet committed): command a single, sudden target change from a genuine rest position, capture the whole transient via the Compact Motion Log, compute overshoot/first-crossing-time/oscillation.
+
+**Two real, serious test-methodology bugs found and fixed before this data could be trusted - both are useful precedent for any future DDP-based bench test, not just this one:**
+1. **`positionRequest` is a persistent global, never reset between tests.** Repositioning via `$CHECKSTEPS` (direct `moveTo()`) moves the stepper but does *not* touch `positionRequest` - so the moment `trackMode` flips to `4` (PID), PID immediately starts driving toward whatever `positionRequest` was left at by the *previous* test (the same `TARGET_POS` every time in this sweep), well before the "real" step packet for the new test even arrives. The capture (started after that mode switch) could begin mid-response or after it had already overshot, producing wildly different, irreproducible results at the *same* Kp across repeated runs. Fixed by explicitly sending a "neutral" DDP packet at the start position before engaging PID each time, so its error is genuinely zero at the moment it engages.
+2. **DDP is UDP - no ack, no retry - so a single send of that neutral packet (or the real step packet) is not reliable.** A silently-lost packet leaves `positionRequest` stale with no client-side error, corrupting the test the same way as bug #1 even after fixing it. Confirmed for real on the bench (not just theorized) via a new `$GET positionRequest` (RAM-only, read-only - added to `tuning_handler.cpp` for exactly this) showing the neutral packet genuinely hadn't landed. Fixed by verifying delivery (poll `$GET positionRequest`, matching over the same serial connection rather than `/status-data` over HTTP - the latter, tried first, produced real request timeouts fighting the same single-threaded WebServer everything else on the device shares) and resending with a fresh sequence number until confirmed.
+
+**Also found while investigating bug #1's symptoms: StallGuard had been silently re-enabled** (`tmcStallEnabled=true` on the live device, confirmed via `/status-data`), contradicting this whole session's established "disabled" status - a real `TMC2209: stall detected` / `Stopping motor` event fired mid-move during an early pass of this exact sweep. Root cause: almost certainly a side effect of the user's earlier web UI settings save (that form reconstructs every TMC field including checkboxes; StallGuard's checkbox must have been checked in the browser at save time). Added a matching RAM-only `$SET`/`$GET tmcStallEnabled` tunable (same rationale as `tmcRunCurrent` - a plain boolean gate with no register write involved, so trivially safe to toggle without `/save-tmc`'s full-form risk) and explicitly force it off at the start of every bench script now rather than assume.
+
+**Clean Kp sweep (Ki=Kd=0), once both bugs were fixed:**
+
+| Kp | overshoot (steps) | first-crossing time (ms) | oscillation |
+|---|---|---|---|
+| 0.5 | - | never converged in 8s | - |
+| 1.0 | 0 | 3553 | none |
+| 1.5 | 0 | 3062 | none |
+| 2.0 | 0 | 2360 | none |
+| 3.0 | 0 | 1720 | none |
+| 4.0 | 0 | 1420 | none |
+| 6.0 | 0 | 1160 | none |
+| 8.0 | 0 | 1020 | none |
+| 10.0 | 81 | 960 | none |
+| 15.0 | 333 | 1200 | one reversal |
+| 20.0 | 408 | 1180 | one reversal |
+| 30.0 | 462 | 921 | none |
+
+Clean, monotonic, physically sensible: response time improves steadily with Kp up to 8.0 (zero overshoot the entire way), then real overshoot begins between Kp=8 and Kp=10 and grows from there, while first-crossing time barely improves further (1020ms at Kp=8 vs. 921ms at Kp=30, despite ~4x the gain) - **Kp≈6-8 is the P-only sweet spot**, real diminishing returns past 8.
+
+- [ ] **Not yet done**: test whether adding Kd (derivative-on-measurement) lets Kp push past 8 - i.e. faster response than the P-only sweet spot - by damping out the overshoot that appears there, rather than settling for pure-P's ceiling.
+- [ ] **Not yet done**: Ki tuning - not expected to matter much for final accuracy (the deadband-triggered `moveTo()` snap already closes any P-only steady-state gap), but worth checking whether it meaningfully reduces lag during *sustained* tracking of a moving target rather than a single step.
+- [ ] This sweep only tested one direction (target above start, i.e. "down"/gravity-assisted per the earlier sweeps' convention) and one step size (~6000 steps, 2000→8000) - not yet verified the same Kp range is equally clean in the "up"/gravity-opposed direction or for smaller/larger steps.
 - [ ] Streaming mode got the jumpStart fix but *not* the retry-throttle fix (bug #2) - it has the identical exposure (same untamed "reissue every tick while `!isRunning()`" pattern) but wasn't the mode under active test, so this is unverified there. Low priority given Streaming is already deprioritized/shelved, but worth doing before ever picking Streaming back up.
 - [ ] Consider whether `retryMoveIfDied()` (currently `static`/file-local to `stepper_handler.cpp`, homing-only) should be extracted into a small shared utility now that PID has its own hand-rolled equivalent (`lastPidRunRetryMs` in `main.cpp`) - three near-identical throttled-retry implementations (homing, PID, and Streaming once #2 above is done) is real duplication.
 
