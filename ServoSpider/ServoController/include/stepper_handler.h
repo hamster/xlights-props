@@ -74,6 +74,29 @@ extern HomingSettleAction homingSettleAction;
 // Stepper global variables
 extern FastAccelStepperEngine engine;
 extern FastAccelStepper *stepper;
+// Which way a continuous-run (runForward()/runBackward(), NOT moveTo())
+// tracking mode currently intends to be moving: 0 = no continuous run in
+// flight (moveTo()-based motion, or genuinely idle), 1 = forward commanded,
+// -1 = backward commanded. Set by TRACK_MODE_STREAMING and TRACK_MODE_PID
+// (main.cpp) immediately alongside every runForward()/runBackward() call,
+// and cleared back to 0 whenever that continuous run ends (forceStop(),
+// settling into moveTo() at the deadband, or leaving the mode).
+//
+// Exists so updateHoming()'s switch-trip "was this just contact bounce"
+// filter has something reliable to check for continuous-run motion.
+// stepper->targetPos() - the filter's primary signal - is not kept
+// meaningful by FastAccelStepper during a "keep running" continuous move
+// (see updateHoming()'s own comment), so without this, every legitimate
+// bounce edge on liftoff from the switch (departing position 0, which is
+// exactly the case a continuous-run mode has to depart from repeatedly
+// under normal DDP operation) got misread as a genuine trip and
+// forceStop()'d the move again within one tick of it starting - it could
+// never actually get away from the switch. Found on the bench (2026-09-06)
+// via TRACK_MODE_PID's very first real test: commanded to depart position 0
+// for a large positive target, but the motor never reached measurable
+// speed, the switch never cleared, and updateRammedIntoStopCheck() (working
+// exactly as designed) caught the resulting "stuck at the switch" condition.
+extern volatile int continuousRunDirection;
 extern volatile bool interruptTriggered;
 // Set by tmc_handler.cpp's stall-detection cutoff when a real stall (motor
 // commanded to move but the rotor isn't actually turning, per TMC2209
@@ -183,7 +206,7 @@ enum StepperTrackMode {
                               // across two separate confirmed-and-fixed bugs, plus a third unresolved
                               // instability (the stepper command queue appearing to wedge for 15+ seconds
                               // at a time) that survived both fixes. Not recommended - see TODO.md.
-  TRACK_MODE_LOOKAHEAD = 3   // Like Direct - still dispatches via moveTo(), the same well-tested path
+  TRACK_MODE_LOOKAHEAD = 3,  // Like Direct - still dispatches via moveTo(), the same well-tested path
                               // Direct/Coalesce use, not Streaming's separate runForward()/runBackward()
                               // path - but instead of aiming at the literal commanded position, aims at
                               // that position plus stepperLookaheadStepsConfig further in the current
@@ -195,8 +218,47 @@ enum StepperTrackMode {
                               // exact moveTo() at the true commanded position once updates go quiet
                               // (stepperLookaheadSettleMsConfig), same idea as Streaming's settle, without
                               // Streaming's separate code path or its unresolved instability.
+  TRACK_MODE_PID = 4         // Added 2026-09-06, replacing the discrete normal/tracking-profile switch
+                              // with real closed-loop control: error = commanded position (read fresh
+                              // every tick from positionRequest, not cached) minus getCurrentPosition()
+                              // drives a PID loop whose output is the stepper's target speed
+                              // (magnitude+direction), applied via the same continuous
+                              // runForward()/runBackward()/applySpeedAcceleration() plumbing
+                              // TRACK_MODE_STREAMING already uses (including its hard-won fixes: wait
+                              // for forceStop() to actually finish before restarting; re-apply
+                              // speed/accel every tick since FastAccelStepper only picks up new values
+                              // on the next move/moveTo/runForward/runBackward/applySpeedAcceleration()
+                              // call). Snaps to an exact moveTo() once |error| <= stepperPidDeadbandConfig,
+                              // rather than needing a "gone quiet" timer the way Streaming/Lookahead do -
+                              // PID's own error naturally shrinks to that point as it converges, it
+                              // doesn't need to infer "probably done" from elapsed time.
+                              //
+                              // Because it reads positionRequest directly every tick instead of only
+                              // reacting to a *new* DDP value, this mode is structurally immune to the
+                              // forceStop()-then-stuck bug documented in TODO.md's 2026-09-06 entry
+                              // (stepper->targetPos() staleness after a switch trip or stall during
+                              // normal operation) - any forceStop(), from whatever cause, just shows up
+                              // as "not moving yet" on the very next tick, and PID recomputes fresh
+                              // error and resumes on its own; no separate corrective moveTo() needed.
+                              //
+                              // Deliberately does NOT use the encoder for feedback - only
+                              // getCurrentPosition() (this device's own step-pulse bookkeeping), so it
+                              // works identically on every real device, not just the tuning bench where
+                              // an encoder happens to be wired. Gains below are untuned starting
+                              // defaults (pure-P, conservative) - see TODO.md for the planned
+                              // acceleration-characterization-then-gain-tuning sequence.
 };
 extern int stepperTrackModeConfig;
+
+// TRACK_MODE_PID parameters - see that enum value's comment for the control
+// law. Kp/Ki/Kd are floats (unlike every other tunable here) - $SET/$GET
+// special-case these three, see tuning_handler.cpp.
+extern float stepperPidKpConfig;      // Hz per step of error (proportional gain)
+extern float stepperPidKiConfig;      // Hz per (step*second) of accumulated error (integral gain)
+extern float stepperPidKdConfig;      // Hz per (step/second) of measured-position rate (derivative gain, applied to -d(measured)/dt)
+extern int stepperPidMaxSpeedConfig;  // Hz - hard clamp on PID output magnitude
+extern int stepperPidAccelConfig;     // Hz/s - ramp rate FastAccelStepper uses when the PID output speed changes; the value the planned acceleration-characterization sweep is meant to inform
+extern int stepperPidDeadbandConfig;  // steps - |error| at or below this snaps to an exact moveTo() and stops driving via PID, instead of continuing to output a tiny, chattery nonzero speed forever
 
 // TRACK_MODE_LOOKAHEAD parameters
 extern int stepperLookaheadStepsConfig;     // steps - how far beyond the commanded position to aim, in the

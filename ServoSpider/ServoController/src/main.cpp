@@ -57,6 +57,31 @@ int lookaheadDirection = 0;         // -1, 0, 1 - direction implied by the most 
 bool lookaheadSettled = true;
 unsigned long lastLookaheadCommandMs = 0;
 
+// --- TRACK_MODE_PID state --- (see that enum value's declaration comment, stepper_handler.h)
+bool pidSettled = true;
+unsigned long lastPidUpdateMs = 0;
+float pidIntegral = 0;
+long pidLastMeasuredPos = 0;   // for derivative-on-measurement, not derivative-on-error - see updatePidMode()
+bool pidStopSettling = false;  // mirrors streamStopSettling - wait for a forceStop() to actually finish before restarting
+int pidCurrentDirection = 0;   // -1, 0, 1
+// Throttle for re-issuing runForward()/runBackward() after FastAccelStepper
+// silently drops a "keep running" request without ever filling the step
+// queue - see stepper_handler.cpp's retryMoveIfDied() for the first,
+// already-proven instance of this (homing's continuous-run searches).
+// Found here the hard way (2026-09-06): PID's first bench test reissued a
+// fresh runForward() on every single 20ms tick with no throttle at all
+// while dead, right after departing position 0 (still very close to the
+// homing switch) - the ramp generator reported starting (isRunning()==true,
+// isRampGeneratorActive()==true) immediately after every single call, yet
+// was already dead again by the very next tick, for 1.5+ seconds straight,
+// never once producing a real, sustained run (confirmed independently by
+// the encoder - real, if small, physical motion happened, then genuinely
+// stopped). A clean test starting well away from the switch converged
+// correctly, isolating this to a cold continuous-run start right at the
+// switch, not the PID control law itself - throttling retries the same way
+// retryMoveIfDied() already does is the same proven fix, applied here.
+unsigned long lastPidRunRetryMs = 0;
+
 // Applies the tracking-vs-normal profile decision (see stepperTrackThresholdConfig's
 // declaration comment) for a move toward newTarget, given the previous target this
 // decision was based on. Updates FastAccelStepper's live speed/accel. Returns true
@@ -139,13 +164,14 @@ void logCompactMotion(uint16_t ddpVal, int cmdPos, int curPos, int delta, int la
 // committed, so a single large move (a big DDP jump, or a diagnostic
 // moveTo() like $CHECKSTEPS's that never goes through this dispatch at
 // all) previously produced only one data point instead of a full
-// speed-over-time trace. Streaming mode already logs every ~20ms on its
-// own (updateStreamingMode()), so this is skipped there to avoid
-// duplicate/conflicting rows. Call every loop() iteration; rate-limited
-// internally.
+// speed-over-time trace. Streaming and PID modes already log every ~20ms
+// on their own (updateStreamingMode()/updatePidMode()), so this is skipped
+// for both to avoid duplicate/conflicting rows. Call every loop()
+// iteration; rate-limited internally.
 unsigned long lastPeriodicLogMs = 0;
 void logCompactMotionPeriodic() {
-  if (!compactLogEnabled || stepperTrackModeConfig == TRACK_MODE_STREAMING) return;
+  if (!compactLogEnabled || stepperTrackModeConfig == TRACK_MODE_STREAMING ||
+      stepperTrackModeConfig == TRACK_MODE_PID) return;
   if (stepper == NULL || !stepper->isRunning()) return;
   unsigned long now = millis();
   if (now - lastPeriodicLogMs < 50) return;
@@ -254,6 +280,7 @@ void updateStreamingMode() {
     if (curPos < 0 || curPos > bottomPosition) {
       stepper->forceStop();
       streamStopSettling = true;
+      continuousRunDirection = 0;
     }
   }
 
@@ -276,10 +303,15 @@ void updateStreamingMode() {
     logCompactMotion(oldPositionRequest, (int)streamRawTarget, curPosBeforeMove,
                       (int)commandDeltaForLog, (int)lagForLog, useTracking, curSpeedBeforeMove, targetSpeedHz);
 
+    // Restore the configured jumpStart for this moveTo()-based settle - see
+    // the runForward()/runBackward() call site below for why it's disabled
+    // while actually streaming (same fix as TRACK_MODE_PID, same root cause).
+    stepper->setJumpStart(jumpStartConfig);
     stepper->moveTo((int)streamRawTarget);
     stepperBlanked = false;
     streamSettled = true;
     streamCurrentDirection = 0;
+    continuousRunDirection = 0;  // settling into moveTo() - not a continuous run anymore
     return;
   }
 
@@ -320,6 +352,13 @@ void updateStreamingMode() {
   }
 
   if (newDirection != streamCurrentDirection || !stepper->isRunning()) {
+    if (newDirection != 0) {
+      // Root-caused on the bench (2026-09-06, via TRACK_MODE_PID): setJumpStart()'s
+      // configured burst applies in the *wrong* direction when issued through
+      // runForward()/runBackward() instead of moveTo() - disabled here, restored
+      // for the moveTo()-based settle above.
+      stepper->setJumpStart(0);
+    }
     if (newDirection > 0) {
       stepper->runForward();
     } else if (newDirection < 0) {
@@ -329,6 +368,7 @@ void updateStreamingMode() {
       streamStopSettling = true;
     }
     streamCurrentDirection = newDirection;
+    continuousRunDirection = newDirection;  // see stepper_handler.h's declaration comment
   } else {
     // Already running in the same direction - per FastAccelStepper's own
     // docs, setSpeedInHz()/setAcceleration() above only take effect after
@@ -345,6 +385,140 @@ void updateStreamingMode() {
   logCompactMotion(oldPositionRequest, (int)streamRawTarget, stepper->getCurrentPosition(), 0,
                     (int)fabs(streamRawTarget - stepper->getCurrentPosition()), true,
                     stepper->getCurrentSpeedInMilliHz(), (int)speedHz);
+}
+
+// TRACK_MODE_PID: called every loop() iteration - see that enum value's
+// declaration comment (stepper_handler.h) for the full design. Reads
+// positionRequest directly rather than being fed through the "only reacts
+// to a new DDP value" dispatch switch the other modes use, so there's no
+// separate "on command received" handler for this mode - this is the
+// whole thing.
+void updatePidMode() {
+  if (stepper->isRunning()) {
+    int curPos = stepper->getCurrentPosition();
+    // Same hard safety net TRACK_MODE_STREAMING uses - a continuously-
+    // driven PID output has no built-in "never overshoot" guarantee the
+    // way moveTo() does.
+    if (curPos < 0 || curPos > bottomPosition) {
+      stepper->forceStop();
+      pidStopSettling = true;
+      continuousRunDirection = 0;
+    }
+  }
+
+  unsigned long now = millis();
+  if (now - lastPidUpdateMs < 20) return;  // rate-limit, matches Streaming's own cadence
+  float dt = (lastPidUpdateMs == 0) ? 0.02f : (now - lastPidUpdateMs) / 1000.0f;
+  lastPidUpdateMs = now;
+
+  long currentPos = stepper->getCurrentPosition();
+  float target = calcPosition(positionRequest, control16BitConfig);
+  float error = target - (float)currentPos;
+
+  if (fabs(error) <= (float)stepperPidDeadbandConfig) {
+    if (!pidSettled) {
+      int curPosBeforeMove = (int)currentPos;
+      int32_t curSpeedBeforeMove = stepper->getCurrentSpeedInMilliHz();
+      stepper->setAcceleration(stepperPidAccelConfig);
+      // Restore the configured jumpStart for this moveTo()-based settle -
+      // see the runForward()/runBackward() call site below for why it's
+      // disabled while actually tracking.
+      stepper->setJumpStart(jumpStartConfig);
+      stepper->moveTo((int32_t)target);
+      stepperBlanked = false;
+      lastCommandedTargetPosition = target;
+      logCompactMotion(positionRequest, (int)target, curPosBeforeMove, 0, (int)error,
+                        true, curSpeedBeforeMove, 0);
+      pidSettled = true;
+      pidIntegral = 0;
+      pidCurrentDirection = 0;
+      continuousRunDirection = 0;  // settling into moveTo() - not a continuous run anymore
+    }
+    pidLastMeasuredPos = currentPos;
+    return;
+  }
+  pidSettled = false;
+
+  if (pidStopSettling) {
+    // See TRACK_MODE_STREAMING's identical wait - FastAccelStepper's
+    // forceStop() isn't guaranteed complete within one tick; restarting
+    // before it's actually settled skips the ramp-up entirely.
+    if (stepper->isRunning()) return;
+    pidStopSettling = false;
+  }
+
+  // Derivative on measurement, not on error - avoids a derivative "kick"
+  // every time the DDP-commanded target jumps (which would otherwise look
+  // like an enormous, instantaneous error derivative rather than a real
+  // change in how fast the stepper itself is moving).
+  float measuredRate = (dt > 0) ? (float)(currentPos - pidLastMeasuredPos) / dt : 0;
+  pidLastMeasuredPos = currentPos;
+
+  float pTerm = stepperPidKpConfig * error;
+  float dTerm = -stepperPidKdConfig * measuredRate;
+
+  // Anti-windup: only accumulate the integral term while the combined
+  // output isn't already saturated at the speed cap - otherwise a
+  // sustained large error (e.g. right after a big DDP jump) winds the
+  // integral up far past what's useful and causes a real overshoot once
+  // error finally starts shrinking back toward zero.
+  float provisional = pTerm + dTerm + stepperPidKiConfig * pidIntegral;
+  bool saturated = fabs(provisional) >= (float)stepperPidMaxSpeedConfig;
+  if (!saturated) {
+    pidIntegral += error * dt;
+  }
+  float iTerm = stepperPidKiConfig * pidIntegral;
+
+  float speed = pTerm + iTerm + dTerm;
+  if (speed > stepperPidMaxSpeedConfig) speed = (float)stepperPidMaxSpeedConfig;
+  if (speed < -stepperPidMaxSpeedConfig) speed = -(float)stepperPidMaxSpeedConfig;
+
+  int newDirection = (speed > 0) ? 1 : (speed < 0 ? -1 : 0);
+  uint32_t speedHz = (uint32_t)fabs(speed);
+  if (speedHz < 50) speedHz = 50;  // floor so runForward/runBackward always gets a sane nonzero speed, matches Streaming
+
+  stepper->setAcceleration(stepperPidAccelConfig);
+  stepper->setSpeedInHz(speedHz);
+
+  if (newDirection != pidCurrentDirection || !stepper->isRunning()) {
+    // Same direction as before, just !isRunning() - this is a retry after
+    // FastAccelStepper silently dropped the previous runForward()/
+    // runBackward() request (see lastPidRunRetryMs's declaration comment).
+    // Throttle exactly like retryMoveIfDied() does; a genuine new direction
+    // command (directionChanged) always issues immediately, unthrottled.
+    bool directionChanged = (newDirection != pidCurrentDirection);
+    if (directionChanged || (now - lastPidRunRetryMs >= 100)) {
+      lastPidRunRetryMs = now;
+      // Root-caused on the bench (2026-09-06): setJumpStart()'s configured
+      // burst (a fixed kick at full speed to overcome static friction,
+      // meant for moveTo()-based moves) applies in the *wrong* direction
+      // when issued through runForward()/runBackward()'s continuous-run
+      // API instead - every PID engagement was taking a small step the
+      // wrong way before the real (correctly-directioned) ramp ever had a
+      // chance to start, which was especially visible - and especially
+      // damaging - starting right at the homing switch. Disabled here,
+      // restored for the moveTo()-based settle at the deadband above.
+      stepper->setJumpStart(0);
+      if (newDirection > 0) {
+        stepper->runForward();
+      } else if (newDirection < 0) {
+        stepper->runBackward();
+      }
+      pidCurrentDirection = newDirection;
+      continuousRunDirection = newDirection;  // see stepper_handler.h's declaration comment
+    }
+  } else {
+    // Already running the right way - per FastAccelStepper's own docs,
+    // setSpeedInHz()/setAcceleration() only take effect after a following
+    // move/moveTo/runForward/runBackward/applySpeedAcceleration() call,
+    // not on their own - see TRACK_MODE_STREAMING's identical, hard-won
+    // fix for the real bug this caused there.
+    stepper->applySpeedAcceleration();
+  }
+
+  stepperBlanked = false;
+  logCompactMotion(positionRequest, (int)target, (int)currentPos, 0, (int)error,
+                    true, stepper->getCurrentSpeedInMilliHz(), (int)speed);
 }
 
 // TRACK_MODE_LOOKAHEAD: called on every DDP command that changes the
@@ -715,6 +889,11 @@ void loop() {
         case TRACK_MODE_LOOKAHEAD:
           handleLookaheadModeCommand(currentPositionRequest, position);
           break;
+        case TRACK_MODE_PID:
+          // Deliberately no per-command handler - updatePidMode() (called
+          // every loop() iteration below) reads positionRequest directly
+          // itself. See TRACK_MODE_PID's declaration comment.
+          break;
         case TRACK_MODE_DIRECT:
         default:
           handleDirectModeCommand(currentPositionRequest, position);
@@ -733,6 +912,8 @@ void loop() {
       updateStreamingMode();
     } else if (stepperTrackModeConfig == TRACK_MODE_LOOKAHEAD) {
       updateLookaheadMode();
+    } else if (stepperTrackModeConfig == TRACK_MODE_PID) {
+      updatePidMode();
     }
   }
 

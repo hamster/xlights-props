@@ -9,6 +9,8 @@ extern Preferences preferences;
 // Stepper global variables
 FastAccelStepperEngine engine = FastAccelStepperEngine();
 FastAccelStepper *stepper = NULL;
+// See stepper_handler.h's declaration comment.
+volatile int continuousRunDirection = 0;
 volatile bool interruptTriggered = false;
 volatile bool homingStallDetected = false;
 // Set alongside interruptTriggered, but consumed separately (see
@@ -109,6 +111,21 @@ int stepperStreamSettleMsConfig = 150;
 // is tuned to a lower accel or higher speed than the defaults.
 int stepperLookaheadStepsConfig = 5000;
 int stepperLookaheadSettleMsConfig = 150;
+
+// TRACK_MODE_PID defaults - untuned starting point (pure-P, conservative),
+// see TRACK_MODE_PID's declaration comment. pidKp=1.5 means a 2000-step
+// error (the old trackThreshold default, a reasonable "typical real
+// error" reference point) produces a 3000Hz output - comfortably under
+// pidMaxSpeed, deliberately gentle for a first bring-up. pidAccel=2500
+// matches this session's best-known trackAccel value pending the real
+// per-direction characterization sweep the acceleration is meant to be
+// replaced with.
+float stepperPidKpConfig = 1.5f;
+float stepperPidKiConfig = 0.0f;
+float stepperPidKdConfig = 0.0f;
+int stepperPidMaxSpeedConfig = 6500;
+int stepperPidAccelConfig = 2500;
+int stepperPidDeadbandConfig = 30;
 
 bool stepperSettingsPendingSave = false;
 
@@ -233,6 +250,7 @@ void startHoming() {
   homingCounter = 0;
   interruptTriggered = false;
   pendingForceStop = false;  // Defensive: never let a stale flag from before this attempt fire mid-sequence
+  continuousRunDirection = 0;  // Defensive: same reasoning - see its declaration comment
 
   stepper->setAcceleration(stepperAccelHomingConfig);
   stepper->setSpeedInHz(stepperSpeedHomingConfig);
@@ -539,12 +557,23 @@ void updateHoming() {
     //  - getCurrentSpeedInMilliHz() > 0: kept as a secondary check for the
     //    (probably rare) case where target isn't meaningful for some other
     //    reason but real motion is already measurably underway.
+    //  - continuousRunDirection > 0: required for TRACK_MODE_STREAMING and
+    //    TRACK_MODE_PID, which drive via runForward()/runBackward() rather
+    //    than moveTo() - targetPos() isn't kept meaningful during a
+    //    continuous "keep running" move (see the note below), and speed can
+    //    still legitimately read 0 for the first tick or two while the ramp
+    //    is just starting, so neither of the first two checks can be
+    //    trusted on their own right at liftoff from the switch. Without
+    //    this, TRACK_MODE_PID's very first bench test (2026-09-06) never
+    //    got away from the switch at all: every bounce edge on departure
+    //    read as a genuine trip and forceStop()'d the just-started move
+    //    within one tick, over and over.
     // Restricted to non-homing operation - an active homing search must
     // still stop on any trip regardless of direction, since detecting the
     // trip *is* the search, and targetPos() isn't kept updated during a
     // continuous run() search anyway (see FastAccelStepper.h's own note on
     // "keep running" mode).
-    if (!isHoming() && (stepper->targetPos() > tripPosition || stepper->getCurrentSpeedInMilliHz() > 0)) {
+    if (!isHoming() && (continuousRunDirection > 0 || stepper->targetPos() > tripPosition || stepper->getCurrentSpeedInMilliHz() > 0)) {
       Serial.print("Switch interrupt while moving away from switch (pos=");
       Serial.print(tripPosition);
       Serial.println(") - treating as contact bounce, not a real trip; move not stopped");
