@@ -544,9 +544,30 @@ Raised `pidAccel` from its 2500 placeholder to 50,000 (vetted clean by the accel
 
 Clean, monotonic, physically sensible: response time improves steadily with Kp up to 8.0 (zero overshoot the entire way), then real overshoot begins between Kp=8 and Kp=10 and grows from there, while first-crossing time barely improves further (1020ms at Kp=8 vs. 921ms at Kp=30, despite ~4x the gain) - **Kp≈6-8 is the P-only sweet spot**, real diminishing returns past 8.
 
-- [ ] **Not yet done**: test whether adding Kd (derivative-on-measurement) lets Kp push past 8 - i.e. faster response than the P-only sweet spot - by damping out the overshoot that appears there, rather than settling for pure-P's ceiling.
-- [ ] **Not yet done**: Ki tuning - not expected to matter much for final accuracy (the deadband-triggered `moveTo()` snap already closes any P-only steady-state gap), but worth checking whether it meaningfully reduces lag during *sustained* tracking of a moving target rather than a single step.
-- [ ] This sweep only tested one direction (target above start, i.e. "down"/gravity-assisted per the earlier sweeps' convention) and one step size (~6000 steps, 2000→8000) - not yet verified the same Kp range is equally clean in the "up"/gravity-opposed direction or for smaller/larger steps.
+**Kd sweep (2026-09-06, `pid_kd_sweep.py`, not yet committed) - fixed Kp=15 (which showed 333 steps overshoot, one oscillation, Kd=0), swept Kd:**
+
+| Kd | overshoot (steps) | first-crossing time (ms) |
+|---|---|---|
+| 0.0 | 300 | 920 |
+| 0.02 | 291 | 1160 |
+| 0.05 | 272 | (didn't cross within capture) |
+| 0.1 | 214 | (didn't cross within capture) |
+| 0.2 | 216 | (didn't cross within capture) |
+| 0.3 | 190 | 940 |
+| 0.5 | 9 | 960 |
+| 0.7 | 3 | 1020 |
+| 1.0 | 8 | 1100 |
+| 1.5 | 8 | 1201 |
+| 2.0 | 16 | 1306 |
+
+Overshoot drops steadily from 300 (Kd=0) to near-zero by Kd=0.5-0.7, with first-crossing time barely moving (920→1020ms) - real derivative damping, not just a slower response masquerading as less overshoot. Past Kd≈1.0, response time starts climbing again (over-damping) without further overshoot benefit. **Kp=15, Kd≈0.5-0.7 is a genuinely better operating point than the P-only sweet spot** (Kp=8, 0 overshoot, 1020ms) - comparable or better overshoot control, same speed, at nearly 2x the proportional gain (steeper response to a growing error, which should matter more once actually tracking a moving DDP target rather than just one step).
+- Note: one Kd=0.5 run hit a real DDP delivery failure (neutral packet never confirmed after 10 retries, lost homing) - recovered automatically via the sweep's re-home fallback; the very next run (Kd=0.7) was clean, and this looks like an unrelated transient network/device hiccup, not a Kd-specific issue (nothing about a PID gain should affect UDP packet delivery) - noted rather than dismissed, in case it recurs.
+
+**Working PID gains after this pass: `Kp=15, Ki=0, Kd=0.7, MaxSpeed=7000, Accel=50000, Deadband=30`** (live only - not yet saved anywhere durable; there's no Preferences path for any PID tunable, so nothing persists across a reboot regardless).
+
+- [ ] **Not yet done**: Ki tuning - not expected to matter much for final accuracy (the deadband-triggered `moveTo()` snap already closes any P/PD steady-state gap for a single step), but worth checking whether it meaningfully reduces lag during *sustained* tracking of a moving target rather than a single step - a fundamentally different test (continuous ramp, not step-response) from everything done so far.
+- [ ] This sweep only tested one direction (target above start, i.e. "down"/gravity-assisted per the earlier sweeps' convention) and one step size (~6000 steps, 2000→8000) - not yet verified the same Kp/Kd combination is equally clean in the "up"/gravity-opposed direction or for smaller/larger steps.
+- [ ] Not yet tested against a real synthetic DDP stream (triangle wave, or real recorded show data) the way the pre-PID tracking modes were extensively tested earlier this session - all of this PID characterization has been single-step response only.
 - [ ] Streaming mode got the jumpStart fix but *not* the retry-throttle fix (bug #2) - it has the identical exposure (same untamed "reissue every tick while `!isRunning()`" pattern) but wasn't the mode under active test, so this is unverified there. Low priority given Streaming is already deprioritized/shelved, but worth doing before ever picking Streaming back up.
 - [ ] Consider whether `retryMoveIfDied()` (currently `static`/file-local to `stepper_handler.cpp`, homing-only) should be extracted into a small shared utility now that PID has its own hand-rolled equivalent (`lastPidRunRetryMs` in `main.cpp`) - three near-identical throttled-retry implementations (homing, PID, and Streaming once #2 above is done) is real duplication.
 

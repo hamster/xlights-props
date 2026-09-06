@@ -112,17 +112,18 @@ int stepperStreamSettleMsConfig = 150;
 int stepperLookaheadStepsConfig = 5000;
 int stepperLookaheadSettleMsConfig = 150;
 
-// TRACK_MODE_PID defaults - untuned starting point (pure-P, conservative),
-// see TRACK_MODE_PID's declaration comment. pidKp=1.5 means a 2000-step
-// error (the old trackThreshold default, a reasonable "typical real
-// error" reference point) produces a 3000Hz output - comfortably under
-// pidMaxSpeed, deliberately gentle for a first bring-up. pidAccel=2500
-// matches this session's best-known trackAccel value pending the real
-// per-direction characterization sweep the acceleration is meant to be
-// replaced with.
-float stepperPidKpConfig = 1.5f;
+// TRACK_MODE_PID defaults - tuned via a step-response sweep (2026-09-06,
+// see TODO.md's "PID gain tuning" section for the full data): Kp swept
+// 0.5-30 found zero overshoot up to Kp=8 (the P-only sweet spot, ~1020ms
+// response), real overshoot from Kp=10 up. Kd swept at a fixed Kp=15 (300
+// steps overshoot at Kd=0) found overshoot drops to near-zero by Kd~0.5-0.7
+// with response time barely changing (920->1020ms) - genuine derivative
+// damping, not just a slower response. Kp=15/Kd=0.7 ends up faster *and*
+// cleaner than the P-only ceiling. Ki left at 0 - not yet tested (a
+// sustained-tracking test, not a step-response one; see TODO.md).
+float stepperPidKpConfig = 15.0f;
 float stepperPidKiConfig = 0.0f;
-float stepperPidKdConfig = 0.0f;
+float stepperPidKdConfig = 0.7f;
 // 7000 Hz per the 2026-09-06 speed/current characterization sweeps and
 // live listening on the bench: the measured stall boundary was ~8500 Hz
 // (up)/~9000 Hz (down) at 1200-1400mA and 50,000 steps/s^2 accel, but that
@@ -138,7 +139,10 @@ float stepperPidKdConfig = 0.0f;
 // default is the only thing that makes it durable across a reboot - update
 // it here (not just via $SET) if this decision changes.
 int stepperPidMaxSpeedConfig = 7000;
-int stepperPidAccelConfig = 2500;
+// 50,000 - vetted clean by the accel sweep (see TODO.md), raised from the
+// original 2500 placeholder so gain tuning tests the control loop itself,
+// not an arbitrarily slow ramp.
+int stepperPidAccelConfig = 50000;
 int stepperPidDeadbandConfig = 30;
 
 bool stepperSettingsPendingSave = false;
