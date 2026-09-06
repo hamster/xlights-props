@@ -121,6 +121,23 @@ class DeviceLink:
                         self._capture.append(line)
             else:
                 self._response_queue.put(line)
+                # Also keep a tagged copy in the capture, if one's active -
+                # added 2026-09-06 after a real bench slam into the homing
+                # stop during a tuning run: async event lines (a switch trip,
+                # a stall-detected message, TMC diagnostics) previously only
+                # went to _response_queue, which nothing drains during a
+                # duration run (send_triangle_wave() sends DDP packets, not
+                # serial commands) - so they were silently discarded, and the
+                # only sign anything happened was an unrelated skipped-step
+                # check sometime later. "# " prefix keeps these out of
+                # CSV_ROW_RE/parse_row (neither matches a line starting with
+                # "#", so plotting/metrics are unaffected) while preserving
+                # exactly where in the stream - relative to real position/
+                # speed/SG_RESULT rows - the event happened, for reading the
+                # .log file directly afterward.
+                with self._capture_lock:
+                    if self._capture is not None:
+                        self._capture.append("# " + line)
 
     def start_capture(self):
         with self._capture_lock:
@@ -137,7 +154,18 @@ class DeviceLink:
             self.ser.write((text + "\n").encode("utf-8"))
 
     def send_command(self, text, timeout=3.0):
-        while not self._response_queue.empty():
+        # Bounded by a real wall-clock deadline, not just "until empty" -
+        # found necessary 2026-09-06 on the bench: a device stuck in a
+        # homing search (spamming verbose "[homing] state=..." debug lines
+        # continuously) can enqueue new lines via _reader_loop faster than
+        # this loop drains them, so an unbounded "while not empty" here
+        # could spin for as long as the flood continues - which, for a
+        # genuinely stuck search, is indefinitely. That surfaced as the
+        # whole harness hanging silently well past its own home_timeout,
+        # with no error ever printed. 0.5s is generous headroom over how
+        # long a legitimate backlog should ever take to drain.
+        drain_deadline = time.monotonic() + 0.5
+        while not self._response_queue.empty() and time.monotonic() < drain_deadline:
             try:
                 self._response_queue.get_nowait()
             except queue.Empty:
@@ -194,12 +222,28 @@ class DeviceLink:
         return False
 
     def home_and_wait(self, timeout=90.0):
+        # Also detects a *failed* search (device's own ~24s internal
+        # homingOverallTimeoutMs aborts into HOMING_ERROR, which reads as
+        # homing=0/homed=0 from $STATUS - indistinguishable from "hasn't
+        # started yet" unless we'd already seen homing=1 in between) and
+        # returns False immediately rather than spinning for the full
+        # external `timeout` waiting for a homed=1 that will never come -
+        # found necessary 2026-09-06 on the bench: with StallGuard disabled,
+        # a real stuck search failed internally in ~24s but the harness
+        # kept polling uselessly for the rest of a 90s timeout regardless,
+        # making a real failure look identical to a hang from the outside.
         self.send_command("$HOME")
         deadline = time.monotonic() + timeout
+        seen_homing = False
         while time.monotonic() < deadline:
             st = self.get_status()
-            if st and st.get("homed") == 1 and st.get("homing", 1) == 0:
-                return True
+            if st:
+                if st.get("homing") == 1:
+                    seen_homing = True
+                if st.get("homed") == 1 and st.get("homing", 1) == 0:
+                    return True
+                if seen_homing and st.get("homing") == 0 and st.get("homed") == 0:
+                    return False
             time.sleep(1.0)
         return False
 
@@ -363,11 +407,22 @@ def send_triangle_wave(sock, host, port, duration, rate_hz):
 # --------------------------------------------------------------------------
 # Log parsing / metrics / plotting
 # --------------------------------------------------------------------------
-ROW_FIELDS = ["ms", "ddpVal", "cmdPos", "curPos", "delta", "lag", "profile", "curSpeedHz", "targetSpeedHz"]
+ROW_FIELDS = ["ms", "ddpVal", "cmdPos", "curPos", "delta", "lag", "profile", "curSpeedHz",
+              "targetSpeedHz", "encoderCount", "sgResult", "switchTripped"]
 
 
 def parse_row(line):
+    # Accepts the current 12-field format (trailing switchTripped added
+    # 2026-09-06 for post-hoc stuck-against-the-switch detection - see
+    # is_stuck_at_switch()), the 11-field format from just before it
+    # (sgResult, no switchTripped), the 10-field format before that
+    # (encoderCount, neither), and the original 9-field format (none of the
+    # three) - so reanalyzing a long-lived --out-dir doesn't silently zero
+    # out older runs just because the firmware's log format grew a column
+    # since they were captured.
     parts = line.split(",")
+    while len(parts) < len(ROW_FIELDS):
+        parts.append("0")  # missing trailing column(s) in an older-format log - treat as 0 (unknown)
     if len(parts) != len(ROW_FIELDS):
         return None
     try:
@@ -375,9 +430,51 @@ def parse_row(line):
             "ms": int(parts[0]), "ddpVal": int(parts[1]), "cmdPos": int(parts[2]),
             "curPos": int(parts[3]), "delta": int(parts[4]), "lag": int(parts[5]),
             "profile": parts[6], "curSpeedHz": int(parts[7]), "targetSpeedHz": int(parts[8]),
+            "encoderCount": int(parts[9]), "sgResult": int(parts[10]), "switchTripped": int(parts[11]),
         }
     except ValueError:
         return None
+
+
+# How many consecutive samples of "commanded to move, switch already
+# triggered, encoder not advancing" before is_stuck_at_switch() calls it a
+# real stuck condition rather than one noisy sample - see that function's
+# docstring. At this project's ~50ms compact-log tick, 3 samples is ~150ms.
+STUCK_DEBOUNCE_SAMPLES = 3
+STUCK_SPEED_THRESHOLD_HZ = 50  # "commanded to move" - filters out rows where the stepper is essentially idle
+
+
+def is_stuck_at_switch(rows):
+    """Post-hoc detection of the condition the user described directly: the
+    stepper is being commanded to move (curSpeedHz well above 0), the homing
+    switch already reads triggered, and the encoder isn't advancing anyway -
+    i.e. buzzing uselessly against the physical stop rather than actually
+    moving. Deliberately done here, not as new real-time firmware logic -
+    leans on the encoder, which isn't meant to outlive this tuning phase
+    (see main.cpp's logCompactMotion() comment). Returns a list of (start_ms,
+    end_ms, num_samples) spans, debounced by STUCK_DEBOUNCE_SAMPLES so one
+    noisy sample right at a real switch release doesn't get flagged."""
+    spans = []
+    run_start_idx = None
+    for i, r in enumerate(rows):
+        stuck_sample = (r["switchTripped"] == 1 and abs(r["curSpeedHz"]) >= STUCK_SPEED_THRESHOLD_HZ)
+        if stuck_sample:
+            # Encoder must also show ~no motion since the last sample -
+            # first sample of a run has nothing to compare against yet.
+            if run_start_idx is None:
+                run_start_idx = i
+            elif i > 0 and abs(r["encoderCount"] - rows[i - 1]["encoderCount"]) > 1:
+                # Real encoder motion despite the switch reading triggered -
+                # not actually stuck (e.g. bouncing near the trip point) -
+                # end this run without flagging it.
+                run_start_idx = None
+        else:
+            if run_start_idx is not None and i - run_start_idx >= STUCK_DEBOUNCE_SAMPLES:
+                spans.append((rows[run_start_idx]["ms"], rows[i - 1]["ms"], i - run_start_idx))
+            run_start_idx = None
+    if run_start_idx is not None and len(rows) - run_start_idx >= STUCK_DEBOUNCE_SAMPLES:
+        spans.append((rows[run_start_idx]["ms"], rows[-1]["ms"], len(rows) - run_start_idx))
+    return spans
 
 
 def load_run_log(path):
@@ -405,6 +502,13 @@ def compute_metrics(rows):
     near_stall = sum(1 for r in rows if abs(r["curSpeedHz"]) < 300 and abs(r["lag"]) > 200)
     near_stall_pct = 100.0 * near_stall / len(rows)
     tracking_rows = sum(1 for r in rows if r["profile"] == "T")
+    # sgResult of 0 means "no TMC UART/not connected" (see logCompactMotion()'s
+    # comment), not a real reading of 0 - exclude those from the min so an
+    # unconnected TMC doesn't look identical to an actual stall-threshold trip.
+    sg_readings = [r["sgResult"] for r in rows if r["sgResult"] > 0]
+    min_sg_result = min(sg_readings) if sg_readings else None
+    stuck_spans = is_stuck_at_switch(rows)
+    stuck_ms_total = sum(end - start for start, end, _ in stuck_spans)
     return {
         "num_rows": len(rows),
         "duration_ms": rows[-1]["ms"] - rows[0]["ms"],
@@ -414,6 +518,9 @@ def compute_metrics(rows):
         "jerk_per_sample": round(jerk_per_sample, 1),
         "near_stall_pct": round(near_stall_pct, 1),
         "tracking_pct": round(100.0 * tracking_rows / len(rows), 1),
+        "min_sg_result": min_sg_result,
+        "stuck_at_switch_count": len(stuck_spans),
+        "stuck_at_switch_ms": stuck_ms_total,
     }
 
 
@@ -428,11 +535,20 @@ def plot_run(rows, out_png, title):
     cur_pos = [r["curPos"] for r in rows]
     cur_speed = [r["curSpeedHz"] for r in rows]
     signed_error = [r["cmdPos"] - r["curPos"] for r in rows]
+    sg_result = [r["sgResult"] for r in rows]
+    has_sg = any(v > 0 for v in sg_result)
 
-    fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
+    fig, axes = plt.subplots(4 if has_sg else 3, 1, figsize=(10, 10 if has_sg else 8), sharex=True)
     axes[0].plot(t, cmd_pos, label="Commanded", linewidth=1)
     axes[0].plot(t, cur_pos, label="Actual", linewidth=1)
     axes[0].set_ylabel("Position (steps)")
+    # Shade spans where the stepper was buzzing uselessly against the
+    # homing switch (commanded to move, switch triggered, encoder not
+    # advancing) - see is_stuck_at_switch(). Labeled once so the legend
+    # doesn't get one entry per span.
+    for i, (start_ms, end_ms, _) in enumerate(is_stuck_at_switch(rows)):
+        axes[0].axvspan((start_ms - t0) / 1000.0, (end_ms - t0) / 1000.0, color="red", alpha=0.15,
+                         label="Stuck at switch" if i == 0 else None)
     axes[0].legend(loc="upper right", fontsize=8)
     axes[0].set_title(title)
 
@@ -443,7 +559,16 @@ def plot_run(rows, out_png, title):
     axes[2].plot(t, signed_error, color="tab:red", linewidth=1)
     axes[2].axhline(0, color="gray", linewidth=0.5)
     axes[2].set_ylabel("Error (cmd - actual)")
-    axes[2].set_xlabel("Time (s)")
+
+    if has_sg:
+        # 0 means "no TMC UART" (see logCompactMotion()) - plotted as-is
+        # rather than hidden, since a run that's entirely 0 is itself useful
+        # to notice (TMC link down for this run).
+        axes[3].plot(t, sg_result, color="tab:purple", linewidth=1)
+        axes[3].set_ylabel("SG_RESULT\n(lower = more loaded)")
+        axes[3].set_xlabel("Time (s)")
+    else:
+        axes[2].set_xlabel("Time (s)")
 
     fig.tight_layout()
     fig.savefig(out_png, dpi=120)
@@ -594,6 +719,10 @@ def run_hardware_session(args):
             rows = [r for r in rows if r is not None]
             metrics = compute_metrics(rows)
             print("  Metrics:", metrics)
+            if metrics.get("stuck_at_switch_count"):
+                print(f"  WARNING: stuck against the homing switch {metrics['stuck_at_switch_count']} "
+                      f"time(s) this run, {metrics['stuck_at_switch_ms']}ms total (commanded to move, "
+                      f"switch reads triggered, encoder not advancing) - see is_stuck_at_switch()")
 
             if rows:
                 png_filename = log_filename.replace(".log", ".png")
@@ -719,6 +848,9 @@ def run_direction_test_session(args):
         rows = [r for r in rows if r is not None]
         metrics = compute_metrics(rows)
         print("  Metrics:", metrics)
+        if metrics.get("stuck_at_switch_count"):
+            print(f"  WARNING: stuck against the homing switch {metrics['stuck_at_switch_count']} "
+                  f"time(s), {metrics['stuck_at_switch_ms']}ms total - see is_stuck_at_switch()")
 
         if rows:
             png_filename = log_filename.replace(".log", ".png")

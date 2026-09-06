@@ -1,5 +1,6 @@
 #include "tmc_handler.h"
 #include "stepper_handler.h"
+#include "persist_log.h"
 #include <Preferences.h>
 
 extern Preferences preferences;
@@ -219,6 +220,8 @@ void updateTmc() {
         Serial.print("TMC2209: stall detected (SG_RESULT=");
         Serial.print(tmcStatus.stallGuardResult);
         Serial.println(")");
+        persistLog("TMC stall detected SG_RESULT=%d pos=%ld homing=%d", tmcStatus.stallGuardResult,
+                   (long)stepper->getCurrentPosition(), isHoming() ? 1 : 0);
         if (isHoming()) {
           homingStallDetected = true;
         } else {

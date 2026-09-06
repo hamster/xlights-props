@@ -1,6 +1,7 @@
 #include "stepper_handler.h"
 #include "tmc_handler.h"
 #include "encoder_handler.h"
+#include "persist_log.h"
 #include <Preferences.h>
 
 extern Preferences preferences;
@@ -563,6 +564,24 @@ void updateHoming() {
   }
 
   unsigned long currentTime = millis();
+
+  // Periodic breadcrumb to the reboot-surviving diagnostic log - added
+  // 2026-09-06 after a real bench session where a homing search
+  // apparently got stuck for well over a minute (StallGuard disabled to
+  // get clean tuning data, real mechanical resistance with nothing left to
+  // catch it) with no way afterward to tell whether it had crashed, hung,
+  // or was reset by something as mundane as a new serial connection
+  // opening - see persist_log.h's file comment. Coarse (every 2s), not a
+  // replacement for the live serial homing prints - just enough of a trail
+  // to see where a stuck search actually was if the live session is gone
+  // by the time anyone looks.
+  static unsigned long lastHomingBreadcrumbMs = 0;
+  if (isHoming() && (currentTime - lastHomingBreadcrumbMs >= 2000)) {
+    lastHomingBreadcrumbMs = currentTime;
+    persistLog("homing state=%d pos=%ld speed=%ld switch=%d", (int)homingState,
+               stepper->getCurrentPosition(), (long)(stepper->getCurrentSpeedInMilliHz() / 1000),
+               isHomingSwitchTripped() ? 1 : 0);
+  }
 
   // Single overall homing watchdog - see homingOverallTimeoutMs's comment.
   // Replaces what used to be six separate per-state timeouts (10s/30s/2s

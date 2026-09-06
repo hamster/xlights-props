@@ -9,6 +9,7 @@
 #include "protocol_common.h"
 #include "tmc_handler.h"
 #include "encoder_handler.h"
+#include "persist_log.h"
 #include "main.h"
 #include <WiFi.h>
 #include <Preferences.h>
@@ -611,7 +612,7 @@ void handleCompactLog() {
     bool enable = (enableArg.length() > 0 && enableArg[0] == 't');  // "true"
     compactLogEnabled = enable;
     if (enable) {
-      Serial.println("ms,ddpVal,cmdPos,curPos,delta,lag,profile,curSpeedHz,targetSpeedHz");
+      Serial.println("ms,ddpVal,cmdPos,curPos,delta,lag,profile,curSpeedHz,targetSpeedHz,encoderCount,sgResult,switchTripped");
     }
     Serial.print("Compact motion log ");
     Serial.println(enable ? "enabled" : "disabled");
@@ -619,6 +620,18 @@ void handleCompactLog() {
   } else {
     server.send(200, "application/json", compactLogEnabled ? "{\"compactLog\":true}" : "{\"compactLog\":false}");
   }
+}
+
+// Reboot-surviving diagnostic log (see persist_log.h) - primary retrieval
+// path, no serial port needed. GET /persist-log?clear=1 clears it instead
+// of returning it, for deliberately starting a fresh diagnostic session.
+void handlePersistLog() {
+  if (server.hasArg("clear")) {
+    clearPersistLog();
+    server.send(200, "text/plain", "cleared");
+    return;
+  }
+  server.send(200, "text/plain", readPersistLog());
 }
 
 // Static buffer for status data response (avoids heap allocation)
@@ -916,6 +929,7 @@ void startWebServer() {
 
   // Temporary compact motion CSV log toggle
   server.on("/compact-log", HTTP_GET, handleCompactLog);
+  server.on("/persist-log", HTTP_GET, handlePersistLog);  // reboot-surviving diagnostic log - see persist_log.h
 
   // TMC2209 stall fault acknowledgement
   server.on("/clear-tmc-stall", HTTP_GET, handleClearTmcStall);

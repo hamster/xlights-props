@@ -17,6 +17,7 @@
 #include "encoder_handler.h"
 #include "encoder_diag.h"
 #include "core0_task.h"
+#include "persist_log.h"
 
 // Watchdog timeout in seconds
 #define WDT_TIMEOUT 10
@@ -108,7 +109,29 @@ void logCompactMotion(uint16_t ddpVal, int cmdPos, int curPos, int delta, int la
   // Ground-truth encoder position alongside the step-counted curPos above -
   // 0 if no encoder is wired/initialized, so existing logs without an
   // encoder still parse the same way, just with this column always 0.
-  Serial.println(getEncoderCount());
+  Serial.print(getEncoderCount());
+  Serial.print(",");
+  // Live TMC2209 StallGuard reading (updateTmc() refreshes this every
+  // STALL_POLL_INTERVAL_MS - see tmc_handler.cpp) - added 2026-09-06 after a
+  // real bench session showed repeated stall-detection trips during DDP
+  // tracking-mode motion (3 of 5 baseline runs lost real steps), with no way
+  // to see *when*, at what speed/position, or how close to the threshold
+  // SG_RESULT was running the rest of the time. 0 if TMC UART isn't
+  // connected, same "always 0, still parses" convention as encoderCount.
+  Serial.print(tmcStatus.stallGuardResult);
+  Serial.print(",");
+  // Raw homing switch state - added 2026-09-06 after running with
+  // StallGuard disabled (it was making false-positive-driven interruptions
+  // worse than the real stalls it's meant to catch, fighting attempts to
+  // get clean tracking-mode data) caused a real ram into the physical
+  // homing stop with no cutoff to catch it. Not wired into any real-time
+  // safety logic here on purpose - the user's own suggested check (motion
+  // commanded, encoder not advancing, switch reads triggered = stuck
+  // against the stop) is exactly the kind of thing that leans on the
+  // encoder, which isn't meant to outlive this tuning phase - so it's done
+  // as post-hoc analysis in tuning_harness.py instead, off this one raw
+  // logged bit, not as new production firmware logic.
+  Serial.println(isHomingSwitchTripped() ? 1 : 0);
 }
 
 // Periodic compact-log tick, independent of the DDP/tracking-mode dispatch
@@ -415,6 +438,12 @@ void setup() {
   // Record boot time
   bootTime = millis();
 
+  // Mounts SPIFFS and logs this boot's reset reason (POWERON/SW/PANIC/
+  // BROWNOUT/etc.) to the reboot-surviving diagnostic log - as early as
+  // possible, before anything else has a chance to fail first. See
+  // persist_log.h's file comment for why this exists.
+  initPersistLog();
+
   // Initialize status LED
   initStatusLed();
 
@@ -584,6 +613,15 @@ void loop() {
 
   // Check WiFi connection and reconnect if needed
   checkWifiConnection();
+
+  // Commit any RAM-buffered persistent-log entries to flash - only safe to
+  // do while nothing is stepping (see persist_log.h's flushPersistLogNow()
+  // comment for why). Skipped entirely, not just deferred, whenever the
+  // stepper is running - the next idle moment picks up whatever
+  // accumulated in the meantime.
+  if (hasPendingPersistLog() && (stepper == NULL || !stepper->isRunning())) {
+    flushPersistLogNow();
+  }
 
   // Periodic compact-log sample, so any significant move (a single large
   // DDP jump, or a diagnostic moveTo() like $CHECKSTEPS's that bypasses
@@ -771,8 +809,12 @@ void handleSerialCommands() {
       Serial.println("p  - Print current stepper position");
       Serial.println("f  - Move forward 10 steps");
       Serial.println("b  - Move backward 10 steps");
+      Serial.println("l  - Print the persistent (reboot-surviving) diagnostic log - see persist_log.h; GET /persist-log is the normal way to fetch this over WiFi instead");
       Serial.println("$  - Extended tuning-harness command (see tuning_handler.h)");
       Serial.println("================================\n");
+      break;
+    case 'l':
+      Serial.println(readPersistLog());
       break;
     case 'h':
       Serial.println("Starting homing...");
