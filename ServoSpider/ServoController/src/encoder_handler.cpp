@@ -1,118 +1,135 @@
 #include "encoder_handler.h"
+#include "stepper_handler.h"
+#include <driver/rmt.h>
+#include <freertos/ringbuf.h>
 
-// Genuine GPIO change-interrupts, not the ESP32 PCNT peripheral, not
-// polling - see encoder_handler.h's file comment for the two PCNT attempts
-// that both caused a severe regression on the bench, why that's now
-// understood to be PCNT-hardware/ISR contention with FastAccelStepper's own
-// MCPWM+PCNT backend (not a coincidental pin issue), and why polling was
-// itself only an interim step (it can silently drop a quadrature edge if
-// the pulley advances more than one step between loop() iterations).
-// handleEncoderInterrupt() is a plain GPIO ISR, the same category as
-// stepper_handler.cpp's handleHomingInterrupt() already proven safe on this
-// exact hardware - it only ever does cheap register reads and integer
-// arithmetic, never anything that could touch non-IRAM flash code.
-//
-// Software quadrature decode via a standard 2-bit-state transition lookup
-// table: index = (previous state << 2) | current state, where each state
-// is (A<<1 | B). A legitimate quadrature signal only ever changes one bit
-// at a time; the four transitions belonging to each direction of travel
-// map to +1 or -1, and everything else (no real change, or an illegal
-// two-bit jump) maps to 0 and is conservatively ignored rather than
-// guessed at. An illegal jump should no longer actually happen now that
-// every edge triggers the ISR directly, but the table stays defensive
-// regardless.
-//
-// Signed so that increasing count matches stepper_handler's convention
-// (increasing position = moving away from the switch, i.e. down - see
-// stepper_handler.h's HomingState comments and CLAUDE.md's Homing Process
-// section). Confirmed and negated for the original pulley-hub mount
-// (2026-09-02). After the motor-shaft remount (2026-09-05), a bench report
-// of the count still going the wrong way prompted negating this a second
-// time (2026-09-05) - that turned out to be wrong (flashed test showed the
-// *original* single-negated table was already correct on the motor shaft;
-// the second negation broke it) - reverted back to this, the single
-// negation, matching what was bench-confirmed working. If this ever needs
-// re-checking again, confirm against a real move before changing it, not
-// against a report alone - see resetEncoderCount()'s note.
-static const int8_t QUAD_TABLE[16] = {
-   0, -1,  1,  0,
-   1,  0,  0, -1,
-  -1,  0,  0,  1,
-   0,  1, -1,  0
-};
+// See encoder_handler.h's file comment for the full history/reasoning.
+// This implementation: RMT RX on channel A only, hardware glitch-filtered,
+// continuously captured into a ring buffer that updateEncoder() drains
+// periodically; direction for each drained batch comes from the stepper's
+// own currently commanded direction rather than reading channel B.
 
-static volatile uint8_t lastQuadState = 0;
+// Picked from the high end of RMT_CHANNEL_0..7 to minimize collision risk
+// with FastLED's or Arduino's own dynamic RMT channel allocation, which
+// both tend to start from channel 0 upward - only relevant if LEDs are
+// ever re-enabled while this diagnostic code is still in place.
+static const rmt_channel_t ENCODER_RMT_CHANNEL = RMT_CHANNEL_7;
+
+// clk_div=80 against an 80MHz APB clock gives a 1MHz tick (1 tick = 1us) -
+// convenient for reasoning about the thresholds below in microseconds.
+static const uint8_t RMT_CLK_DIV = 80;
+
+// Hardware glitch filter: any pulse shorter than this many ticks/us is
+// discarded by the RMT peripheral before it's ever recorded - real bounce/
+// noise rejection in hardware, not a software guess. 255 is this field's
+// max (8 bits); real quadrature edges here are milliseconds apart even at
+// max stepper speed, so the generous end of the range costs nothing.
+static const uint8_t RMT_FILTER_TICKS_THRESH = 255;
+
+// How long (ticks/us) with no edge before RMT considers the current "run"
+// complete and flushes it to the ring buffer. 20ms is generous relative to
+// real motion (edges every few ms at most) but still short enough that a
+// run flushes promptly once real motion actually stops.
+static const uint16_t RMT_IDLE_THRESHOLD_TICKS = 20000;
+
+// Software ring buffer size (bytes) - sized generously relative to the
+// actual edge rate here (well under 200Hz total, so under 100Hz on channel
+// A alone) so a drain call falling a bit behind schedule never risks
+// overflowing it.
+static const size_t RMT_RX_BUF_SIZE = 2048;
+
+// See getMissedTransitionCount()'s declaration comment.
+static const size_t ENCODER_BACKLOG_THRESHOLD = 64;
+
+static RingbufHandle_t rmtRingBuf = NULL;
 static volatile int32_t cumulativeCount = 0;
 static volatile uint32_t missedTransitionCount = 0;
 static bool encoderInitialized = false;
-
-// Debounce guard - tried 2026-09-05, removed the same day. Added after a
-// bench report of the encoder's zero reference drifting by ~150 counts per
-// round trip even though the stepper's own return-to-switch position was
-// perfectly repeatable, plus the discovery that the encoder's A/B lines have
-// 10k pull-ups but no filter capacitor. A 1ms "ignore anything this soon
-// after the last accepted edge" window was tried, reasoning that real edges
-// even at max stepper speed should be several ms apart. Bench data promptly
-// showed this was far too aggressive: a full 0-100% traverse that measured
-// ~1267 counts with no filter dropped to 342-560 counts (and inconsistently
-// so, cycle to cycle) with the 1ms filter active - meaning the real
-// inter-edge spacing during actual motion is nowhere near as generous as
-// that estimate assumed, and the filter was eating the vast majority of
-// legitimate transitions, not just noise. Removed entirely rather than
-// re-tuned to a smaller value, to get a clean, unfiltered baseline again
-// before deciding whether debouncing (software or the hardware RC-filter
-// alternative - see TODO.md) is worth pursuing further, or whether the
-// original drift is actually mechanical after all.
-//
-// Shared by both channel interrupts - either pin changing means the
-// combined 2-bit state may have changed, so just re-read both and let the
-// table sort out what actually happened (including "nothing," if this
-// fired on the other pin's own settle/debounce noise).
-//
-// missedTransitionCount (2026-09-05) - added to actually answer "are we
-// missing counts in the firmware" with data instead of guessing. If both A
-// and B appear to have changed by the time this ISR reads them (an
-// "illegal" 2-bit jump in the table - can only happen if a real
-// intermediate quadrature state occurred and was never sampled, i.e. this
-// ISR wasn't serviced promptly enough for that one edge), the direction
-// and count are genuinely unrecoverable without risking a wrong guess, so
-// it's still dropped, same as before - but now counted, so a real firmware-
-// side loss shows up as a nonzero, growing number instead of being
-// invisible. See getMissedTransitionCount()'s declaration comment for how
-// to read this against a real test run.
-void IRAM_ATTR handleEncoderInterrupt() {
-  uint8_t newState = (digitalRead(encoderPinA) << 1) | digitalRead(encoderPinB);
-  if (newState != lastQuadState) {
-    uint8_t index = (lastQuadState << 2) | newState;
-    int8_t delta = QUAD_TABLE[index];
-    if (delta == 0) {
-      missedTransitionCount++;
-    } else {
-      cumulativeCount += delta;
-    }
-    lastQuadState = newState;
-  }
-}
+// Falls back to whatever direction was last actually seen if the stepper
+// reads exactly 0 speed at the instant a batch is drained (e.g. right at a
+// full stop) - better than arbitrarily defaulting to +1 every time.
+static int lastKnownDirection = 1;
 
 void initEncoder() {
-  // External 10k pull-ups to 3.3V are already present on both channels
-  // (open-collector-style encoder output, common wired to ground) - plain
-  // INPUT here, no need for the internal pull-up too.
-  pinMode(encoderPinA, INPUT);
-  pinMode(encoderPinB, INPUT);
+  pinMode(encoderPinB, INPUT);  // still wired, just unused by this implementation - see file comment
 
-  lastQuadState = (digitalRead(encoderPinA) << 1) | digitalRead(encoderPinB);
+  rmt_config_t config = {};
+  config.rmt_mode = RMT_MODE_RX;
+  config.channel = ENCODER_RMT_CHANNEL;
+  config.gpio_num = (gpio_num_t)encoderPinA;
+  config.clk_div = RMT_CLK_DIV;
+  config.mem_block_num = 1;
+  config.flags = 0;
+  config.rx_config.idle_threshold = RMT_IDLE_THRESHOLD_TICKS;
+  config.rx_config.filter_ticks_thresh = RMT_FILTER_TICKS_THRESH;
+  config.rx_config.filter_en = true;
+
+  esp_err_t err = rmt_config(&config);
+  if (err == ESP_OK) err = rmt_driver_install(ENCODER_RMT_CHANNEL, RMT_RX_BUF_SIZE, 0);
+  if (err == ESP_OK) err = rmt_get_ringbuf_handle(ENCODER_RMT_CHANNEL, &rmtRingBuf);
+  if (err == ESP_OK) err = rmt_rx_start(ENCODER_RMT_CHANNEL, true);
+
+  if (err != ESP_OK) {
+    Serial.print("Encoder: RMT init FAILED (err=");
+    Serial.print((int)err);
+    Serial.println(") - encoder disabled");
+    encoderInitialized = false;
+    return;
+  }
+
   cumulativeCount = 0;
-
-  attachInterrupt(digitalPinToInterrupt(encoderPinA), handleEncoderInterrupt, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(encoderPinB), handleEncoderInterrupt, CHANGE);
-
   encoderInitialized = true;
-  Serial.print("Encoder: GPIO change-interrupt quadrature decode initialized on A=D0(GPIO");
+  Serial.print("Encoder: RMT RX quadrature (channel A only, X2) initialized on A=D0(GPIO");
   Serial.print(encoderPinA);
-  Serial.print(") B=D9(GPIO");
-  Serial.print(encoderPinB);
   Serial.println(")");
+}
+
+// Drains whatever RMT has captured since the last call and folds it into
+// cumulativeCount - see encoder_handler.h's declaration comment for why
+// this needs to be called periodically (unlike the earlier GPIO-ISR
+// version). Non-blocking (0 tick wait) - a normal task-context call, not an
+// ISR, so xRingbufferReceive()/vRingbufferReturnItem() are safe to use
+// directly here.
+void updateEncoder() {
+  if (!encoderInitialized || rmtRingBuf == NULL) {
+    return;
+  }
+
+  size_t rxSize = 0;
+  rmt_item32_t* items = (rmt_item32_t*)xRingbufferReceive(rmtRingBuf, &rxSize, 0);
+  if (items == NULL) {
+    return;
+  }
+
+  size_t itemCount = rxSize / sizeof(rmt_item32_t);
+  if (itemCount > ENCODER_BACKLOG_THRESHOLD) {
+    // See getMissedTransitionCount()'s declaration comment - not a lost
+    // edge itself, just evidence this drain call fell behind schedule.
+    missedTransitionCount++;
+  }
+
+  // Direction for this whole drained batch comes from the stepper's own
+  // currently commanded direction - see encoder_handler.h's file comment
+  // for why this is a deliberate scope reduction vs. independently reading
+  // channel B.
+  if (stepper != NULL) {
+    int32_t speedMilliHz = stepper->getCurrentSpeedInMilliHz();
+    if (speedMilliHz > 0) {
+      lastKnownDirection = 1;
+    } else if (speedMilliHz < 0) {
+      lastKnownDirection = -1;
+    }
+    // else: stopped (or between samples) - keep whatever direction was last known
+  }
+
+  int32_t delta = 0;
+  for (size_t i = 0; i < itemCount; i++) {
+    if (items[i].duration0 > 0) delta += lastKnownDirection;
+    if (items[i].duration1 > 0) delta += lastKnownDirection;
+  }
+  cumulativeCount += delta;
+
+  vRingbufferReturnItem(rmtRingBuf, (void*)items);
 }
 
 int32_t getEncoderCount() {
