@@ -4,6 +4,7 @@
 #include "encoder_handler.h"
 #include "encoder_diag.h"
 #include "core0_task.h"
+#include "tmc_handler.h"
 
 // Splits `line` on spaces into up to 3 tokens (command, name, value).
 // Returns the number of tokens found. Good enough for this simple protocol -
@@ -54,6 +55,10 @@ static bool getTunable(const String& name, String& valueOut) {
   if (name == "pidMaxSpeed") { valueOut = String(stepperPidMaxSpeedConfig); return true; }
   if (name == "pidAccel") { valueOut = String(stepperPidAccelConfig); return true; }
   if (name == "pidDeadband") { valueOut = String(stepperPidDeadbandConfig); return true; }
+  // RAM-only live current control for bench sweeps (current-vs-speed
+  // characterization) - see setTunable()'s handling of this name for why
+  // it's kept separate from /save-tmc's full-settings path.
+  if (name == "tmcRunCurrent") { valueOut = String(tmcRunCurrentConfig); return true; }
   return false;
 }
 
@@ -62,7 +67,7 @@ static const char* ALL_TUNABLE_NAMES[] = {
   "trackSpeed", "trackAccel", "trackMaxLag", "trackMode", "coalesceMs",
   "coalesceSteps", "streamRateWindow", "streamSettle", "compactLog", "protocolDebug",
   "homeSpeed", "homeAccel", "lookaheadSteps", "lookaheadSettle",
-  "pidKp", "pidKi", "pidKd", "pidMaxSpeed", "pidAccel", "pidDeadband"
+  "pidKp", "pidKi", "pidKd", "pidMaxSpeed", "pidAccel", "pidDeadband", "tmcRunCurrent"
 };
 static const int ALL_TUNABLE_COUNT = sizeof(ALL_TUNABLE_NAMES) / sizeof(ALL_TUNABLE_NAMES[0]);
 
@@ -106,6 +111,17 @@ static bool setTunable(const String& name, const String& valueStr) {
   if (name == "pidMaxSpeed") { stepperPidMaxSpeedConfig = v; return true; }
   if (name == "pidAccel") { stepperPidAccelConfig = v; return true; }
   if (name == "pidDeadband") { stepperPidDeadbandConfig = v; return true; }
+  // Deliberately bypasses /save-tmc entirely: that handler writes all 14 TMC
+  // Preferences keys to flash on every call (real wear across a long sweep)
+  // and reconstructs every other TMC field from HTTP form args, where an
+  // absent checkbox arg (tmcEnabled/tmcStallEnabled/tmcPwmAutograd) reads as
+  // false - a script posting only tmcRunCurrent would silently disable the
+  // UART link and StallGuard as a side effect. Setting the config global
+  // directly and calling applyTmcSettings() re-applies the *current*
+  // in-memory value of every other TMC field (untouched here) alongside the
+  // new current - same "RAM-only, no flash wear, no side effects on
+  // anything else" contract every other tunable in this file already has.
+  if (name == "tmcRunCurrent") { tmcRunCurrentConfig = v; applyTmcSettings(); return true; }
   return false;
 }
 
