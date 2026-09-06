@@ -32,11 +32,13 @@ static const uint8_t RMT_FILTER_TICKS_THRESH = 255;
 // run flushes promptly once real motion actually stops.
 static const uint16_t RMT_IDLE_THRESHOLD_TICKS = 20000;
 
-// Software ring buffer size (bytes) - sized generously relative to the
-// actual edge rate here (well under 200Hz total, so under 100Hz on channel
-// A alone) so a drain call falling a bit behind schedule never risks
-// overflowing it.
-static const size_t RMT_RX_BUF_SIZE = 2048;
+// Software ring buffer size (bytes) - generous headroom against the actual
+// edge rate here (well under 200Hz total, so under 100Hz on channel A
+// alone). The real protection against overflow is updateEncoder() draining
+// everything pending on every call (see its own comment) rather than this
+// size alone - a fixed buffer, however large, still fills eventually if
+// nothing is ever taking items back out of it.
+static const size_t RMT_RX_BUF_SIZE = 4096;
 
 // See getMissedTransitionCount()'s declaration comment.
 static const size_t ENCODER_BACKLOG_THRESHOLD = 64;
@@ -95,41 +97,50 @@ void updateEncoder() {
     return;
   }
 
+  // Drains *everything* currently pending, not just one chunk - a real bug
+  // in the first version of this function only pulled a single chunk per
+  // call, so any stretch where the driver pushed chunks even slightly
+  // faster than this was being polled let a backlog build up monotonically
+  // until the ring buffer filled completely and the driver itself started
+  // discarding real captured data ("RX buffer too small"/"RMT RX BUFFER
+  // FULL" - confirmed on the bench, 2026-09-06: clean for the first ~20s of
+  // continuous motion, then errors for the rest of the run once the buffer
+  // filled, with encoderCount never advancing again). Looping until
+  // xRingbufferReceive() returns NULL means each call fully catches up
+  // regardless of how long it's been since the last one.
   size_t rxSize = 0;
-  rmt_item32_t* items = (rmt_item32_t*)xRingbufferReceive(rmtRingBuf, &rxSize, 0);
-  if (items == NULL) {
-    return;
-  }
-
-  size_t itemCount = rxSize / sizeof(rmt_item32_t);
-  if (itemCount > ENCODER_BACKLOG_THRESHOLD) {
-    // See getMissedTransitionCount()'s declaration comment - not a lost
-    // edge itself, just evidence this drain call fell behind schedule.
-    missedTransitionCount++;
-  }
-
-  // Direction for this whole drained batch comes from the stepper's own
-  // currently commanded direction - see encoder_handler.h's file comment
-  // for why this is a deliberate scope reduction vs. independently reading
-  // channel B.
-  if (stepper != NULL) {
-    int32_t speedMilliHz = stepper->getCurrentSpeedInMilliHz();
-    if (speedMilliHz > 0) {
-      lastKnownDirection = 1;
-    } else if (speedMilliHz < 0) {
-      lastKnownDirection = -1;
+  rmt_item32_t* items;
+  while ((items = (rmt_item32_t*)xRingbufferReceive(rmtRingBuf, &rxSize, 0)) != NULL) {
+    size_t itemCount = rxSize / sizeof(rmt_item32_t);
+    if (itemCount > ENCODER_BACKLOG_THRESHOLD) {
+      // See getMissedTransitionCount()'s declaration comment - not a lost
+      // edge itself, just evidence this drain call fell behind schedule.
+      missedTransitionCount++;
     }
-    // else: stopped (or between samples) - keep whatever direction was last known
-  }
 
-  int32_t delta = 0;
-  for (size_t i = 0; i < itemCount; i++) {
-    if (items[i].duration0 > 0) delta += lastKnownDirection;
-    if (items[i].duration1 > 0) delta += lastKnownDirection;
-  }
-  cumulativeCount += delta;
+    // Direction for this whole drained batch comes from the stepper's own
+    // currently commanded direction - see encoder_handler.h's file comment
+    // for why this is a deliberate scope reduction vs. independently
+    // reading channel B.
+    if (stepper != NULL) {
+      int32_t speedMilliHz = stepper->getCurrentSpeedInMilliHz();
+      if (speedMilliHz > 0) {
+        lastKnownDirection = 1;
+      } else if (speedMilliHz < 0) {
+        lastKnownDirection = -1;
+      }
+      // else: stopped (or between samples) - keep whatever direction was last known
+    }
 
-  vRingbufferReturnItem(rmtRingBuf, (void*)items);
+    int32_t delta = 0;
+    for (size_t i = 0; i < itemCount; i++) {
+      if (items[i].duration0 > 0) delta += lastKnownDirection;
+      if (items[i].duration1 > 0) delta += lastKnownDirection;
+    }
+    cumulativeCount += delta;
+
+    vRingbufferReturnItem(rmtRingBuf, (void*)items);
+  }
 }
 
 int32_t getEncoderCount() {
