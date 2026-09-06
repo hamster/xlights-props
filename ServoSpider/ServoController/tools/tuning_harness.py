@@ -531,6 +531,7 @@ def plot_run(rows, out_png, title):
 
     t0 = rows[0]["ms"]
     t = [(r["ms"] - t0) / 1000.0 for r in rows]
+    ddp_val = [r["ddpVal"] for r in rows]
     cmd_pos = [r["cmdPos"] for r in rows]
     cur_pos = [r["curPos"] for r in rows]
     cur_speed = [r["curSpeedHz"] for r in rows]
@@ -538,7 +539,8 @@ def plot_run(rows, out_png, title):
     sg_result = [r["sgResult"] for r in rows]
     has_sg = any(v > 0 for v in sg_result)
 
-    fig, axes = plt.subplots(4 if has_sg else 3, 1, figsize=(10, 10 if has_sg else 8), sharex=True)
+    num_panels = 5 if has_sg else 4
+    fig, axes = plt.subplots(num_panels, 1, figsize=(10, 2.4 * num_panels), sharex=True)
     axes[0].plot(t, cmd_pos, label="Commanded", linewidth=1)
     axes[0].plot(t, cur_pos, label="Actual", linewidth=1)
     axes[0].set_ylabel("Position (steps)")
@@ -552,23 +554,38 @@ def plot_run(rows, out_png, title):
     axes[0].legend(loc="upper right", fontsize=8)
     axes[0].set_title(title)
 
-    axes[1].plot(t, cur_speed, color="tab:orange", linewidth=1)
-    axes[1].set_ylabel("Actual Speed (Hz)")
-    axes[1].axhline(0, color="gray", linewidth=0.5)
+    # Raw DDP value as received (0-255, or 0-65535 in 16-bit mode) - added
+    # 2026-09-06 to answer directly whether a glitch in "Commanded" above
+    # traces back to the network layer or is introduced by the firmware's
+    # own scaling: cmdPos is calcPosition(ddpVal, ...), a straightforward
+    # linear scale with no filtering (see main.cpp) - so a spike appearing
+    # in *both* panels, at the same instant, means the device really did
+    # receive that value over the wire (DDP rides on UDP, which has no
+    # delivery-order guarantee, and this firmware parses but does not
+    # currently validate/enforce the DDP sequence number - a plausible
+    # source of exactly this kind of glitch on a real, lossy WiFi link). A
+    # spike in Commanded with nothing here would instead point at the
+    # firmware's own scaling/dispatch path.
+    axes[1].plot(t, ddp_val, color="tab:green", linewidth=1)
+    axes[1].set_ylabel("Raw DDP value")
 
-    axes[2].plot(t, signed_error, color="tab:red", linewidth=1)
+    axes[2].plot(t, cur_speed, color="tab:orange", linewidth=1)
+    axes[2].set_ylabel("Actual Speed (Hz)")
     axes[2].axhline(0, color="gray", linewidth=0.5)
-    axes[2].set_ylabel("Error (cmd - actual)")
+
+    axes[3].plot(t, signed_error, color="tab:red", linewidth=1)
+    axes[3].axhline(0, color="gray", linewidth=0.5)
+    axes[3].set_ylabel("Error (cmd - actual)")
 
     if has_sg:
         # 0 means "no TMC UART" (see logCompactMotion()) - plotted as-is
         # rather than hidden, since a run that's entirely 0 is itself useful
         # to notice (TMC link down for this run).
-        axes[3].plot(t, sg_result, color="tab:purple", linewidth=1)
-        axes[3].set_ylabel("SG_RESULT\n(lower = more loaded)")
-        axes[3].set_xlabel("Time (s)")
+        axes[4].plot(t, sg_result, color="tab:purple", linewidth=1)
+        axes[4].set_ylabel("SG_RESULT\n(lower = more loaded)")
+        axes[4].set_xlabel("Time (s)")
     else:
-        axes[2].set_xlabel("Time (s)")
+        axes[3].set_xlabel("Time (s)")
 
     fig.tight_layout()
     fig.savefig(out_png, dpi=120)

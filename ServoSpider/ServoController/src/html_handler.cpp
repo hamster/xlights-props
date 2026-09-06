@@ -720,6 +720,7 @@ void handleStatusData() {
     "\"encoderMissed\":%lu,"
     "\"control16Bit\":%s,"
     "\"protocolPacketsReceived\":%lu,"
+    "\"protocolPacketsRejectedOutOfOrder\":%lu,"
     "\"protocolLastCommand\":%u,"
     "\"protocolLastCommandPercent\":%d,"
     "\"totalChannels\":%d,"
@@ -769,6 +770,7 @@ void handleStatusData() {
     (unsigned long)getMissedTransitionCount(),
     control16BitConfig ? "true" : "false",
     packetsReceived,
+    ddpPacketsRejectedOutOfOrder,
     currentPositionRequest,
     lastCommandPercent,
     totalChannels,

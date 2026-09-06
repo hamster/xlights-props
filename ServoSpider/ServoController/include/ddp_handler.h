@@ -10,6 +10,11 @@
 
 // DDP Statistics
 extern unsigned long ddpPacketsReceived;
+// Counts packets discarded by the out-of-order/duplicate check below - see
+// handleDDP()'s sequence-number comment. Real, nonzero values here confirm
+// UDP reordering is actually happening on the network, not just a
+// theoretical concern.
+extern unsigned long ddpPacketsRejectedOutOfOrder;
 
 // DDP Protocol Constants
 #define DDP_PORT 4048

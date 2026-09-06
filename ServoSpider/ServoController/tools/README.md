@@ -7,6 +7,54 @@ Compact Motion Log, and produces plots/metrics - so a tuning iteration is
 "edit a config file, run one command, look at a plot" instead of manual
 button-pushing and eyeballing a serial terminal.
 
+For a worked example of using this harness for a real tuning session -
+findings, comparison tables, graphs, bugs found along the way - see
+`TUNING_SESSION_2026-09-06.md` in this directory.
+
+## Compact Motion Log columns
+
+One CSV line per processed DDP command (Direct/Coalesce/Lookahead) or
+~every 50ms while moving (the periodic tick - all modes except Streaming,
+which self-logs on its own schedule): `ms,ddpVal,cmdPos,curPos,delta,lag,
+profile,curSpeedHz,targetSpeedHz,encoderCount,sgResult,switchTripped`.
+
+- `ddpVal` - the raw DDP-decoded value (0-255, or 0-65535 in 16-bit mode)
+  as received - added to confirm/rule out network-layer causes for a
+  glitch elsewhere in the pipeline (see the note on `cmdPos` below).
+- `cmdPos` - **not** a direct decode of `ddpVal`: for the once-per-command
+  rows it's the scaled target just sent to `moveTo()`, but for the
+  periodic tick in between it's FastAccelStepper's own `stepper->targetPos()`
+  - which can briefly report "wherever the stepper just stopped" rather
+  than "what was actually last commanded" right after a `forceStop()`
+  during normal operation (a homing-switch trip near position 0, or a
+  StallGuard-detected stall anywhere along the travel) - see TODO.md's
+  2026-09-06 entry. A real, currently-unfixed source of spikes in the
+  "Commanded" plot trace, and of the stepper genuinely pausing until the
+  next DDP command happens to carry a different value.
+- `encoderCount`/`sgResult` - ground-truth encoder position and live
+  TMC2209 StallGuard reading, both 0 if not available (no encoder wired,
+  or TMC UART not connected) - real values, not literal zero readings, so
+  metrics that use these (`min_sg_result`, etc.) exclude zero rather than
+  treating it as data.
+- `switchTripped` - raw, live homing-switch state (`isHomingSwitchTripped()`),
+  not a latched/edge flag - feeds `is_stuck_at_switch()`'s post-hoc
+  "commanded to move, switch already reads triggered, encoder not
+  advancing" detector (a red-shaded span on the position plot, plus a
+  `stuck_at_switch_count`/`_ms` metric and a per-run warning).
+
+`plot_run()`'s figure always includes Commanded/Actual position (with
+stuck-at-switch shading), raw DDP value, actual speed, and error; it adds
+an SG_RESULT panel only if the run actually saw a nonzero reading (TMC
+connected and StallGuard producing real data).
+
+DDP's 4-bit rolling sequence number is validated firmware-side as of
+2026-09-06 - a genuinely out-of-order or duplicate packet is now silently
+dropped (`ddp_handler.cpp`'s `isNewerDdpSeq()`), counted in
+`ddpPacketsRejectedOutOfOrder` (serial `s` status, `/status-data`). Doesn't
+change anything about this harness's own usage - it only matters if
+something upstream (a real DDP sender, not this harness's own
+`send_triangle_wave()`) is prone to reordering packets over a lossy link.
+
 ## Setup
 
 ```bash

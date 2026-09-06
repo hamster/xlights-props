@@ -8,10 +8,38 @@
 
 // DDP Statistics
 unsigned long ddpPacketsReceived = 0;
+unsigned long ddpPacketsRejectedOutOfOrder = 0;
 
 // UDP object
 WiFiUDP ddpUdp;
 bool ddpServerStarted = false;
+
+// Out-of-order/duplicate rejection - added 2026-09-06 after tuning-harness
+// plots showed real spikes/dips in commanded position that didn't match
+// the smooth synthetic wave being sent. Traced (via a new raw-DDP-value
+// plot panel in tools/tuning_harness.py) back to real out-of-order UDP
+// delivery, not a firmware-side artifact: positionRequest/cmdPos is a
+// direct, unfiltered decode of whatever arrived, and this handler
+// previously accepted every packet unconditionally regardless of the DDP
+// header's own sequence field, which it already parsed but never used
+// beyond a debug print. DDP's sequence field is 4 bits (1-15, cycling; 0
+// is the documented "sequence numbering not in use" convention some
+// senders rely on, and must always be accepted rather than treated as
+// stale).
+static uint8_t lastAcceptedDdpSeq = 0;
+
+// True if `seq` is newer than `lastSeq` in DDP's 4-bit rolling sequence
+// space (1-15 - 0 is the "unused" sentinel, handled by the caller before
+// this is reached). Treats the 15 non-zero values as a circular sequence;
+// "newer" means the forward distance from lastSeq to seq falls in the
+// closer half of the cycle - the standard scheme for a small wrapping
+// counter, so a genuine wraparound (15 -> 1) is still accepted while a
+// stale/reordered packet arriving late is rejected.
+static bool isNewerDdpSeq(uint8_t seq, uint8_t lastSeq) {
+  int diff = ((int)seq - 1) - ((int)lastSeq - 1);  // map 1..15 -> 0..14 first
+  if (diff < 0) diff += 15;
+  return diff != 0 && diff <= 7;
+}
 
 // External preferences object
 extern Preferences preferences;
@@ -77,6 +105,31 @@ void handleDDP() {
     Serial.print(header.dataLen);
     Serial.print(", dataoffset: ");
     Serial.println(header.dataOffset);
+  }
+
+  // Reject a packet that arrived out of order or as a duplicate - see the
+  // isNewerDdpSeq()/lastAcceptedDdpSeq comment above. seq==0 always passes
+  // (sender opted out of sequencing); lastAcceptedDdpSeq==0 means this is
+  // the first sequenced packet since boot/reconnect, nothing to compare
+  // against yet, so it's accepted unconditionally and becomes the new
+  // baseline.
+  if (header.sequenceNum != 0 && lastAcceptedDdpSeq != 0 &&
+      !isNewerDdpSeq(header.sequenceNum, lastAcceptedDdpSeq)) {
+    ddpPacketsRejectedOutOfOrder++;
+    if (protocolDebugConfig) {
+      Serial.print("DDP: rejecting out-of-order/duplicate packet, seq=");
+      Serial.print(header.sequenceNum);
+      Serial.print(" (last accepted seq=");
+      Serial.print(lastAcceptedDdpSeq);
+      Serial.println(")");
+    }
+    while (ddpUdp.available()) {
+      ddpUdp.read();
+    }
+    return;
+  }
+  if (header.sequenceNum != 0) {
+    lastAcceptedDdpSeq = header.sequenceNum;
   }
 
   // Read all channel data into a buffer for debug output and processing.

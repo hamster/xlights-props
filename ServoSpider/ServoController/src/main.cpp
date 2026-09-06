@@ -1021,6 +1021,8 @@ void printFullStatus() {
 
   Serial.print("DDP Packets Received: ");
   Serial.println(ddpPacketsReceived);
+  Serial.print("DDP Packets Rejected (out-of-order/duplicate): ");
+  Serial.println(ddpPacketsRejectedOutOfOrder);
 
   // Stepper/homing status
   Serial.println("\n--- Stepper Status ---");
