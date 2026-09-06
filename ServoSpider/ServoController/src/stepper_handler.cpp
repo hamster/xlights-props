@@ -123,7 +123,21 @@ int stepperLookaheadSettleMsConfig = 150;
 float stepperPidKpConfig = 1.5f;
 float stepperPidKiConfig = 0.0f;
 float stepperPidKdConfig = 0.0f;
-int stepperPidMaxSpeedConfig = 6500;
+// 7000 Hz per the 2026-09-06 speed/current characterization sweeps and
+// live listening on the bench: the measured stall boundary was ~8500 Hz
+// (up)/~9000 Hz (down) at 1200-1400mA and 50,000 steps/s^2 accel, but that
+// was superseded when the user saved 200,000 steps/s^2 as the production
+// accel (much higher torque demand during the ramp itself) - at 8000 Hz +
+// 200,000 accel the motor audibly sounded close to stalling even though no
+// slip was measured (motor was cold on the bench; a real show runs warmer,
+// eroding torque margin further), so backed off to 7000 Hz rather than
+// trust the encoder-slip measurement alone. The speed-vs-current sweep
+// should be re-run at 200,000 accel specifically before trusting any of
+// these numbers as final - see TODO.md. No Preferences key exists for this
+// (RAM-only, like every other PID/tracking tunable), so this compiled
+// default is the only thing that makes it durable across a reboot - update
+// it here (not just via $SET) if this decision changes.
+int stepperPidMaxSpeedConfig = 7000;
 int stepperPidAccelConfig = 2500;
 int stepperPidDeadbandConfig = 30;
 
