@@ -644,6 +644,12 @@ void loop() {
   // Update non-blocking homing state machine
   updateHoming();
 
+  // Detect being physically rammed into the homing stop during normal
+  // (non-homing) operation - see stepper_handler.h's declaration comment.
+  // Deliberately independent of the encoder, so this is real, permanent
+  // safety logic, not something that needs to be pared off later.
+  updateRammedIntoStopCheck();
+
   // Poll TMC2209 diagnostics / stall detection (no-op if not enabled)
   updateTmc();
 

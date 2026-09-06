@@ -505,6 +505,40 @@ void handleClearTmcStall() {
   server.send(200, "application/json", "{\"success\":true}");
 }
 
+// Remote "verify calibration, self-heal if it's wrong" endpoint - added
+// 2026-09-06 so FPP (or any external DDP-side scripting) can call one HTTP
+// request before/between shows instead of needing its own logic to detect
+// drift and separately trigger a re-home. Non-blocking, matching every
+// other diagnostic move in this firmware (real checks/homing take seconds,
+// far too long to hold a WebServer request handler open without starving
+// esp_task_wdt_reset(), which only runs from loop()) - this only *starts*
+// the check and returns immediately; poll /status-data's "isChecking"
+// field, then "homed"/"isHoming" (a trip auto-triggers a full re-home) to
+// see when it's done and what happened.
+void handleVerifyAndRehome() {
+  if (isHoming()) {
+    server.send(409, "application/json", "{\"success\":false,\"message\":\"Homing already in progress\"}");
+    return;
+  }
+  if (isStepChecking()) {
+    server.send(409, "application/json", "{\"success\":false,\"message\":\"A check is already in progress\"}");
+    return;
+  }
+  if (!homed) {
+    // Nothing to verify against yet - go straight to a full homing cycle
+    // instead of refusing the request outright.
+    startHoming();
+    server.send(200, "application/json", "{\"success\":true,\"message\":\"Not homed yet - starting a full homing cycle\"}");
+    return;
+  }
+  if (stepper->isRunning()) {
+    server.send(409, "application/json", "{\"success\":false,\"message\":\"Stepper is moving - try again shortly\"}");
+    return;
+  }
+  startStepCheck(0, true);  // true = auto-rehome if this finds real drift
+  server.send(200, "application/json", "{\"success\":true,\"message\":\"Verification started - poll /status-data (checking, then homed/isHoming) for the result\"}");
+}
+
 void handleConnect() {
   server.send(200, "text/html",
     "<html><body><h1>Attempting to connect...</h1>"
@@ -707,6 +741,7 @@ void handleStatusData() {
     "\"uptimeSecs\":%lu,"
     "\"homed\":%s,"
     "\"isHoming\":%s,"
+    "\"isChecking\":%s,"
     "\"homingError\":%s,"
     "\"homingSwitchTripped\":%s,"
     "\"position\":%d,"
@@ -757,6 +792,7 @@ void handleStatusData() {
     uptimeDays, uptimeHours, uptimeMins, uptimeSecs,
     homed ? "true" : "false",
     isHoming() ? "true" : "false",
+    isStepChecking() ? "true" : "false",
     homingErrorLatched ? "true" : "false",
     homingSwitchTripped ? "true" : "false",
     currentPosition,
@@ -935,6 +971,7 @@ void startWebServer() {
 
   // TMC2209 stall fault acknowledgement
   server.on("/clear-tmc-stall", HTTP_GET, handleClearTmcStall);
+  server.on("/verify-and-rehome", HTTP_GET, handleVerifyAndRehome);  // for FPP/DDP-side scripting - see handler comment
 
   // OTA Update endpoint
   server.on("/update", HTTP_POST, handleOTAUpdateComplete, handleOTAUpdate);

@@ -245,7 +245,14 @@ extern long stepCheckTargetPosition; // What we asked it to move to
 extern unsigned long stepCheckElapsedMs;
 
 bool isStepChecking();
-void startStepCheck(long targetPosition);  // Begins the move; refuses if homing/checking/moving already
+// Begins the move; refuses if homing/checking/moving already. autoRehomeOnTrip
+// (default false, so $CHECKSTEPS's existing bench-diagnostic behavior is
+// unchanged) - if true and this check finds real drift, a fresh homing
+// cycle starts automatically instead of just marking homed=false and
+// waiting for something else to notice. See handleVerifyAndRehome()
+// (html_handler.cpp) - the /verify-and-rehome endpoint FPP/DDP scripting
+// can call remotely to self-heal drift with a single request.
+void startStepCheck(long targetPosition, bool autoRehomeOnTrip = false);
 void updateStepCheck();                    // Call from loop(), before updateHoming()
 
 // Stepper functions
@@ -255,5 +262,17 @@ void updateHoming();            // Call from loop() to update homing state
 bool isHoming();                // Returns true if homing is in progress
 bool isHomingSwitchTripped();   // Returns true if homing switch is currently triggered
 void initializeStepper();
+
+// Detects being physically rammed into the homing stop during *normal*
+// (non-homing) operation - deliberately independent of the encoder, since
+// getCurrentPosition() alone already shows the right signature: it's pure
+// step-pulse bookkeeping, so it keeps changing even when the motor is
+// mechanically blocked and nothing is really moving. If the switch has
+// been continuously triggered for RAMMED_DETECT_MS and the step count has
+// moved since the trip started, that's a real jam - the motor's still
+// being driven, but the physical stop is denying it further travel. Call
+// from loop() every iteration; no-op unless the switch is currently
+// tripped. See stepper_handler.cpp for what it does once detected.
+void updateRammedIntoStopCheck();
 
 #endif

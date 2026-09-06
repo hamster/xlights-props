@@ -249,6 +249,60 @@ void startHoming() {
   Serial.println(" Hz)");
 }
 
+// How long the switch must read continuously triggered, with the step
+// count still moving, before this is treated as a real jam rather than a
+// legitimate brief contact (e.g. settling right at position 0). Matches
+// the "a second or two" the user specified.
+static const unsigned long RAMMED_DETECT_MS = 1500;
+
+static unsigned long switchTrippedSinceMs = 0;
+static long switchTrippedStartPos = 0;
+static bool rammedIntoStopReported = false;  // latched per-trip, so this only fires once until the switch clears
+
+// See stepper_handler.h's declaration comment for the detection logic.
+// Deliberately scoped to non-homing operation only - during an active
+// homing search, tripping the switch is expected and already handled by
+// the state machine below; this is specifically for "we thought we were
+// mid-travel and turn out to be jammed against the physical stop."
+void updateRammedIntoStopCheck() {
+  if (isHoming()) {
+    switchTrippedSinceMs = 0;
+    rammedIntoStopReported = false;
+    return;
+  }
+
+  if (!isHomingSwitchTripped()) {
+    switchTrippedSinceMs = 0;
+    rammedIntoStopReported = false;
+    return;
+  }
+
+  unsigned long now = millis();
+  if (switchTrippedSinceMs == 0) {
+    switchTrippedSinceMs = now;
+    switchTrippedStartPos = stepper->getCurrentPosition();
+    return;
+  }
+
+  if (rammedIntoStopReported) return;
+
+  if (now - switchTrippedSinceMs >= RAMMED_DETECT_MS) {
+    long stepsSinceTrip = stepper->getCurrentPosition() - switchTrippedStartPos;
+    if (stepsSinceTrip != 0) {
+      rammedIntoStopReported = true;
+      Serial.print("WARNING: rammed into homing stop - switch has read triggered for ");
+      Serial.print(now - switchTrippedSinceMs);
+      Serial.print("ms while the stepper kept counting steps (");
+      Serial.print(stepsSinceTrip);
+      Serial.println(" since the trip) - stopping and marking system as not homed");
+      persistLog("Rammed into homing stop: %ld steps counted while switch held triggered for %lums",
+                 stepsSinceTrip, now - switchTrippedSinceMs);
+      stepper->forceStop();
+      homed = false;
+    }
+  }
+}
+
 bool isHoming() {
   return (homingState != HOMING_IDLE && homingState != HOMING_COMPLETE && homingState != HOMING_ERROR);
 }
@@ -268,7 +322,9 @@ bool isStepChecking() {
 // test should be able to influence. Caller (tuning_handler.cpp) is expected
 // to have already checked homed/isHoming()/isRunning(); this only adds a
 // defensive re-check so it can't be started twice concurrently.
-void startStepCheck(long targetPosition) {
+static bool stepCheckAutoRehomeOnTrip = false;
+
+void startStepCheck(long targetPosition, bool autoRehomeOnTrip) {
   if (isStepChecking() || isHoming() || stepper->isRunning()) {
     return;
   }
@@ -276,6 +332,7 @@ void startStepCheck(long targetPosition) {
   stepCheckTripped = false;
   stepCheckTripPosition = stepper->getCurrentPosition();
   stepCheckStartMs = millis();
+  stepCheckAutoRehomeOnTrip = autoRehomeOnTrip;
   stepper->setAcceleration(stepperAccelConfig);
   stepper->setSpeedInHz(stepperSpeedConfig);
   stepper->moveTo(targetPosition);
@@ -313,6 +370,11 @@ void updateStepCheck() {
     Serial.print(stepCheckTargetPosition);
     Serial.print(" elapsedMs=");
     Serial.println(stepCheckElapsedMs);
+    if (stepCheckAutoRehomeOnTrip) {
+      Serial.println("Real drift detected - auto-rehoming (verify-and-rehome request)");
+      persistLog("verify-and-rehome: drift detected (tripPos=%ld), auto-rehoming", stepCheckTripPosition);
+      startHoming();
+    }
     return;
   }
 
