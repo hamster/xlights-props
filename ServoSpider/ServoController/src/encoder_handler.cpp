@@ -52,6 +52,19 @@ static bool encoderInitialized = false;
 // full stop) - better than arbitrarily defaulting to +1 every time.
 static int lastKnownDirection = 1;
 
+// updateEncoder() is now genuinely called from two different cores - the
+// Core 0 task's periodic drain, and a direct, synchronous call from
+// encoder_diag.cpp right when a leg completes, before the next (possibly
+// opposite-direction) move is issued (see that call site's comment for why
+// this is necessary, found on the bench 2026-09-06: entire legs' worth of
+// data were getting attributed to the wrong direction when real captured
+// data was still sitting in the ring buffer at the moment a reversal
+// happened, because nothing forced a drain before the direction changed).
+// This spinlock protects the shared counters against that genuine
+// cross-core concurrency, which didn't exist back when this function only
+// ever ran from one task.
+static portMUX_TYPE encoderMux = portMUX_INITIALIZER_UNLOCKED;
+
 void initEncoder() {
   pinMode(encoderPinB, INPUT);  // still wired, just unused by this implementation - see file comment
 
@@ -112,6 +125,8 @@ void updateEncoder() {
   rmt_item32_t* items;
   while ((items = (rmt_item32_t*)xRingbufferReceive(rmtRingBuf, &rxSize, 0)) != NULL) {
     size_t itemCount = rxSize / sizeof(rmt_item32_t);
+
+    portENTER_CRITICAL(&encoderMux);
     if (itemCount > ENCODER_BACKLOG_THRESHOLD) {
       // See getMissedTransitionCount()'s declaration comment - not a lost
       // edge itself, just evidence this drain call fell behind schedule.
@@ -138,21 +153,30 @@ void updateEncoder() {
       if (items[i].duration1 > 0) delta += lastKnownDirection;
     }
     cumulativeCount += delta;
+    portEXIT_CRITICAL(&encoderMux);
 
     vRingbufferReturnItem(rmtRingBuf, (void*)items);
   }
 }
 
 int32_t getEncoderCount() {
-  return cumulativeCount;
+  portENTER_CRITICAL(&encoderMux);
+  int32_t value = cumulativeCount;
+  portEXIT_CRITICAL(&encoderMux);
+  return value;
 }
 
 uint32_t getMissedTransitionCount() {
-  return missedTransitionCount;
+  portENTER_CRITICAL(&encoderMux);
+  uint32_t value = missedTransitionCount;
+  portEXIT_CRITICAL(&encoderMux);
+  return value;
 }
 
 void resetEncoderCount() {
+  portENTER_CRITICAL(&encoderMux);
   cumulativeCount = 0;
+  portEXIT_CRITICAL(&encoderMux);
 }
 
 bool isEncoderInitialized() {

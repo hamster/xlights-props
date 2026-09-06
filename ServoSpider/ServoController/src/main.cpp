@@ -1007,6 +1007,11 @@ void printFullStatus() {
     Serial.print(" (missed transitions: ");
     Serial.print(getMissedTransitionCount());
     Serial.println(")");
+    Serial.print("Core 0 task: max loop gap ");
+    Serial.print(getCore0TaskMaxGapMs());
+    Serial.print(" ms, min free stack ");
+    Serial.print(getCore0TaskMinStackBytes());
+    Serial.println(" bytes");
   } else {
     Serial.println("Not initialized");
   }

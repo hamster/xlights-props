@@ -84,6 +84,14 @@ void updateEncoderDiag() {
     return;  // Still moving (or still coasting to a stop after a switch trip) - wait
   }
 
+  // Force a drain right here, before deciding/issuing the next (likely
+  // opposite-direction) move - see updateEncoder()'s declaration comment
+  // (encoder_handler.h) for why this matters: the stepper reads 0 speed at
+  // this exact instant (just stopped), so this flushes any real data still
+  // sitting in the ring buffer under the *correct*, just-finished
+  // direction, before anything about to change could make it wrong.
+  updateEncoder();
+
   int freqHz = ENCDIAG_FREQS[encDiagFreqIndex];
   printEncDiagRow(freqHz, encDiagRunIndex, encDiagHeadingTo100 ? 100 : 0);
 

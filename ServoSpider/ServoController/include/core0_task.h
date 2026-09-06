@@ -1,6 +1,8 @@
 #ifndef CORE0_TASK_H
 #define CORE0_TASK_H
 
+#include <Arduino.h>
+
 // Dedicated FreeRTOS task pinned to Core 0, added 2026-09-05 as the first
 // real piece of the "split stepper/protocol handling from LED output across
 // both cores" work (see TODO.md's Priority 1 section for the full design
@@ -29,5 +31,17 @@
 // its show()-triggering logic belongs in this same task's loop, fed by a
 // semaphore from Core 1's pixel-write call sites, not a second task.
 void startCore0Task();  // Call once from setup(), after initializeStepper() and before anything reads the encoder
+
+// Diagnostics added 2026-09-06 to actually measure (not just infer) whether
+// this task is being starved for extended stretches - raised as the
+// leading suspect after a real $ENCDIAG sweep showed whole legs' worth of
+// encoder data misattributed to the wrong direction even with encoder_diag.cpp's
+// synchronous flush-before-reversal fix in place, which shouldn't be
+// possible unless this task's own loop wasn't running for a large chunk of
+// a ~4s leg, not just a few ms. Both are running high-water-marks since
+// boot (worst case seen, not current value) - check these after a real
+// test run rather than guessing further.
+uint32_t getCore0TaskMaxGapMs();       // Longest gap ever observed between consecutive loop iterations
+uint32_t getCore0TaskMinStackBytes();  // Least free stack ever observed (uxTaskGetStackHighWaterMark() * sizeof(StackType_t)) - low is a real problem, not just a curiosity
 
 #endif

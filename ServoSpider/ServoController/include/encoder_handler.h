@@ -77,6 +77,23 @@ void initEncoder();    // Call from setup() (or a Core 0 task, per core0_task.h)
 // version, this one does need a per-loop update call - RMT's ring buffer
 // is drained by the application, not delivered via a per-edge callback.
 // See core0_task.cpp, where this is called from the Core 0 task's own loop.
+//
+// Also safe (and expected) to call directly, synchronously, from wherever
+// the stepper's commanded direction is about to change - found necessary
+// on the bench (2026-09-06): if any real captured data is still sitting in
+// the ring buffer at the moment a move finishes, and nothing drains it
+// before the *next* (opposite-direction) move is issued, that whole
+// leftover batch gets attributed the new, wrong direction once the Core 0
+// task's periodic drain eventually gets to it - not a rare 1-2-edge
+// rounding error as originally estimated, but entire legs' worth of data,
+// ~19% of legs in one real sweep. Calling this right after detecting the
+// stepper has stopped (encoder_diag.cpp's updateEncoderDiag() does this)
+// and before issuing the reversed move flushes any straggler under the
+// *old*, still-correct direction - stepper->getCurrentSpeedInMilliHz()
+// reads 0 at that exact instant, so the "keep last known direction"
+// fallback below does the right thing automatically. Thread-safe (a
+// portMUX_TYPE spinlock guards the shared counters) specifically to make
+// this multi-context calling pattern safe.
 void updateEncoder();
 
 // Cumulative edge count (X2 - both rising and falling edges on channel A

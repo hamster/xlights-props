@@ -3,6 +3,7 @@
 #include "protocol_common.h"
 #include "encoder_handler.h"
 #include "encoder_diag.h"
+#include "core0_task.h"
 
 // Splits `line` on spaces into up to 3 tokens (command, name, value).
 // Returns the number of tokens found. Good enough for this simple protocol -
@@ -154,7 +155,11 @@ void handleExtendedSerialCommand(const String& line) {
     Serial.print(" encoder=");
     Serial.print(getEncoderCount());
     Serial.print(" encoderMissed=");
-    Serial.println(getMissedTransitionCount());
+    Serial.print(getMissedTransitionCount());
+    Serial.print(" core0MaxGapMs=");
+    Serial.print(getCore0TaskMaxGapMs());
+    Serial.print(" core0MinStack=");
+    Serial.println(getCore0TaskMinStackBytes());
     return;
   }
 
