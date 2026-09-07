@@ -139,13 +139,25 @@ int stepperLookaheadSettleMsConfig = 150;
 //      fidelity testing, tools/ddp_continuous_test.py) - beats the
 //      pre-feedforward baseline on both accuracy and corner tightness,
 //      though moment-to-moment jerk/ripple is still higher than Direct
-//      mode's - see TODO.md for the full comparison and what was tried
-//      to close that gap (pidAccel reduction trades corner-tightness
-//      for jerk; Kp much above 4 combined with a lower accel produced a
-//      real, reproducible oscillation - avoid). Ki still untested (Kp/Kd
-//      only ever swept with Ki=0 - needs a sustained-tracking test, not
-//      a step-response one).
-float stepperPidKpConfig = 4.0f;
+//      mode's.
+//   4. Kp=3/Kd=0.3 (current) - 2026-09-07, after the feedforward
+//      estimator itself was replaced with a least-squares slope over a
+//      fixed window (see stepperPidFfWindowMsConfig), which fixed a
+//      separate, larger jerk source (the old estimator's denominator
+//      aliased against the DDP packet rate). With that gone, the
+//      remaining ~120-150ms-period speed ripple was re-characterized: a
+//      Kd sweep (0.15-0.7) moved rms_error a lot (287->618) but barely
+//      touched ripple amplitude (272->191->227Hz, non-monotonic) - Kd
+//      is not a lever against this ripple once feedforward carries the
+//      bulk of the velocity. A Kp sweep (2/3/4/6) was the real lever:
+//      ripple fell monotonically as Kp dropped (230.6Hz at 4 -> 149.9Hz
+//      at 2), and Kp=3 turned out to not be a pure tradeoff - jerk and
+//      ripple both improved (236.5->198.8, 230.6->197.5Hz) while
+//      max_error and corner tightness also improved (655->557,
+//      538->509), only rms_error rose modestly (302->382). Ki still
+//      untested (Kp/Kd only ever swept with Ki=0 - needs a sustained-
+//      tracking test, not a step-response one).
+float stepperPidKpConfig = 3.0f;
 float stepperPidKdConfig = 0.3f;
 // 7000 Hz per the 2026-09-06 speed/current characterization sweeps and
 // live listening on the bench: the measured stall boundary was ~8500 Hz
