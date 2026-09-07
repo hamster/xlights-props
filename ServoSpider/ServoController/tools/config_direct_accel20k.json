@@ -1,0 +1,12 @@
+{
+  "trackMode": 0,
+  "trackEnabled": 1,
+  "trackThreshold": 2000,
+  "normalSpeed": 7500,
+  "normalAccel": 200000,
+  "tmcRunCurrent": 1200,
+  "tmcStallEnabled": 0,
+  "trackSpeed": 6500,
+  "trackAccel": 20000,
+  "trackMaxLag": 3000
+}

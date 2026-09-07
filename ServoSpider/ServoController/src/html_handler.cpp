@@ -11,6 +11,7 @@
 #include "encoder_handler.h"
 #include "persist_log.h"
 #include "tuning_handler.h"
+#include "config_handler.h"
 #include "main.h"
 #include <WiFi.h>
 #include <Preferences.h>
@@ -997,6 +998,8 @@ void startWebServer() {
   server.on("/persist-log", HTTP_GET, handlePersistLog);  // reboot-surviving diagnostic log - see persist_log.h
   server.on("/ddp-rx-log", HTTP_GET, handleDdpRxLog);      // DDP reception bench log - see ddp_handler.h
   server.on("/tunable", HTTP_GET, handleTunableHttp);      // $SET/$GET over HTTP - see tuning_handler.cpp
+  server.on("/config", HTTP_GET, handleConfigGet);          // full persisted config as key=value - see config_handler.h
+  server.on("/config", HTTP_POST, handleConfigPost);        // write it back, same format
 
   // TMC2209 stall fault acknowledgement
   server.on("/clear-tmc-stall", HTTP_GET, handleClearTmcStall);
