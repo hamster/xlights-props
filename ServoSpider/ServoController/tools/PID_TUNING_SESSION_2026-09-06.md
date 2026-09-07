@@ -194,15 +194,39 @@ Same sweep again (`tuning_harness.py --config config_pid.json`, same gains/envir
 
 **No freezes, no stuck episodes, no step loss, no re-homes needed anywhere in the sweep** — the skipped-step check before every run came back clean, and every number lines up with the original `pid_final` baseline almost digit-for-digit. The `pid_observed` regression (5s/8s/16s all badly degraded, a real 12-step loss, multi-second `positionRequest` freezes) did not reproduce.
 
-### 16s run — clean position tracking, but a real speed ripple underneath
+### All 5 runs — same story every time: clean tracking, ripple underneath
 
-![16s run - clean tracking, visible speed ripple](tuning_runs/pid_v2_20260906_220241_dur16s.png)
+![5s run](tuning_runs/pid_v2_20260906_220241_dur5s.png)
 
-### 8s run — same pattern, ripple more pronounced at higher required speed
+The 5s run is the one exception worth calling out separately: it's fast enough (full ~15,500-step range in 2.5s) that PID pegs at the 7000Hz speed cap for most of each leg (see the flat-topped **Actual Speed** trace) - genuinely speed-limited, not oscillating, the same pre-existing limit documented earlier in this doc. The ripple below shows up once the required speed drops back under the cap.
 
-![8s run - clean tracking, visible speed ripple](tuning_runs/pid_v2_20260906_220241_dur8s.png)
+![8s run](tuning_runs/pid_v2_20260906_220241_dur8s.png)
 
-This is very likely what "jerky but smooth" is describing: the **Position** panel (top) tracks the commanded ramp cleanly with no visible discontinuity — genuinely smooth motion at the level a person watching the trolley would judge it. The **Actual Speed** panel (third) tells a different story underneath: a real, sustained oscillation (roughly 1000-3000Hz swings, ~0.2-0.3s period) riding on top of the average cruise speed, in both directions, the whole time it's moving. This is the same not-yet-explained ripple flagged in "Still open" below — small enough in position terms not to show up as visible jerkiness in the trace, but real enough to be audible/felt as roughness in the drivetrain (worm gear + motor) even while the net result looks smooth on a plot. Worth a closer look (likely Kd reacting to rate-estimate noise) before calling PID fully production-ready, independent of the DDP freeze question.
+![12s run](tuning_runs/pid_v2_20260906_220241_dur12s.png)
+
+![16s run](tuning_runs/pid_v2_20260906_220241_dur16s.png)
+
+![20s run](tuning_runs/pid_v2_20260906_220241_dur20s.png)
+
+This is very likely what "jerky but smooth" is describing: the **Position** panel (top) tracks the commanded ramp cleanly with no visible discontinuity — genuinely smooth motion at the level a person watching the trolley would judge it. The **Actual Speed** panel (third) tells a different story underneath: a real, sustained oscillation riding on top of the average cruise speed, in both directions, the whole time it's moving (once below the 7000Hz cap - see the 5s note above). Small enough in position terms not to show up as visible jerkiness in the trace, but real enough to be audible/felt as roughness in the drivetrain (worm gear + motor) even while the net result looks smooth on a plot.
+
+**Measured the ripple's period directly rather than eyeballing it** (peak-to-peak spacing in `curSpeedHz`, steady-cruise window, each run's own log):
+
+| duration | mean cruise speed | ripple period |
+|---|---|---|
+| 5s | ~6200Hz | ~78ms |
+| 8s | ~3800Hz | ~102ms |
+| 12s | ~2600Hz | ~103ms |
+| 16s | ~2000Hz | ~97ms |
+| 20s | ~1600Hz | ~86ms |
+
+**This settles what kind of bug it is.** The period stays pinned at ~80-100ms (roughly 10-13Hz) regardless of average cruise speed, even though cruise speed itself varies 4x across these runs. If the ripple were the DDP staircase (packets arriving every 25ms at 40fps, or 40ms at 25fps) bleeding through into motion, its period would lock to that packet-arrival interval or a clean multiple of it, and wouldn't care how fast the trolley happens to be moving. It does neither. A fixed ~10-13Hz buzz independent of commanded speed is the signature of a genuine **underdamped control-loop resonance** - `Kp=15`/`Kd=0.7` sampled every 20ms fighting the stepper's own accel-limited response - not the DDP frame rate leaking through into the motion.
+
+**Practical conclusion: this is two separate problems, not one.**
+1. **The ripple itself** is a gain/damping tuning problem, not a frame-rate problem - fix via a Kd/damping sweep (or a low-pass filter on the derivative estimate; derivative-on-measurement at a fixed 20ms tick is a classic noise amplifier) tested against this exact continuous triangle-wave signal, not the single-step-response test `Kp=15`/`Kd=0.7` were originally picked from (a genuinely different signal, as this session already learned once with Bugs 1-2 above).
+2. **The original design-goal mismatch** (small moves always racing to target instead of pacing to the time actually available) is real, separate, and still needs the frame-rate/time-budget-adaptive feedforward idea flagged earlier - but that fix targets pacing philosophy, not this specific fixed-frequency resonance, so it's not expected to be a fix for the ripple on its own.
+
+Recommended next step: a same-day Kd/Kp damping sweep against the triangle-wave test (cheap, reuses existing tooling and this exact data as a baseline) before taking on the bigger structural feedforward work.
 
 **On the freeze bug specifically**: this clean result, plus the same-day combined motion+reception test (also clean — see `TODO.md`), is encouraging but still not proof it's fixed, since nothing that directly touches DDP receive/parse logic changed. `WiFi.setSleep(false)` remains the leading candidate explanation if it stays clean across more/longer runs.
 
