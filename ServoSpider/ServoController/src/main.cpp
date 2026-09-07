@@ -495,7 +495,25 @@ void updatePidMode() {
     // Same hard safety net TRACK_MODE_STREAMING uses - a continuously-
     // driven PID output has no built-in "never overshoot" guarantee the
     // way moveTo() does.
-    if (curPos < 0 || curPos > bottomPosition) {
+    //
+    // Small tolerance, and doesn't re-trigger while already settling
+    // (2026-09-07, found live testing feedforward against real
+    // DDPDebugger data): a real ~800ms stall at the bottom-of-travel
+    // reversal traced to this firing on every single tick that curPos
+    // read slightly negative (-32, -17, -2 steps - a real but entirely
+    // benign excursion right at the switch reversal, nowhere near a
+    // genuine safety violation) - each re-trigger called forceStop()
+    // and re-armed pidStopSettling from scratch, never letting the
+    // actual recovery/re-engage logic further down in this function run
+    // to completion until the small excursion happened to resolve on its
+    // own. Tolerance matches RAMMED_STEP_TOLERANCE's precedent
+    // (stepper_handler.cpp) for the same class of judgment call. The
+    // !pidStopSettling guard means a genuine large overshoot still stops
+    // exactly once per excursion, not repeatedly - the wait-for-settle
+    // logic later in this function is what actually recovers from there.
+    static const int PID_OVERSHOOT_TOLERANCE = 150;
+    if (!pidStopSettling &&
+        (curPos < -PID_OVERSHOOT_TOLERANCE || curPos > bottomPosition + PID_OVERSHOOT_TOLERANCE)) {
       stepper->forceStop();
       pidStopSettling = true;
       continuousRunDirection = 0;
