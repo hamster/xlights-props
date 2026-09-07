@@ -147,12 +147,45 @@ The "up-direction oscillation" that looked like it might be a real gravity-relat
 
 Error scales down smoothly and predictably as duration increases — exactly the pattern every pre-PID mode showed in the very first characterization session — with no un-homing anywhere, no stuck episodes, and a `ddpVal` trace that's 94% clean single-unit transitions (the remaining ~6% is ordinary sampling-rate mismatch between PID's 20ms log tick and DDP's ~25ms send interval, not a real gap - confirmed visually smooth in the plot too).
 
+## A new, unexplained anomaly - real DDP freezes mid-run (2026-09-06, `pid_observed_*`)
+
+Re-ran the full sweep once more (same firmware/config as the clean `pid_final` run above) purely so the user could watch the trolley directly - and this run came back noticeably worse: 5s/8s/16s all regressed hard, and the 20s run's pre-check caught a real 12-step loss requiring an automatic re-home mid-sweep.
+
+| duration | rms_error | max_error | near_stall_pct | notes |
+|---|---|---|---|---|
+| 5s | 4182 | 9631 | 2.2% | inherently the hardest wave (see below) |
+| 8s | 1309 | 6340 | 1.3% | two multi-second freezes |
+| 12s | 182 | 776 | 0.9% | clean during capture, froze right at its own end |
+| 16s | 1049 | 5654 | 8.0% | inherited the 12s run's frozen end as its own start |
+| 20s | 317 | 2412 | 0.2% | real step-loss trip before this run; clean after the recovery re-home |
+
+### The real finding: `positionRequest` itself stops updating, not just the stepper
+
+![8s run showing two multi-second freezes](tuning_runs/pid_observed_20260906_211427_dur8s.png)
+
+The 8s run makes this unambiguous: **both** the "Commanded" position trace **and** the raw DDP value panel go flat together, for ~1.2s then ~3.4s, before both resume together. If this were a stepper/motion-control issue (like the two dead-`moveTo()` bugs fixed earlier today), the *commanded* trace - which is just `bottomPosition * receivedValue / 255`, nothing more - would keep updating even while actual position lagged behind. It doesn't. **`positionRequest` genuinely stops changing on the device for whole seconds at a time, then catches up.** This is a DDP reception-layer symptom, not anything downstream of it - none of today's `moveTo()`/hysteresis fixes are implicated.
+
+The 12s/16s pair confirms the same thing a different way: the 12s run's own log ends frozen at the exact DDP value/position the 16s run then opens with - the freeze outlived one run's capture window and bled into the next, self-recovering only once the *next* wave's sending resumed.
+
+**Two real candidate explanations, not yet distinguished:**
+1. **Genuine WiFi packet loss**, real and sustained enough (many consecutive packets, not the odd single drop) that positionRequest has nothing new to parse for whole seconds. Different from the earlier, isolated sender-timing investigation (which proved 321/321 delivery on a short, clean bench test) - this could plausibly get worse over a long, hot, hours-into-testing session than in a short isolated check.
+2. **A DDP sequence-validation edge case** (`isNewerDdpSeq()`'s 1-15 rolling window): if the device's `lastAcceptedDdpSeq` reference ever gets stuck relative to the sender's own count, every incoming packet is compared against a stale reference until the numbers happen to realign. Arithmetically this should self-resolve within about 15 packets (~375ms at 40Hz) for a normally-incrementing sequence, which is shorter than the 1.1-3.4s freezes actually observed - making this the less likely of the two, but not ruled out (e.g. if something also resets or double-consumes sequence numbers elsewhere).
+
+**Not yet resolved**: the on-device counters that would settle this (`protocolPacketsReceived`, `protocolPacketsRejectedOutOfOrder`) reset with an intervening reboot (the harness closing its serial connection at the end of the run also toggles DTR/RTS, same as opening one) before they could be checked - so this run's own counters aren't recoverable after the fact. Confirming which explanation is right needs a live-monitored re-run: poll `/status-data`'s counters (HTTP, doesn't reboot anything) during a run long enough to catch a freeze in the act, or watch for `ddpPacketsRejectedOutOfOrder` climbing in lockstep with a freeze.
+
+### The 5s run's poor numbers are a separate, already-understood, pre-existing limit
+
+![5s run showing genuine speed-limited lag](tuning_runs/pid_observed_20260906_211427_dur5s.png)
+
+Unlike the freezes above, the 5s run's error trace is smooth and continuous throughout - "Actual" is working the whole time, just can't keep up. A 5s full-cycle wave needs to cross the whole ~15,500-step range in 2.5s, requiring something like 6200Hz average speed against a 7000Hz cap - not much margin once acceleration/deceleration time is subtracted. The 5s run has been the worst of every duration tested all session, in every sweep - this is an inherent consequence of asking for a faster wave than the system's tuned speed ceiling supports, not a new regression.
+
 ## Where things landed
 
 **Working PID gains**: `Kp=15, Ki=0, Kd=0.7, MaxSpeed=7000, Accel=50000, Deadband=30, ReengageThreshold=150`. **Environment**: `1200mA run current, 200,000 accel, 7000Hz cruise cap` (current and accel saved via the web UI; the 7000Hz speed cap is a live override only — see below).
 
 ## Still open
 
+- **New, real, not-yet-root-caused**: multi-second freezes where `positionRequest` itself stops updating (not a stepper/motion issue - see the section above) - either genuine sustained WiFi packet loss or a DDP sequence-validation edge case, not yet distinguished. Needs a live-monitored re-run (poll `/status-data`'s packet counters during a run) to settle which.
 - A real, bounded, visible high-frequency ripple remains in actual speed during active tracking (~500–4500Hz, ~0.2–0.3s period, both directions) — doesn't hurt overall accuracy but isn't fully explained; likely Kd reacting to rate-estimate noise on a live, continuously-updating target rather than a clean single step.
 - Ki hasn't been tuned — the deadband snap already closes any P/PD steady-state gap for a single step, so this needs a genuinely different test (sustained tracking of a moving target, not step response) to matter.
 - `pidReengageThreshold` / the ram-check's tolerance (150, matched to each other) were chosen from the DDP-quantization math, not an independent sweep.
