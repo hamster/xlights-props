@@ -105,9 +105,9 @@ COMPACT_LOG_ROWS_PER_SEC = 50.0
 
 
 def verify_zero(host, home_timeout, label, rate_hz=40.0, bits=8):
-    """Command position 0 via DDP, wait for the trolley to get there, then
-    check the raw homing switch state directly - not through
-    /verify-and-rehome, see below for why.
+    """Command position 0 via /set-position (NOT DDP/PID), wait for the
+    trolley to genuinely stop, then check the raw homing switch state
+    directly - not through /verify-and-rehome, see below for why.
 
     /verify-and-rehome (startStepCheck(0, autoRehomeOnTrip=true)) is built for
     a different situation: confirming calibration from a position ALREADY
@@ -122,50 +122,96 @@ def verify_zero(host, home_timeout, label, rate_hz=40.0, bits=8):
     endpoint and forced into an unnecessary ~20s re-home, every single time it
     was called this way.
 
-    What the user actually asked for - drive to zero, confirm the switch
-    trips there, done - is what this does: hold DDP value 0 until position
-    settles near 0, then read homingSwitchTripped directly. If the trolley
-    settles at 0 but the switch does NOT read tripped, that is real drift
-    (the physical switch and the counter's zero have come apart), and this
-    triggers a genuine /home. Returns (ok, rehomed).
+    A first version of this held DDP value 0 (i.e. drove to zero through
+    TRACK_MODE_PID, the very system under test) and read the switch once
+    position looked close enough. That coupled verification to whatever
+    pidKp/pidKd/pidFfWindowMs the run under test was using: a Kd sweep run
+    where the final micro-approach to the switch settled a little
+    differently (still well within the position deadband, but not always
+    hard against the switch) got flagged "steps were lost" on 3 of 3
+    candidates - right after 5 consecutive clean verifies at the one config
+    that happened to be tuned for exactly this. That is not a step-loss
+    signature, it is the test contaminating itself.
+
+    /set-position (handleSetPosition(), html_handler.cpp) is a plain
+    moveTo() on stepperSpeedConfig/stepperAccelConfig - it does not touch
+    trackMode or any PID state, so the approach to zero is now identical
+    regardless of which gains are under test. Waits for isRunning() to
+    clear (a real stop) rather than a position tolerance, since a moveTo()
+    finishes exactly where it's told rather than settling somewhere nearby.
+    Returns (ok, rehomed).
     """
     print(f"  [{label}] drive to zero, confirm switch trips...")
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    seq = 0
-    deadline = time.monotonic() + 30.0
-    settled = False
-    st = get_status(host)
-    while time.monotonic() < deadline:
-        for _ in range(10):
-            seq = (seq % 15) + 1
-            sock.sendto(build_ddp_packet(seq, 0, bits), (host, DDP_PORT))
-            time.sleep(1.0 / rate_hz)
-        st = get_status(host)
-        if abs(st.get("position", 0)) <= 200:
-            settled = True
-            break
-    sock.close()
 
-    if not settled:
-        print(f"    WARNING: did not settle at 0 (at {st.get('position')}) - skipping switch check")
+    # Force Direct mode for the verify move itself, then always restore
+    # whatever mode was active. Necessary, not just tidy: TRACK_MODE_PID's
+    # updatePidMode() runs on EVERY loop() iteration regardless of what
+    # triggered motion (see stepper_handler.h's dispatch comment - "no
+    # per-command handler"). Issuing /set-position while trackMode stays 4
+    # would get immediately overridden on the next tick by PID reacting to
+    # whatever positionRequest last held from the just-finished wave -
+    # /set-position's moveTo() would never even get a chance to run to
+    # completion. Direct mode has no background updater (it only reacts to
+    # an actual DDP packet), so once switched, nothing contends with the
+    # manual move.
+    try:
+        orig_mode = json.loads(http_get(host, "/tunable?name=trackMode")).get("value")
+    except Exception as e:
+        print(f"    WARNING: could not read trackMode: {e}")
         return (False, False)
 
-    if st.get("homingSwitchTripped"):
-        print(f"    ok - switch tripped as expected, pos={st.get('position')} "
-              f"enc={st.get('encoderCount')}")
-        return (True, False)
+    try:
+        http_set_tunable(host, "trackMode", 0)
+        try:
+            http_get(host, "/set-position?position=0", timeout=10.0)
+        except Exception as e:
+            print(f"    WARNING: /set-position failed: {e}")
+            return (False, False)
 
-    print(f"    *** AT POSITION 0 BUT SWITCH NOT TRIPPED - real drift. Re-homing. ***")
-    http_get(host, "/home")
-    home_deadline = time.monotonic() + home_timeout
-    while time.monotonic() < home_deadline:
-        time.sleep(1.0)
+        # status-data has no isRunning/isMoving field, so "stopped" is
+        # inferred from position going unchanged between polls, not a flag.
+        # A minimum elapsed-time floor before that check can pass avoids
+        # reading "unchanged" at t=0, before the move has even started.
+        MIN_MOVE_S = 1.0
+        deadline = time.monotonic() + 30.0
+        move_start = time.monotonic()
         st = get_status(host)
-        if st.get("homed") and not st.get("isHoming"):
-            print(f"    re-homed - pos={st.get('position')} enc={st.get('encoderCount')}")
-            return (True, True)
-    print("    WARNING: re-home did not complete in time")
-    return (False, True)
+        last_pos = st.get("position")
+        settled = False
+        while time.monotonic() < deadline:
+            time.sleep(0.4)
+            st = get_status(host)
+            pos = st.get("position")
+            if time.monotonic() - move_start >= MIN_MOVE_S and pos == last_pos:
+                settled = True
+                break
+            last_pos = pos
+        if not settled:
+            print(f"    WARNING: stepper never stopped (at {st.get('position')}) - skipping switch check")
+            return (False, False)
+
+        if st.get("homingSwitchTripped"):
+            print(f"    ok - switch tripped as expected, pos={st.get('position')} "
+                  f"enc={st.get('encoderCount')}")
+            return (True, False)
+
+        print(f"    *** AT POSITION 0 BUT SWITCH NOT TRIPPED - real drift. Re-homing. ***")
+        http_get(host, "/home")
+        home_deadline = time.monotonic() + home_timeout
+        while time.monotonic() < home_deadline:
+            time.sleep(1.0)
+            st = get_status(host)
+            if st.get("homed") and not st.get("isHoming"):
+                print(f"    re-homed - pos={st.get('position')} enc={st.get('encoderCount')}")
+                return (True, True)
+        print("    WARNING: re-home did not complete in time")
+        return (False, True)
+    finally:
+        if orig_mode is not None:
+            try:
+                http_set_tunable(host, "trackMode", orig_mode)
+            except Exception as e:
+                print(f"    WARNING: could not restore trackMode={orig_mode}: {e}")
 
 
 def run(args):

@@ -6,6 +6,19 @@ Turn this into a standalone stepper-mover **+** pixel controller: one ESP32-S3 d
 
 Note: checked `git branch -a` / `git stash list` / `git log --all` — there is no leftover branch, stash, or commit anywhere in this repo with prior dual-core work. If there was earlier progress on splitting stepper/LED work across cores, it never made it into git, so treat this as a fresh design rather than something to dig up.
 
+## Needed: a stale-tick watchdog in updatePidMode() for continuous-run modes (found 2026-09-07, not yet fixed)
+
+Found while re-diagnosing why the trolley kept ending up past the bottom of travel and up the back of the pulley. Root-caused via the compact log itself: a ~1.0s gap in logged rows, with position and encoder agreeing the trolley travelled +3,660 steps during that gap alone (confirmed independently by the encoder, so this is real physical motion, not a counter artifact).
+
+**The mechanism**: in `TRACK_MODE_PID`'s continuous-run state, `runForward()`/`runBackward()` mean "keep going indefinitely" - the stepper does not stop on its own. `updatePidMode()` is what re-evaluates the position, checks bounds, and decides whether to keep going, reverse, or stop. If `loop()` doesn't get back around to call it for a while (serving a large HTTP response is the case that was actually hit - the compact log is up to 96KB - but WiFi reconnect logic and SPIFFS writes are also blocking and run from `loop()`), the stepper just keeps cruising with nothing supervising it. Neither containment guard added earlier in this same session helps here, because **both guards only run when `updatePidMode()` runs** - they cannot fire during exactly the gap where they're needed.
+
+This was hit repeatedly by the test harness's own mid-run log draining (since fixed - see the harness protocol rework below/elsewhere in this file), but HTTP is not the only thing that can stall `loop()`, and the user's own read is that the web server should be off the critical path for a real show anyway (FPP drives the show; HTTP is setup/diagnostics only) - which makes this a belt-and-suspenders fix rather than a load-bearing one for normal operation, but still worth having given how cheap it is and how bad the failure mode is (runs the trolley past a boundary with nothing watching).
+
+**The fix**: `updatePidMode()` already computes `dt` (time since its own last tick) every call. Add a check near the top: if `dt` exceeds some threshold (~150-200ms - a few multiples of the normal 20ms tick, comfortably more than one HTTP request should ever block for) while the stepper is in continuous-run mode, `forceStop()` immediately rather than trusting a stale "keep going" command and letting the normal control-law path decide what to do next. Small, contained change - similar shape to the two guards already added.
+
+- [ ] Implement the stale-tick watchdog described above.
+- [ ] Verify it actually catches the case it's meant to: force an artificial `loop()` stall (e.g. a slow debug endpoint) during continuous-run motion and confirm the stepper stops instead of coasting.
+
 ## The jerk was in the feedforward estimator all along - found, fixed, PID now matches Direct mode's smoothness (2026-09-07, evening)
 
 User's reframing that started this: *"tuning for absolute speed isn't useful if it is going to be jerky... we can be behind a handful of frames and it will still look good - there is almost no instance that we need to be frame perfect, but we always need to be smooth."* That is a different objective from the one every previous session optimized against, and it changed the answer.
