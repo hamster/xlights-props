@@ -179,6 +179,16 @@ int stepperPidReengageThresholdConfig = 150;
 // TODO.md's "Time-budget feedforward" section for the full comparison
 // against both the pre-feedforward PID baseline and Direct mode.
 bool stepperPidFeedforwardConfig = true;
+// 30,000 - starting point, unvetted (2026-09-07) - see its declaration
+// comment (stepper_handler.h). Deliberately below stepperPidAccelConfig
+// (50,000): this is the rate limit on the *reference* pTerm chases, not
+// on the stepper's own physical response - it needs to be smooth, not
+// necessarily fast, since pidTrajVel already starts from
+// pidFeedforwardVelocity (the real measured rate) and only needs to trim
+// toward the true target on top of that.
+int stepperPidTrajAccelConfig = 30000;
+// Off by default - see its declaration comment (stepper_handler.h).
+bool stepperPidTrajFollowConfig = false;
 
 bool stepperSettingsPendingSave = false;
 

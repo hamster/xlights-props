@@ -280,6 +280,16 @@ extern int stepperPidReengageThresholdConfig;
 // Kept toggleable so it stays A/B-testable against pure reactive PID with
 // the same sweep tooling used for every other change this session.
 extern bool stepperPidFeedforwardConfig;
+// steps/s^2 - accel limit on the smooth trajectory reference pTerm tracks,
+// not on the stepper itself (that's still stepperPidAccelConfig) - see
+// pidSmoothTarget's declaration comment (main.cpp) for the full design.
+extern int stepperPidTrajAccelConfig;
+// Off by default - see pTermError's declaration comment (main.cpp) for
+// two real, reproducible bugs found testing this (a real accuracy
+// regression at one accel setting, a genuine 27-second freeze at
+// another). Not root-caused; kept toggleable as a base for a more
+// careful future attempt rather than removed outright.
+extern bool stepperPidTrajFollowConfig;
 
 // TRACK_MODE_LOOKAHEAD parameters
 extern int stepperLookaheadStepsConfig;     // steps - how far beyond the commanded position to aim, in the

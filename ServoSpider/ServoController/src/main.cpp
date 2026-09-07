@@ -62,6 +62,49 @@ bool pidSettled = true;
 unsigned long lastPidUpdateMs = 0;
 float pidIntegral = 0;
 long pidLastMeasuredPos = 0;   // for derivative-on-measurement, not derivative-on-error - see updatePidMode()
+// Low-pass-filtered version of the raw measured rate, used for the
+// derivative term instead of the raw value (2026-09-07 - chasing the
+// remaining smoothness/jerk gap vs Direct mode, after the feedforward
+// work above already closed the accuracy/corner-tightness gap the other
+// way). Derivative-on-measurement of a quantized, noisy position signal
+// is a classic PID roughness source - the raw rate jitters tick to tick
+// even during genuinely smooth motion, since position only ever changes
+// in whole steps and the target itself advances in DDP-quantized jumps.
+float pidFilteredRate = 0;
+// NOTE (2026-09-07): tried at two filter strengths (0.5/0.5, then 0.85/0.15
+// - a much heavier filter) and jerk_per_sample barely moved either time
+// (513.5 baseline -> 496.9 -> 506.8, within run-to-run noise) - the
+// derivative term is NOT the dominant jerk source. Left in (a real, if
+// small, accuracy/corner-tightness improvement - 246.5->228.8 rms_error,
+// 595.5->515.2 corner mean at the heavier setting), but see pidSmoothTarget
+// below for what actually mattered.
+
+// Accel-limited trajectory reference the P-term tracks, instead of the
+// raw DDP-quantized target directly (2026-09-07, "plan #4" after the
+// derivative filter above didn't close the jerk gap to Direct mode).
+// Root cause, worked out by elimination: neither feedforward's own
+// smoothing nor the derivative filter above touched jerk, but lowering
+// pidAccel (tried earlier the same night) did - a strong hint the P-term
+// itself was the driver, since a lower accel is really just an
+// involuntary rate-limiter on how fast the stepper can react to pTerm's
+// own choppy output (pTerm recomputes from the raw, DDP-quantized target
+// every 20ms tick, so its output is exactly as jumpy as the target's own
+// quantized arrival). Rather than limit the *stepper's* reaction (which
+// also blunts real correction authority - the corner-tightness/rms_error
+// cost measured earlier), this limits the *reference signal* P-term
+// reacts to: pidSmoothTarget slews toward the real target at a bounded
+// rate/accel (pidTrajAccelConfig), so whatever choppiness exists in the
+// target's own arrival can't reach pTerm at all. Reset alongside
+// pidIntegral/pidFilteredRate whenever PID re-settles.
+float pidSmoothTarget = 0;
+float pidTrajVel = 0;
+// True whenever pidSmoothTarget needs to be (re)initialized to the actual
+// current position before it's used - set alongside every pidIntegral/
+// pidFilteredRate reset. Without this, pidSmoothTarget would start a
+// fresh engagement at its last reset value (0) rather than wherever the
+// stepper actually is, producing exactly the kind of large one-shot
+// error spike this whole mechanism exists to avoid.
+bool pidTrajNeedsInit = true;
 // Time-budget-aware velocity feedforward (2026-09-07 - see the user's own
 // original framing: PID had no notion of how much time it actually has to
 // get from one commanded point to the next, so it always drove at full
@@ -595,6 +638,8 @@ void updatePidMode() {
                         true, curSpeedBeforeMove, 0);
       pidSettled = true;
       pidIntegral = 0;
+      pidFilteredRate = 0;  // don't carry a stale rate estimate into the next engagement
+      pidTrajNeedsInit = true;  // re-init pidSmoothTarget to wherever we actually are next engagement
       pidCurrentDirection = 0;
       // In sync with pidCurrentDirection's reset - if a pending direction
       // switch's forceStop()/settle got interrupted by the target landing
@@ -738,9 +783,59 @@ void updatePidMode() {
   // change in how fast the stepper itself is moving).
   float measuredRate = (dt > 0) ? (float)(currentPos - pidLastMeasuredPos) / dt : 0;
   pidLastMeasuredPos = currentPos;
+  // Low-pass filter before it drives dTerm (2026-09-07, see
+  // pidFilteredRate's declaration comment). 0.5/0.5 first tried and barely
+  // moved the jerk metric (496.9 vs 513.5 baseline, within run-to-run
+  // noise) - too weak a filter for the ~80-100ms-period (~4-5 tick)
+  // resonance characterized earlier this session. 0.85/0.15 instead.
+  pidFilteredRate = 0.85f * pidFilteredRate + 0.15f * measuredRate;
 
-  float pTerm = stepperPidKpConfig * error;
-  float dTerm = -stepperPidKdConfig * measuredRate;
+  // Accel-limited trajectory reference (2026-09-07, "plan #4" - see
+  // pidSmoothTarget's declaration comment for the full design/rationale).
+  // pTerm tracks this smooth reference instead of the raw, DDP-quantized
+  // `target` directly - `error`/`target` above are untouched and still
+  // used for the deadband/hysteresis entry checks and the moveTo()-based
+  // settle, which want the *true* position, not a lagging smoothed one.
+  //
+  // OFF BY DEFAULT (stepperPidTrajFollowConfig) - found two real,
+  // reproducible bugs testing this on the bench: at pidTrajAccel=30000 it
+  // let real, sustained lag build up during fast motion (rms_error
+  // 246.5->840.5, two real overshoot stalls); at 80000 it produced a
+  // genuine 27-second freeze. Root cause not fully solved: pidSmoothTarget
+  // keeps a velocity/position of its own that can drift arbitrarily far
+  // from reality while a forceStop()/pidStopSettling wait blocks this
+  // whole function from reaching this code at all (target keeps moving
+  // via real DDP packets during the wait; pidSmoothTarget doesn't) - the
+  // catch-up afterward can itself provoke another overshoot, repeating.
+  // At the one accel value that avoided outright failure (150000) it
+  // tracked so tightly the smoothing benefit disappeared (jerk got
+  // *worse* than not using it at all: 558.5 vs 513.5). Kept in, gated
+  // off, as a base for a more careful future attempt (needs anticipatory
+  // braking near the physical bounds, and to freeze/resync cleanly
+  // across a forceStop() wait) rather than thrown away outright.
+  float pTermError = error;  // default: raw error, unchanged behavior
+  if (stepperPidTrajFollowConfig) {
+    if (pidTrajNeedsInit) {
+      pidSmoothTarget = (float)currentPos;
+      pidTrajVel = 0;
+      pidTrajNeedsInit = false;
+    }
+    float trajError = target - pidSmoothTarget;
+    float desiredTrajVel = pidFeedforwardVelocity + trajError * 4.0f;
+    if (desiredTrajVel > stepperPidMaxSpeedConfig) desiredTrajVel = (float)stepperPidMaxSpeedConfig;
+    if (desiredTrajVel < -stepperPidMaxSpeedConfig) desiredTrajVel = -(float)stepperPidMaxSpeedConfig;
+    float maxTrajDeltaV = (float)stepperPidTrajAccelConfig * dt;
+    if (desiredTrajVel - pidTrajVel > maxTrajDeltaV) desiredTrajVel = pidTrajVel + maxTrajDeltaV;
+    if (desiredTrajVel - pidTrajVel < -maxTrajDeltaV) desiredTrajVel = pidTrajVel - maxTrajDeltaV;
+    pidTrajVel = desiredTrajVel;
+    pidSmoothTarget += pidTrajVel * dt;
+    pTermError = pidSmoothTarget - (float)currentPos;
+  } else {
+    pidTrajNeedsInit = true;  // stay ready to re-init cleanly if re-enabled live
+  }
+
+  float pTerm = stepperPidKpConfig * pTermError;
+  float dTerm = -stepperPidKdConfig * pidFilteredRate;
   // Feedforward carries the "known" bulk of the motion (see the
   // measurement block above); toggleable so it stays A/B-testable against
   // pure reactive PID with the same sweep tooling as every other change
