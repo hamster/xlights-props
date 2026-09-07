@@ -171,7 +171,13 @@ bool applyTrackingProfileDecision(float newTarget, float lastCommittedTarget, in
 // This ring buffer never reallocates after startup: writes wrap in
 // place, oldest bytes are simply overwritten once full, no String
 // concat/substring churn at all.
-static char compactLogRing[32768];
+// 96KB - sized for a real, sustained DDPDebugger/xLights session, not just
+// a short bench burst (2026-09-07, found the hard way): at ~50 lines/sec
+// x ~52 bytes/line during active tracking, the original 32KB only held
+// ~13s of continuous motion - a real multi-cycle test wrapped it and left
+// only trailing idle time by the time it was fetched. RAM headroom checked
+// (43% used before this change, comfortable margin at this size).
+static char compactLogRing[98304];
 static size_t compactLogHead = 0;  // next write position
 static size_t compactLogLen = 0;   // valid bytes currently stored, <= sizeof(compactLogRing)
 
