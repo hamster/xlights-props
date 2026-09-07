@@ -9,7 +9,10 @@ button-pushing and eyeballing a serial terminal.
 
 For a worked example of using this harness for a real tuning session -
 findings, comparison tables, graphs, bugs found along the way - see
-`TUNING_SESSION_2026-09-06.md` in this directory.
+`TUNING_SESSION_2026-09-06.md` in this directory (Direct-mode tracking
+tuning) and `PID_TUNING_SESSION_2026-09-06.md` (implementing and tuning
+`TRACK_MODE_PID` - acceleration/speed/current characterization, Kp/Kd
+gain tuning, and validating against a real DDP stream).
 
 ## Compact Motion Log columns
 
