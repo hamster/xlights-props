@@ -437,6 +437,50 @@ void updatePidMode() {
     pidLastMeasuredPos = currentPos;
     return;
   }
+
+  // Hysteresis band (2026-09-06 - see stepperPidReengageThresholdConfig's
+  // declaration comment): a small target shift while already settled just
+  // gets another one-shot moveTo() snap, not full re-engagement into
+  // continuous-run mode.
+  //
+  // Only issues a fresh moveTo() once the *previous* one has actually
+  // finished (!isRunning()) - an earlier version of this called moveTo()
+  // unconditionally on every ~20ms tick while the target crept through
+  // this band (e.g. a slow triangle wave departing position 0), which kept
+  // resetting FastAccelStepper's ramp generator before it ever built real
+  // speed. Confirmed on the bench (2026-09-06): a 16s triangle wave left
+  // the trolley stuck at position 0 for the first 4+ seconds despite the
+  // commanded target ramping smoothly away, then caught up in one big
+  // delayed snap once it finally exceeded the whole band - the exact
+  // "constantly re-aiming never accelerates" jerkiness Direct mode is
+  // already known for, which PID's continuous-run design exists to avoid;
+  // this band had reintroduced it. Letting each small move actually
+  // complete before issuing the next fixes that, at the cost of only
+  // reacting to target drift once every real small-move's worth of time
+  // (tens to ~100ms for typical corrections at this accel/speed) rather
+  // than every tick - plenty responsive for genuine settling jitter.
+  //
+  // A prior version also compared the new target against
+  // lastCommandedTargetPosition (only re-snapping if it had moved more
+  // than a threshold) instead of this isRunning() gate - that created a
+  // real dead zone (the trolley sitting still through however wide the
+  // gate was) and measurably hurt tracking accuracy on the bench. This
+  // fix doesn't have that problem: it always reacts to the *current*
+  // target once idle, it just doesn't interrupt an in-flight move to do so.
+  if (pidSettled && fabs(error) <= (float)stepperPidReengageThresholdConfig) {
+    if (!stepper->isRunning()) {
+      stepper->setAcceleration(stepperPidAccelConfig);
+      stepper->setJumpStart(jumpStartConfig);
+      stepper->moveTo((int32_t)target);
+      stepperBlanked = false;
+      lastCommandedTargetPosition = target;
+      logCompactMotion(positionRequest, (int)target, (int)currentPos, 0, (int)error,
+                        true, stepper->getCurrentSpeedInMilliHz(), 0);
+    }
+    pidLastMeasuredPos = currentPos;
+    return;  // stays settled - pidSettled untouched
+  }
+
   pidSettled = false;
 
   if (pidStopSettling) {

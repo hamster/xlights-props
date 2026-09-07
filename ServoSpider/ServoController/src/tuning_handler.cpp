@@ -55,6 +55,7 @@ static bool getTunable(const String& name, String& valueOut) {
   if (name == "pidMaxSpeed") { valueOut = String(stepperPidMaxSpeedConfig); return true; }
   if (name == "pidAccel") { valueOut = String(stepperPidAccelConfig); return true; }
   if (name == "pidDeadband") { valueOut = String(stepperPidDeadbandConfig); return true; }
+  if (name == "pidReengageThreshold") { valueOut = String(stepperPidReengageThresholdConfig); return true; }
   // RAM-only live current control for bench sweeps (current-vs-speed
   // characterization) - see setTunable()'s handling of this name for why
   // it's kept separate from /save-tmc's full-settings path.
@@ -84,7 +85,7 @@ static const char* ALL_TUNABLE_NAMES[] = {
   "trackSpeed", "trackAccel", "trackMaxLag", "trackMode", "coalesceMs",
   "coalesceSteps", "streamRateWindow", "streamSettle", "compactLog", "protocolDebug",
   "homeSpeed", "homeAccel", "lookaheadSteps", "lookaheadSettle",
-  "pidKp", "pidKi", "pidKd", "pidMaxSpeed", "pidAccel", "pidDeadband", "tmcRunCurrent",
+  "pidKp", "pidKi", "pidKd", "pidMaxSpeed", "pidAccel", "pidDeadband", "pidReengageThreshold", "tmcRunCurrent",
   "tmcStallEnabled", "positionRequest"
 };
 static const int ALL_TUNABLE_COUNT = sizeof(ALL_TUNABLE_NAMES) / sizeof(ALL_TUNABLE_NAMES[0]);
@@ -129,6 +130,7 @@ static bool setTunable(const String& name, const String& valueStr) {
   if (name == "pidMaxSpeed") { stepperPidMaxSpeedConfig = v; return true; }
   if (name == "pidAccel") { stepperPidAccelConfig = v; return true; }
   if (name == "pidDeadband") { stepperPidDeadbandConfig = v; return true; }
+  if (name == "pidReengageThreshold") { stepperPidReengageThresholdConfig = v; return true; }
   // Deliberately bypasses /save-tmc entirely: that handler writes all 14 TMC
   // Preferences keys to flash on every call (real wear across a long sweep)
   // and reconstructs every other TMC field from HTTP form args, where an

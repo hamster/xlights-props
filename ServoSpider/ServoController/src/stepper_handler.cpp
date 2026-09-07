@@ -144,6 +144,10 @@ int stepperPidMaxSpeedConfig = 7000;
 // not an arbitrarily slow ramp.
 int stepperPidAccelConfig = 50000;
 int stepperPidDeadbandConfig = 30;
+// See declaration comment (stepper_handler.h) - comfortably absorbs a few
+// units of DDP 8-bit quantization jitter (roughly bottomPosition/255 steps
+// per unit - ~60 on this device) without re-engaging continuous-run mode.
+int stepperPidReengageThresholdConfig = 150;
 
 bool stepperSettingsPendingSave = false;
 
@@ -290,6 +294,23 @@ void startHoming() {
 // legitimate brief contact (e.g. settling right at position 0). Matches
 // the "a second or two" the user specified.
 static const unsigned long RAMMED_DETECT_MS = 1500;
+// Small step-count tolerance, added 2026-09-06 after TRACK_MODE_PID's
+// first real bench test against a full DDP triangle wave: PID legitimately
+// settles right at position 0 (always switch-triggered, and a completely
+// normal DDP endpoint - not just a homing reference) with small individual
+// corrective moveTo() snaps as the commanded target keeps jittering by a
+// few DDP quantization units (see stepperPidReengageThresholdConfig's
+// declaration comment). Each correction is real, physical motion, so a
+// *net* zero-tolerance check here fired even though nothing was actually
+// wrong. Matches stepperPidReengageThresholdConfig's default for
+// consistency. Not a meaningful loss of real-jam detection: this only
+// exempts NET drift since the trip began that stays within tolerance -
+// switchTrippedSinceMs/switchTrippedStartPos are never reset while the
+// trip continues (only cleared once the switch actually reads untriggered
+// again), so a genuine sustained jam still accumulates net drift past this
+// tolerance given enough time, it just takes a bit longer to confirm than
+// a hard zero-tolerance check would.
+static const long RAMMED_STEP_TOLERANCE = 150;
 
 static unsigned long switchTrippedSinceMs = 0;
 static long switchTrippedStartPos = 0;
@@ -324,7 +345,7 @@ void updateRammedIntoStopCheck() {
 
   if (now - switchTrippedSinceMs >= RAMMED_DETECT_MS) {
     long stepsSinceTrip = stepper->getCurrentPosition() - switchTrippedStartPos;
-    if (stepsSinceTrip != 0) {
+    if (labs(stepsSinceTrip) > RAMMED_STEP_TOLERANCE) {
       rammedIntoStopReported = true;
       Serial.print("WARNING: rammed into homing stop - switch has read triggered for ");
       Serial.print(now - switchTrippedSinceMs);

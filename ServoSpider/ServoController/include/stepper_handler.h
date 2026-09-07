@@ -259,6 +259,22 @@ extern float stepperPidKdConfig;      // Hz per (step/second) of measured-positi
 extern int stepperPidMaxSpeedConfig;  // Hz - hard clamp on PID output magnitude
 extern int stepperPidAccelConfig;     // Hz/s - ramp rate FastAccelStepper uses when the PID output speed changes; the value the planned acceleration-characterization sweep is meant to inform
 extern int stepperPidDeadbandConfig;  // steps - |error| at or below this snaps to an exact moveTo() and stops driving via PID, instead of continuing to output a tiny, chattery nonzero speed forever
+// steps - hysteresis band around a settled target: while already settled
+// (pidSettled), a new target within this radius gets another one-shot
+// moveTo() snap instead of dropping back into full continuous-run PID
+// control. Must be >= stepperPidDeadbandConfig to do anything. Added
+// 2026-09-06: DDP's 8-bit position quantization can shift the computed
+// target by tens to (on a large-bottomPosition device) over a hundred
+// steps between adjacent commanded values - right at position 0 (always
+// switch-triggered, and a completely normal DDP endpoint, not just a
+// homing reference), that was enough to repeatedly kick pidSettled back to
+// false, re-engaging continuous-run mode (runForward()/runBackward()) for
+// a correction of only a few tens of steps - each re-engagement produced a
+// small amount of real motion right at the switch, which
+// updateRammedIntoStopCheck() correctly read as "stuck against the stop"
+// even though nothing was actually wrong. Found via the first full
+// DDP-triangle-wave test against PID mode - see TODO.md.
+extern int stepperPidReengageThresholdConfig;
 
 // TRACK_MODE_LOOKAHEAD parameters
 extern int stepperLookaheadStepsConfig;     // steps - how far beyond the commanded position to aim, in the
