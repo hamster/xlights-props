@@ -80,7 +80,22 @@ int pidCurrentDirection = 0;   // -1, 0, 1
 // correctly, isolating this to a cold continuous-run start right at the
 // switch, not the PID control law itself - throttling retries the same way
 // retryMoveIfDied() already does is the same proven fix, applied here.
+// A second, related gap found later the same day (during a PID damping
+// sweep): the retry condition itself was plain !isRunning(), which a
+// dead-but-nonempty queue satisfies without producing any steps (same
+// root cause as the hysteresis band's genuinelyRunning fix below) - so
+// once direction stopped changing, a dead run was never retried at all,
+// not just under-throttled. Fixed by using the same genuinelyRunning
+// check here too - see updatePidMode()'s call site.
 unsigned long lastPidRunRetryMs = 0;
+// Latches "already issued the clean forceStop() for the direction change
+// in progress" across the pidStopSettling wait (which re-enters
+// updatePidMode() from the top on every tick while waiting - without this,
+// the still-true directionChanged on the settled-and-continuing tick would
+// just trigger another forceStop() forever, never actually reaching the
+// runForward()/runBackward() call). Cleared the instant that call is
+// actually issued - see updatePidMode()'s direction-change handling.
+bool pidDirectionSwitchPending = false;
 // Same throttled-retry pattern, for the hysteresis band's moveTo() calls
 // (see stepperPidReengageThresholdConfig's declaration comment) instead of
 // runForward()/runBackward(). Found necessary the same way, one level up
@@ -446,6 +461,14 @@ void updatePidMode() {
       pidSettled = true;
       pidIntegral = 0;
       pidCurrentDirection = 0;
+      // In sync with pidCurrentDirection's reset - if a pending direction
+      // switch's forceStop()/settle got interrupted by the target landing
+      // in the deadband before it finished, don't leave this latched true:
+      // that would make the *next* real engagement skip its own clean
+      // stop-and-settle (see pidDirectionSwitchPending's declaration
+      // comment) since directionChanged && !pidDirectionSwitchPending
+      // would read false.
+      pidDirectionSwitchPending = false;
       continuousRunDirection = 0;  // settling into moveTo() - not a continuous run anymore
     } else {
       // Already settled, nothing to do motion-wise - but still log this
@@ -505,10 +528,16 @@ void updatePidMode() {
     // (see lastPidHystRetryMs's declaration comment) - isRunning() alone
     // doesn't detect it, since a dead-but-nonempty queue still satisfies
     // isRunning() via !isQueueEmpty(). Treat "running" here as genuinely
-    // producing motion (ramp active or real nonzero speed), not just a
-    // nonempty queue.
-    bool genuinelyRunning = stepper->isRunning() &&
-                             (stepper->isRampGeneratorActive() || stepper->getCurrentSpeedInMilliHz() != 0);
+    // producing motion. NOTE (2026-09-06, found during a PID damping
+    // sweep): originally also OR'd in isRampGeneratorActive() here, on
+    // the theory that it was a second, independent way to catch real
+    // motion - but a real 2.4s mid-run stall (a direction reversal that
+    // never recovered despite this exact check) proved isRampGeneratorActive()
+    // itself can report true for seconds at a stretch while actual speed
+    // stays genuinely 0, making it worse than useless as a trust signal
+    // here. getCurrentSpeedInMilliHz() alone has never been wrong in any
+    // observed case - dropped the OR-clause.
+    bool genuinelyRunning = stepper->isRunning() && stepper->getCurrentSpeedInMilliHz() != 0;
     if (!genuinelyRunning && (now - lastPidHystRetryMs >= 100)) {
       lastPidHystRetryMs = now;
       stepper->setAcceleration(stepperPidAccelConfig);
@@ -571,13 +600,88 @@ void updatePidMode() {
   stepper->setAcceleration(stepperPidAccelConfig);
   stepper->setSpeedInHz(speedHz);
 
-  if (newDirection != pidCurrentDirection || !stepper->isRunning()) {
-    // Same direction as before, just !isRunning() - this is a retry after
-    // FastAccelStepper silently dropped the previous runForward()/
-    // runBackward() request (see lastPidRunRetryMs's declaration comment).
-    // Throttle exactly like retryMoveIfDied() does; a genuine new direction
-    // command (directionChanged) always issues immediately, unthrottled.
-    bool directionChanged = (newDirection != pidCurrentDirection);
+  // Same "genuinely running" check as the hysteresis band above, and for
+  // the same reason (found live on the bench, 2026-09-06, during a PID
+  // damping sweep): a dead-but-nonempty FastAccelStepper queue satisfies
+  // plain isRunning() without ever producing a step. Right at the homing
+  // switch (position ~0, the state every run starts in), a runForward()
+  // call can go dead this way - and since pidCurrentDirection then never
+  // changes again on its own, the old plain-isRunning() check below this
+  // comment never saw a reason to retry, leaving curSpeedHz pinned at 0
+  // for 4+ real seconds while the commanded target raced ahead, then
+  // catching up in one big burst once something else (e.g. a later
+  // direction change) finally forced a fresh runForward()/runBackward()
+  // call. Reproduced directly: curSpeedHz read exactly 0 for ~228
+  // consecutive 20ms ticks with isRunning()==true throughout.
+  //
+  // First fix attempt OR'd in isRampGeneratorActive() (matching the
+  // hysteresis band's own check at the time) - insufficient. A follow-up
+  // bench run hit a 2.4s stall exactly at a direction reversal (mid-run,
+  // not the cold-start case above) that this exact check failed to
+  // recover from, proving isRampGeneratorActive() can itself report true
+  // for seconds straight with zero actual speed - worse than useless as
+  // a trust signal. Dropped; getCurrentSpeedInMilliHz() alone has never
+  // been wrong in any case observed so far.
+  bool genuinelyRunning = stepper->isRunning() && stepper->getCurrentSpeedInMilliHz() != 0;
+  bool directionChanged = (newDirection != pidCurrentDirection);
+
+  // Root-caused on the bench (2026-09-06, the same session as the fixes
+  // above): calling runForward()/runBackward() for a *new* direction
+  // while the stepper is still actively producing steps in the *old*
+  // direction (mid-deceleration, genuinelyRunning still true) is what was
+  // actually wedging FastAccelStepper at every direction reversal - not a
+  // throttling or detection problem at all. The old code issued that call
+  // immediately and unconditionally the moment newDirection changed, often
+  // while curSpeedHz was still a few thousand Hz in the old direction;
+  // once it coasted down to 0 on its own a moment later, it simply never
+  // restarted, and every throttled retry after that called the exact same
+  // wedged API the exact same way. Reproduced directly: a full 4s stall
+  // starting right at a triangle wave's peak, both the commanded position
+  // and raw DDP trace updating cleanly the whole time (ruling out any
+  // network/reception cause - see TODO.md).
+  //
+  // First fix attempt only guarded this when genuinelyRunning was also
+  // true (i.e. actively moving the old direction right now) - insufficient
+  // on its own. A follow-up bench run hit the exact same multi-second
+  // stall pattern engaging a *fresh* direction from an apparently-idle
+  // stepper (not mid-reversal - this happened at the very start of a
+  // triangle-wave test, after the harness's own direct-moveTo() skipped-
+  // step check had just finished, i.e. not the boot-time cold-start case
+  // either), proving the race isn't specific to "still visibly moving" -
+  // something about engaging runForward()/runBackward() too soon after
+  // *any* other stepper activity (a moveTo(), a just-finished PID run,
+  // even boot) can wedge it the same way. Widened to unconditional: force
+  // a clean stop-and-settle - the exact same forceStop()+pidStopSettling
+  // pattern already used for the overshoot safety net above - before
+  // *every* fresh direction engagement, not just ones that were visibly
+  // still moving. A forceStop() on an already-idle stepper is a harmless
+  // no-op (pidStopSettling's own isRunning() check passes through
+  // immediately next tick), so this costs at most one extra ~20ms tick of
+  // latency on the normal case.
+  //
+  // pidDirectionSwitchPending guards against re-triggering this forever:
+  // pidStopSettling's own wait (checked near the top of this function)
+  // re-enters updatePidMode() from scratch every tick while waiting, and
+  // directionChanged is still true on the very tick the wait finally
+  // clears - without this latch, that tick would just see directionChanged
+  // and issue *another* forceStop(), looping forever and never reaching
+  // the actual runForward()/runBackward() call below.
+  if (directionChanged && !pidDirectionSwitchPending) {
+    stepper->forceStop();
+    pidStopSettling = true;
+    pidDirectionSwitchPending = true;
+    continuousRunDirection = 0;
+    return;  // re-enters next tick; pidStopSettling's existing wait-for-idle
+             // handling above will finish the engagement once truly stopped
+  }
+
+  if (directionChanged || !genuinelyRunning) {
+    // directionChanged here means the pending stop above just settled -
+    // issue the new direction's run immediately, unthrottled. Otherwise
+    // (same direction as last tick) this is a retry after FastAccelStepper
+    // silently dropped the previous runForward()/runBackward() request
+    // (see lastPidRunRetryMs's declaration comment) - throttled exactly
+    // like retryMoveIfDied() does.
     if (directionChanged || (now - lastPidRunRetryMs >= 100)) {
       lastPidRunRetryMs = now;
       // Root-caused on the bench (2026-09-06): setJumpStart()'s configured
@@ -596,6 +700,7 @@ void updatePidMode() {
         stepper->runBackward();
       }
       pidCurrentDirection = newDirection;
+      pidDirectionSwitchPending = false;
       continuousRunDirection = newDirection;  // see stepper_handler.h's declaration comment
     }
   } else {

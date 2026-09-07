@@ -112,18 +112,30 @@ int stepperStreamSettleMsConfig = 150;
 int stepperLookaheadStepsConfig = 5000;
 int stepperLookaheadSettleMsConfig = 150;
 
-// TRACK_MODE_PID defaults - tuned via a step-response sweep (2026-09-06,
-// see TODO.md's "PID gain tuning" section for the full data): Kp swept
-// 0.5-30 found zero overshoot up to Kp=8 (the P-only sweet spot, ~1020ms
-// response), real overshoot from Kp=10 up. Kd swept at a fixed Kp=15 (300
-// steps overshoot at Kd=0) found overshoot drops to near-zero by Kd~0.5-0.7
-// with response time barely changing (920->1020ms) - genuine derivative
-// damping, not just a slower response. Kp=15/Kd=0.7 ends up faster *and*
-// cleaner than the P-only ceiling. Ki left at 0 - not yet tested (a
-// sustained-tracking test, not a step-response one; see TODO.md).
+// TRACK_MODE_PID defaults - Kp originally tuned via a step-response sweep
+// (2026-09-06, see TODO.md's "PID gain tuning" section for the full data):
+// swept 0.5-30, zero overshoot up to Kp=8 (the P-only sweet spot, ~1020ms
+// response), real overshoot from Kp=10 up. Kd was ALSO originally picked
+// from that same step-response methodology (0.7, damping 300 steps of
+// overshoot down to near-zero) - but a step response and a live, 40fps
+// continuous DDP triangle wave turned out to be different signals: a later
+// damping sweep against the continuous wave (same day, see TODO.md's
+// "PID damping sweep" section) found the opposite result - Kd=0.7 measurably
+// WORSENS a real, sustained ~10-13Hz speed ripple during continuous
+// tracking (not locked to DDP frame rate - a genuine underdamped
+// Kp/derivative-on-measurement resonance, not an input-quantization
+// artifact), and lowering it to 0.3 measurably helps BOTH ripple and
+// rms_error, at every tested duration, with a full clean 5-duration sweep
+// on real hardware. (Kd=0 tested even better on ripple/error but hit an
+// ambiguous switch/position-drift trip during that same sweep - not
+// confirmed as a real mechanical event, but not ruled out either; 0.3 gets
+// most of the same benefit without going anywhere near that edge case, so
+// it's the safer pick pending a closer look at Kd=0.) Ki left at 0 - not
+// yet tested (needs a sustained-tracking test, not a step-response one;
+// see TODO.md).
 float stepperPidKpConfig = 15.0f;
 float stepperPidKiConfig = 0.0f;
-float stepperPidKdConfig = 0.7f;
+float stepperPidKdConfig = 0.3f;
 // 7000 Hz per the 2026-09-06 speed/current characterization sweeps and
 // live listening on the bench: the measured stall boundary was ~8500 Hz
 // (up)/~9000 Hz (down) at 1200-1400mA and 50,000 steps/s^2 accel, but that

@@ -230,14 +230,63 @@ Recommended next step: a same-day Kd/Kp damping sweep against the triangle-wave 
 
 **On the freeze bug specifically**: this clean result, plus the same-day combined motion+reception test (also clean — see `TODO.md`), is encouraging but still not proof it's fixed, since nothing that directly touches DDP receive/parse logic changed. `WiFi.setSleep(false)` remains the leading candidate explanation if it stays clean across more/longer runs.
 
+## Damping sweep, and a real, serious, now-fixed bug found along the way (2026-09-06, same day)
+
+Went hunting for the ripple's cause with a Kd/Kp damping sweep against the same 5-duration triangle test. The very first low-Kd candidate came back catastrophically worse (rms_error 7355 vs. the ~440 baseline) - not more ripple, a genuine multi-second freeze.
+
+### Bug 5: PID freezes for seconds at every direction reversal
+
+Traced through **three fix attempts** in `main.cpp`'s `updatePidMode()` before it was actually gone:
+
+1. PID's continuous-run retry check used plain `isRunning()`, which a dead-but-nonempty FastAccelStepper queue satisfies without ever producing a step - the same hazard the hysteresis band's `moveTo()` retry was already fixed for earlier this session, just never applied to this branch. **Fix 1**: added the same `genuinelyRunning` check here too. Insufficient.
+2. A follow-up run hit a full **2.4-second stall exactly at a triangle wave's peak** (a direction reversal) that fix 1 didn't catch - proving `isRampGeneratorActive()` can itself report `true` for seconds with zero actual speed, actively misleading rather than just insufficient. **Fix 2**: dropped it, trust only nonzero actual speed. Still insufficient.
+3. Real root cause: calling `runForward()`/`runBackward()` for a new direction **while the stepper is still actively producing steps in the old direction** wedges FastAccelStepper outright - every subsequent retry just calls the same already-wedged API the same way. Confirmed with a full 4-second stall where **both the commanded position and the raw DDP trace kept updating cleanly the entire time** - directly answering a question asked mid-session ("are we sure network issues aren't giving us grief?") - this was 100% motion-layer, not network, using the same diagnostic that separated Bug 4 from a motion bug. **Fix 3**: force a clean `forceStop()` and wait for it to genuinely settle (reusing the `pidStopSettling` pattern) before issuing the reversed direction.
+4. Even fix 3 wasn't complete - a full-sweep verification hit one more freeze engaging a *fresh* direction from an apparently-idle stepper (not mid-reversal, not boot-time cold start - the start of a new test right after the harness's own skipped-step check). **Final fix**: widened the guard to fire on every direction change unconditionally, needing a new `pidDirectionSwitchPending` latch to avoid re-triggering the stop forever across the multi-tick settle wait.
+
+### Before fix 3 - a 4-second freeze at the reversal (both traces still updating cleanly - not a network issue)
+
+![Frozen at the peak, commanded and DDP trace still clean](tuning_runs/pid_kd0_v2_20260906_223546_dur8s.png)
+
+### After the final fix - the same reversal, clean
+
+![Clean reversal after the fix](tuning_runs/pid_kd0_v3_20260906_224028_dur8s.png)
+
+**Verified clean**: two full 5-duration sweeps on the final fixed firmware (Kp=15/Kd=0.7 and Kp=15/Kd=0.3), zero contamination, zero freezes, zero unexpected trips across all 10 direction reversals between them.
+
+### The damping sweep result, now trustworthy
+
+| candidate | 5s ripple | 8s ripple | 12s ripple | 16s ripple | 20s ripple |
+|---|---|---|---|---|---|
+| Kp=15/Kd=0.7 (baseline) | 629Hz | 515Hz | 498Hz | 470Hz | 392Hz |
+| **Kp=15/Kd=0.3 (recommended)** | **572Hz** | **494Hz** | **384Hz** | **337Hz** | **310Hz** |
+| Kp=15/Kd=0.15 | - | - | - | 353Hz | - |
+| Kp=15/Kd=0 (pure P) | - | 451Hz | - | - | - |
+| Kp=15/Kd=1.2 | - | 579Hz | - | - | - |
+| Kp=10/Kd=0.7 | - | - | - | 330Hz | - |
+| Kp=8/Kd=0.5 | - | - | - | 213Hz | - |
+
+Kd=0.3 beats baseline on **both** ripple and rms_error at every duration in a full, clean sweep (rms_error 572/371/233/233/248 vs. baseline's 679/444/359/293/206). Lowering Kp instead also reduces ripple, but costs more tracking accuracy for the same benefit (Kp=10/Kd=0.7: 330Hz ripple but rms_error 312 vs. baseline's 209) - Kd is the better lever of the two.
+
+### Final, recommended candidate - clean tracking, visibly less ripple
+
+![Kd=0.3, 16s - clean, less ripple than baseline](tuning_runs/pid_kd03_v4_20260906_225347_dur16s.png)
+
+**Kd=0 tested even better but is NOT recommended**: its full-sweep verification tripped an ambiguous "rammed into homing stop" event partway through, ending the sweep early and requiring a re-home. The user directly watched/listened to the trolley during this - **no buzz or grinding sound, it simply stopped moving** - arguing against a real mechanical ram (a stepper straining against a hard stop typically whines audibly) and toward a false positive from residual step-counter drift during some other still-unresolved dead-run edge case. Not confirmed either way - flagged as an open item. Kd=0.3 gets most of the same ripple benefit without going anywhere near this edge case in any tested run.
+
+**Applied**: `pidKd`'s compiled default changed from `0.7` to `0.3` (`stepper_handler.cpp`) - no NVS/Preferences path exists for any PID tunable, so the compiled default is the only thing making this durable across a reboot. Flashed and verified live.
+
+Built `tools/analyze_ripple.py` this session to make the comparison objective: steady-cruise-window ripple RMS/period, plus a dead-start/contamination detector (flags any run where actual position stays frozen unreasonably long, so a corrupted run doesn't get compared as if it were clean).
+
 ## Where things landed
 
-**Working PID gains**: `Kp=15, Ki=0, Kd=0.7, MaxSpeed=7000, Accel=50000, Deadband=30, ReengageThreshold=150`. **Environment**: `1200mA run current, 200,000 accel, 7000Hz cruise cap` (current and accel saved via the web UI; the 7000Hz speed cap is a live override only — see below).
+**Working PID gains**: `Kp=15, Ki=0, Kd=0.3, MaxSpeed=7000, Accel=50000, Deadband=30, ReengageThreshold=150` (Kd lowered from the original 0.7 - see the damping sweep above). **Environment**: `1200mA run current, 200,000 accel, 7000Hz cruise cap` (current and accel saved via the web UI; the 7000Hz speed cap is a live override only — see below).
 
 ## Still open
 
 - **Multi-second `positionRequest` freeze — not reproduced since, but not confirmed fixed.** Two clean re-runs since (a dedicated combined motion+reception test, and the full duration sweep above) found zero freezes, but nothing that directly touches DDP receive/parse logic was changed - `WiFi.setSleep(false)` is the leading candidate if it stays clean across more/longer sessions. See `TODO.md`'s DDP reception instrumentation sections for full detail.
-- A real, bounded, visible high-frequency ripple remains in actual speed during active tracking (~1000–4500Hz, ~0.2–0.3s period, both directions) — doesn't hurt overall accuracy and the position trace itself looks clean (see the `pid_v2` re-run above - user's own read watching it live was "jerky but smooth"), but isn't fully explained; likely Kd reacting to rate-estimate noise on a live, continuously-updating target rather than a clean single step.
+- The high-frequency speed ripple is now understood (genuine underdamped Kp/Kd resonance, period ~80-100ms independent of commanded speed - not DDP-frame-rate-locked) and measurably reduced via the damping sweep above (Kd 0.7→0.3), but not eliminated - some residual ripple remains at every Kd tested, including Kd=0. Whether it's worth chasing further (e.g. a low-pass filter on the derivative estimate, or accepting the current level as within tolerance) is an open call.
+- **New**: what actually happened during the Kd=0 sweep's "rammed into stop" trip - false positive from residual dead-run position drift (most likely, per the no-buzz observation) vs. a genuine, if quiet, overshoot. Worth resolving before ever considering Kd=0 again.
+- **New**: Kp itself hasn't been re-swept against the continuous-wave signal now that Kd has moved - all the Kp candidates tested in the damping sweep held Kd fixed at whatever was being compared, not jointly optimized with the new Kd.
 - Ki hasn't been tuned — the deadband snap already closes any P/PD steady-state gap for a single step, so this needs a genuinely different test (sustained tracking of a moving target, not step response) to matter.
 - `pidReengageThreshold` / the ram-check's tolerance (150, matched to each other) were chosen from the DDP-quantization math, not an independent sweep.
 - `normalSpeed=7000Hz` is currently a live override only, not saved — a reboot reverts it to the saved 8000Hz until it's explicitly saved via the web UI or a different number is settled on.
