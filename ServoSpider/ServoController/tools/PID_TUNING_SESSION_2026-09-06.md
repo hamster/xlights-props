@@ -8,7 +8,9 @@ Goal: implement closed-loop PID control for DDP position tracking (replacing the
 - First bench test drove the wrong direction entirely. Root cause: `setJumpStart()`'s startup kick — correctly signed for `moveTo()`-based moves — fires backward when issued through the continuous-run API PID uses. Fixed by disabling jumpStart during continuous-run and restoring it for the settle-to-target snap.
 - Characterized acceleration, cruise speed, and TMC run current independently on real hardware. Acceleration and current turned out **not** to be the binding constraint anywhere tested — the real, sharply asymmetric limit is cruise speed, and even that boundary needed a human ear to catch what the encoder-slip metric missed.
 - Tuned Kp then Kd via step-response sweeps: zero overshoot up to Kp=8 (~1020ms response), real overshoot from Kp=10 up; adding Kd=0.7 at Kp=15 gets *faster and cleaner* than the best pure-P result.
-- First real DDP triangle-wave test (not just single-step response) found two more real bugs — PID's own settling behavior near the switch was tripping the "rammed into stop" safety check, and the first fix for that reintroduced Direct mode's own "constantly re-aiming never accelerates" jerkiness. Both fixed; a full 5-duration sweep is now clean end to end.
+- First real DDP triangle-wave test (not just single-step response) found two more real bugs — PID's own settling behavior near the switch was tripping the "rammed into stop" safety check, and the first fix for that reintroduced Direct mode's own "constantly re-aiming never accelerates" jerkiness. Both fixed.
+- The raw DDP trace looked jumpy in most runs. Root cause was entirely host-side, not the device: the test harness's own sender computed each value from real elapsed time, so ordinary scheduling jitter on the sending machine produced real (if artificial) jumps. Fixed, and verified two independent ways that delivery itself was never the issue - zero packets lost, zero sequence gaps.
+- Re-running the full sweep with the fixed sender exposed one more real bug (the hysteresis fix's own `moveTo()` could silently go "dead" the same way `runForward()`/`runBackward()` already had) plus a logging-completeness gap that had been making clean DDP reception look jumpy in the log. Both fixed; the full 5-duration sweep is now clean end to end, and it's the cleanest data of the whole session.
 
 ## Direction bug: `setJumpStart()` fires backward in continuous-run mode
 
@@ -103,17 +105,47 @@ The "up-direction oscillation" that looked like it might be a real gravity-relat
 
 **Fixes**: a new `pidReengageThreshold` (150 steps) hysteresis band — small target shifts while settled get another one-shot `moveTo()` snap instead of re-engaging continuous-run mode — combined with a matching small tolerance in the ram-check itself (net drift only; doesn't weaken real-jam detection, since the trip reference never resets while the trip continues). The hysteresis snap only fires once the *previous* small move has actually finished running, not on every tick.
 
-### Full sweep after both fixes — clean end to end
+## The raw DDP trace looked jumpy — dropped packets, or WiFi? Neither.
+
+Asked directly: was the jumpy-looking "Raw DDP value" panel in these plots a sign of dropped packets or a WiFi problem? Checked it properly rather than assuming either way.
+
+**It wasn't reception at all - it was the test harness's own sender.** `send_triangle_wave()` computed each packet's value from real elapsed wall-clock time *at the moment of sending*, not from the schedule - so any ordinary send-loop delay (OS scheduling jitter, general system load) meant the next value legitimately reflected a bigger jump once the delayed send finally went out. Confirmed with a direct packet-count comparison against the device's own `protocolPacketsReceived` counter: **321 sent, 321 received, 0 rejected as out-of-order**, on a run whose trace still showed several multi-unit jumps. Every packet arrived; only the *value* each one carried was affected.
+
+**Fixed**: the sender now computes each value from the *scheduled* tick time instead, so the value sequence is a perfectly smooth, deterministic ramp regardless of real-time jitter - and this now better matches how a real DDP source like FPP actually works (a fixed show timeline, not "whatever's correct for whenever the sender gets around to it"). Verified 100% clean (510/510 single-unit transitions, zero jumps) on a fresh run, up from 92.7% before.
+
+**Re-running the full sweep with the fixed sender surfaced two more things**, both fixed:
+1. The hysteresis band's own `moveTo()` (added for Bug 1 above) could silently go "dead" the same way `runForward()`/`runBackward()` already had earlier this session - a nonempty step queue alone satisfies `isRunning()`, even when the ramp generator never actually starts. The 16s run regressed hard (`rms_error` 234→1515) with the exact same "stuck at position 0, then a delayed catch-up" signature as Bug 2. Reproduced directly on the bench with targeted diagnostics (`isRunning=1, qEmpty=0, rampActive=0, speed=0`); fixed by treating "genuinely running" as ramp-active-or-nonzero-speed, not just a nonempty queue, and retrying (throttled) when it isn't.
+2. `updatePidMode()` only wrote a log row when actually issuing a correction, not on every tick - so a real, smoothly-arriving DDP stream could update the commanded position many times while PID sat idle, with none of it logged; the next logged row would then show an artificial jump indistinguishable from a dropped packet. **Confirmed this was purely a logging gap, not a reception one**: a `protocolDebug` capture (prints every packet as it's parsed, independent of any tracking-mode's own logging) showed zero sequence gaps across 202 packets on a run whose compact log alone suggested ~26% of transitions were jumpy. Fixed by logging unconditionally on every tick.
+
+### Before (all bugs fixed except the sender/dead-move/logging ones above) — stuck at zero, then a delayed catch-up
+
+![Stuck at zero for 4+ seconds](tuning_runs/pid_tuned5_20260906_181138_dur16s.png)
+
+### After every fix in this document — clean tracking, clean DDP trace, throughout
+
+![Clean tracking, clean DDP trace](tuning_runs/pid_final_20260906_210511_dur16s.png)
+
+### Before — visible oscillation on the "up" (gravity-opposed) leg only
+
+![Oscillation on the up leg](tuning_runs/pid_tuned5_20260906_181138_dur8s.png)
+
+### After — clean and symmetric in both directions
+
+![Clean in both directions](tuning_runs/pid_final_20260906_210511_dur8s.png)
+
+The "up-direction oscillation" that looked like it might be a real gravity-related asymmetry turned out to be a symptom of these bugs, not a separate real effect — it's gone in both directions once everything above was fixed.
+
+### Full sweep, every fix applied — the cleanest data of the whole session
 
 | duration | rms_error | max_error | near_stall_pct | tracking_pct |
 |---|---|---|---|---|
-| 5s | 908 | 1442 | 2.3% | 100% |
-| 8s | 490 | 1109 | 1.7% | 100% |
-| 12s | 299 | 746 | 1.0% | 100% |
-| 16s | 234 | 526 | 1.0% | 100% |
-| 20s | 181 | 401 | 0.3% | 100% |
+| 5s | 747 | 1497 | 1.8% | 100% |
+| 8s | 429 | 1103 | 0.2% | 100% |
+| 12s | 279 | 564 | 0.1% | 100% |
+| 16s | 213 | 442 | 0.2% | 100% |
+| 20s | 173 | 352 | 0.5% | 100% |
 
-Error scales down smoothly and predictably as duration increases — exactly the pattern every pre-PID mode showed in the very first characterization session — with no un-homing anywhere and no stuck episodes.
+Error scales down smoothly and predictably as duration increases — exactly the pattern every pre-PID mode showed in the very first characterization session — with no un-homing anywhere, no stuck episodes, and a `ddpVal` trace that's 94% clean single-unit transitions (the remaining ~6% is ordinary sampling-rate mismatch between PID's 20ms log tick and DDP's ~25ms send interval, not a real gap - confirmed visually smooth in the plot too).
 
 ## Where things landed
 
@@ -126,3 +158,4 @@ Error scales down smoothly and predictably as duration increases — exactly the
 - `pidReengageThreshold` / the ram-check's tolerance (150, matched to each other) were chosen from the DDP-quantization math, not an independent sweep.
 - `normalSpeed=7000Hz` is currently a live override only, not saved — a reboot reverts it to the saved 8000Hz until it's explicitly saved via the web UI or a different number is settled on.
 - The speed-vs-current sweep was never re-run below 800mA, and StallGuard's re-enable/replace decision (flagged in the previous session's summary) is still open.
+- The deadband-settled branch's own first `moveTo()` (the initial snap into `pidSettled`) doesn't have the same dead-move retry the hysteresis band now has - lower risk (it only fires once error is already inside the tight deadband, so a dead move there barely matters) but not verified clean the same rigorous way.
