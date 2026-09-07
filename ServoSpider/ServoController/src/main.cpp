@@ -147,8 +147,8 @@ bool applyTrackingProfileDecision(float newTarget, float lastCommittedTarget, in
 static String compactLogBuffer;
 static const size_t COMPACT_LOG_MAX_BYTES = 190000;
 
-static void appendCompactLog(const String& line) {
-  compactLogBuffer += line;
+static void appendCompactLog(const char* line) {
+  compactLogBuffer += line;  // String::operator+=(const char*) appends directly, no intermediate String
   compactLogBuffer += '\n';
   if (compactLogBuffer.length() > COMPACT_LOG_MAX_BYTES) {
     size_t excess = compactLogBuffer.length() - COMPACT_LOG_MAX_BYTES;
@@ -166,41 +166,48 @@ void clearCompactLog() { compactLogBuffer = ""; }
 void logCompactMotion(uint16_t ddpVal, int cmdPos, int curPos, int delta, int lag,
                        bool tracking, int32_t curSpeedMilliHz, int targetSpeedHz) {
   if (!compactLogEnabled) return;
-  String line = String(millis()) + "," + String(ddpVal) + "," + String(cmdPos) + "," +
-                String(curPos) + "," + String(delta) + "," + String(lag) + "," +
-                (tracking ? "T" : "N") + "," + String(curSpeedMilliHz / 1000) + "," +
-                String(targetSpeedHz) + "," +
-                // Ground-truth encoder position alongside the step-counted curPos
-                // above - 0 if no encoder is wired/initialized, so existing logs
-                // without an encoder still parse the same way, just with this
-                // column always 0.
-                String(getEncoderCount()) + "," +
-                // Live TMC2209 StallGuard reading (updateTmc() refreshes this
-                // every STALL_POLL_INTERVAL_MS - see tmc_handler.cpp) - added
-                // 2026-09-06 after a real bench session showed repeated
-                // stall-detection trips during DDP tracking-mode motion (3 of 5
-                // baseline runs lost real steps), with no way to see *when*, at
-                // what speed/position, or how close to the threshold SG_RESULT
-                // was running the rest of the time. 0 if TMC UART isn't
-                // connected, same "always 0, still parses" convention as
-                // encoderCount.
-                String(tmcStatus.stallGuardResult) + "," +
-                // Raw homing switch state - added 2026-09-06 after running with
-                // StallGuard disabled (it was making false-positive-driven
-                // interruptions worse than the real stalls it's meant to catch,
-                // fighting attempts to get clean tracking-mode data) caused a
-                // real ram into the physical homing stop with no cutoff to
-                // catch it. Not wired into any real-time safety logic here on
-                // purpose - the user's own suggested check (motion commanded,
-                // encoder not advancing, switch reads triggered = stuck against
-                // the stop) is exactly the kind of thing that leans on the
-                // encoder, which isn't meant to outlive this tuning phase - so
-                // it's done as post-hoc analysis in tuning_harness.py instead,
-                // off this one raw logged bit, not as new production firmware
-                // logic.
-                String(isHomingSwitchTripped() ? 1 : 0);
-  Serial.println(line);
-  appendCompactLog(line);
+  // Built via a fixed char buffer + snprintf(), NOT chained String
+  // concatenation (2026-09-06, found the hard way): the original version
+  // built this line via ~12 chained `String + String + ...` operators,
+  // each allocating its own temporary on the heap - fine occasionally, but
+  // this fires every 20-50ms during any active tracking/homing motion, and
+  // sustained heap churn at that rate caused a real, reproducible firmware
+  // crash (a full reboot mid-homing-search) plus data corruption in the
+  // in-RAM log buffer itself (embedded NUL bytes where a newline should
+  // have been - almost certainly a failed/partial allocation under
+  // fragmentation). Matches this codebase's own existing convention for
+  // hot-path buffers - see handleStatusData()'s static statusDataBuffer.
+  static char lineBuf[160];
+  int n = snprintf(lineBuf, sizeof(lineBuf), "%lu,%u,%d,%d,%d,%d,%c,%ld,%d,%d,%d,%d",
+                    millis(), ddpVal, cmdPos, curPos, delta, lag, tracking ? 'T' : 'N',
+                    (long)(curSpeedMilliHz / 1000), targetSpeedHz, getEncoderCount(),
+                    // Live TMC2209 StallGuard reading (updateTmc() refreshes this
+                    // every STALL_POLL_INTERVAL_MS - see tmc_handler.cpp) - added
+                    // 2026-09-06 after a real bench session showed repeated
+                    // stall-detection trips during DDP tracking-mode motion (3 of
+                    // 5 baseline runs lost real steps), with no way to see
+                    // *when*, at what speed/position, or how close to the
+                    // threshold SG_RESULT was running the rest of the time. 0 if
+                    // TMC UART isn't connected, same "always 0, still parses"
+                    // convention as encoderCount.
+                    tmcStatus.stallGuardResult,
+                    // Raw homing switch state - added 2026-09-06 after running
+                    // with StallGuard disabled (it was making false-positive-
+                    // driven interruptions worse than the real stalls it's meant
+                    // to catch, fighting attempts to get clean tracking-mode
+                    // data) caused a real ram into the physical homing stop with
+                    // no cutoff to catch it. Not wired into any real-time safety
+                    // logic here on purpose - the user's own suggested check
+                    // (motion commanded, encoder not advancing, switch reads
+                    // triggered = stuck against the stop) is exactly the kind of
+                    // thing that leans on the encoder, which isn't meant to
+                    // outlive this tuning phase - so it's done as post-hoc
+                    // analysis in tuning_harness.py instead, off this one raw
+                    // logged bit, not as new production firmware logic.
+                    isHomingSwitchTripped() ? 1 : 0);
+  if (n < 0) return;  // encoding error - drop this row rather than log garbage
+  Serial.println(lineBuf);
+  appendCompactLog(lineBuf);
 }
 
 // Periodic compact-log tick, independent of the DDP/tracking-mode dispatch
@@ -486,14 +493,14 @@ void updatePidMode() {
       pidDirectionSwitchPending = false;
       continuousRunDirection = 0;  // settling into moveTo() - not a continuous run anymore
     } else {
-      // Already settled, nothing to do motion-wise - but still log this
-      // tick (2026-09-06), so the Compact Motion Log's ddpVal trace stays
-      // a complete, gap-free record of positionRequest at PID's own tick
-      // rate, not just a sparse sample only taken when something actually
-      // moves. Without this, a real DDP stream could update
-      // positionRequest smoothly many times while sitting fully idle here
-      // and none of it would appear in the log - the next row logged
-      // (whenever error next exceeds deadband) would then show an
+      // Already settled, nothing to do motion-wise - but still log every
+      // tick a real DDP value change occurs (2026-09-06), so the Compact
+      // Motion Log's ddpVal trace stays a complete, gap-free record of
+      // positionRequest, not just a sparse sample only taken when
+      // something actually moves. Without this, a real DDP stream could
+      // update positionRequest smoothly many times while sitting fully
+      // idle here and none of it would appear in the log - the next row
+      // logged (whenever error next exceeds deadband) would then show an
       // artificially large ddpVal jump that looks exactly like a dropped
       // packet or WiFi hiccup but is actually just a logging gap. Confirmed
       // this was happening on the bench: a run's log showed ~26% of ddpVal
@@ -501,8 +508,26 @@ void updatePidMode() {
       // capture of the same kind of run showed zero dropped/out-of-order
       // packets at the firmware level - the "jumpiness" was 100% a logging
       // artifact, not a reception one.
-      logCompactMotion(positionRequest, (int)target, (int)currentPos, 0, (int)error,
-                        true, stepper->getCurrentSpeedInMilliHz(), 0);
+      //
+      // BUT throttled to at most once per 250ms when NOTHING changed
+      // (2026-09-06, found the hard way): genuinely idle time - the
+      // trolley sitting settled between shows, potentially for minutes -
+      // was flooding the bounded GET /compact-log buffer (see its
+      // declaration comment) at 50 lines/sec with nothing-happened rows,
+      // evicting real motion data from an actual xLights session before
+      // it could be fetched over HTTP. A real DDP value change still logs
+      // immediately regardless of this throttle, so the gap-free guarantee
+      // above is preserved - only true stretches of "nothing changed at
+      // all" are now heartbeat-rate instead of full tick-rate.
+      static uint16_t lastLoggedDdpVal = 0;
+      static unsigned long lastIdleLogMs = 0;
+      bool ddpChanged = (positionRequest != lastLoggedDdpVal);
+      if (ddpChanged || (now - lastIdleLogMs >= 250)) {
+        logCompactMotion(positionRequest, (int)target, (int)currentPos, 0, (int)error,
+                          true, stepper->getCurrentSpeedInMilliHz(), 0);
+        lastLoggedDdpVal = positionRequest;
+        lastIdleLogMs = now;
+      }
     }
     pidLastMeasuredPos = currentPos;
     return;

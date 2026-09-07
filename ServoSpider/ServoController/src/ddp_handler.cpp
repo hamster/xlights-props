@@ -25,8 +25,8 @@ bool ddpAckConfig = false;
 static String ddpRxLogBuffer;
 static const size_t DDP_RX_LOG_MAX_BYTES = 190000;
 
-static void appendDdpRxLog(const String& line) {
-  ddpRxLogBuffer += line;
+static void appendDdpRxLog(const char* line) {
+  ddpRxLogBuffer += line;  // String::operator+=(const char*) appends directly, no intermediate String
   ddpRxLogBuffer += '\n';
   if (ddpRxLogBuffer.length() > DDP_RX_LOG_MAX_BYTES) {
     size_t excess = ddpRxLogBuffer.length() - DDP_RX_LOG_MAX_BYTES;
@@ -149,7 +149,12 @@ void handleDDP() {
     unsigned long nowMs = millis();
     if (nowMs - lastRssiLogMs >= 500) {
       lastRssiLogMs = nowMs;
-      appendDdpRxLog(String(nowMs) + ",RSSI," + String(WiFi.RSSI()));
+      // Fixed buffer + snprintf(), not chained String concatenation - see
+      // main.cpp's logCompactMotion() for why (sustained heap churn from
+      // per-line String temporaries caused a real firmware crash there).
+      char logLine[48];
+      snprintf(logLine, sizeof(logLine), "%lu,RSSI,%d", nowMs, WiFi.RSSI());
+      appendDdpRxLog(logLine);
     }
   }
 
@@ -184,7 +189,9 @@ void handleDDP() {
       Serial.println(")");
     }
     if (ddpRxLogConfig) {
-      appendDdpRxLog(String(millis()) + ",DDPREJ," + String(header.sequenceNum) + "," + String(lastAcceptedDdpSeq));
+      char logLine[48];
+      snprintf(logLine, sizeof(logLine), "%lu,DDPREJ,%d,%d", millis(), header.sequenceNum, lastAcceptedDdpSeq);
+      appendDdpRxLog(logLine);
     }
     while (ddpUdp.available()) {
       ddpUdp.read();
@@ -279,7 +286,9 @@ void handleDDP() {
           Serial.println(positionRequest);
         }
         if (ddpRxLogConfig) {
-          appendDdpRxLog(String(millis()) + ",DRX," + String(header.sequenceNum) + "," + String(positionRequest));
+          char logLine[48];
+          snprintf(logLine, sizeof(logLine), "%lu,DRX,%d,%d", millis(), header.sequenceNum, positionRequest);
+          appendDdpRxLog(logLine);
         }
       } else {
         if (protocolDebugConfig) {
@@ -300,7 +309,9 @@ void handleDDP() {
           Serial.println(positionRequest);
         }
         if (ddpRxLogConfig) {
-          appendDdpRxLog(String(millis()) + ",DRX," + String(header.sequenceNum) + "," + String(positionRequest));
+          char logLine[48];
+          snprintf(logLine, sizeof(logLine), "%lu,DRX,%d,%d", millis(), header.sequenceNum, positionRequest);
+          appendDdpRxLog(logLine);
         }
       } else {
         if (protocolDebugConfig) {
