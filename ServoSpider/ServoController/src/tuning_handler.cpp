@@ -48,19 +48,17 @@ static bool getTunable(const String& name, String& valueOut) {
   if (name == "homeAccel") { valueOut = String(stepperAccelHomingConfig); return true; }
   if (name == "lookaheadSteps") { valueOut = String(stepperLookaheadStepsConfig); return true; }
   if (name == "lookaheadSettle") { valueOut = String(stepperLookaheadSettleMsConfig); return true; }
-  // TRACK_MODE_PID - Kp/Ki/Kd are floats, unlike every other tunable here
+  // TRACK_MODE_PID - Kp/Kd are floats, unlike every other tunable here
   // (4 decimal places - these are small per-step/per-second gains where
   // integer precision would be far too coarse to tune usefully).
   if (name == "pidKp") { valueOut = String(stepperPidKpConfig, 4); return true; }
-  if (name == "pidKi") { valueOut = String(stepperPidKiConfig, 4); return true; }
   if (name == "pidKd") { valueOut = String(stepperPidKdConfig, 4); return true; }
   if (name == "pidMaxSpeed") { valueOut = String(stepperPidMaxSpeedConfig); return true; }
   if (name == "pidAccel") { valueOut = String(stepperPidAccelConfig); return true; }
   if (name == "pidDeadband") { valueOut = String(stepperPidDeadbandConfig); return true; }
   if (name == "pidReengageThreshold") { valueOut = String(stepperPidReengageThresholdConfig); return true; }
   if (name == "pidFeedforward") { valueOut = String(stepperPidFeedforwardConfig ? 1 : 0); return true; }
-  if (name == "pidTrajAccel") { valueOut = String(stepperPidTrajAccelConfig); return true; }
-  if (name == "pidTrajFollow") { valueOut = String(stepperPidTrajFollowConfig ? 1 : 0); return true; }
+  if (name == "pidFfWindowMs") { valueOut = String(stepperPidFfWindowMsConfig); return true; }
   // RAM-only live current control for bench sweeps (current-vs-speed
   // characterization) - see setTunable()'s handling of this name for why
   // it's kept separate from /save-tmc's full-settings path.
@@ -94,7 +92,7 @@ static const char* ALL_TUNABLE_NAMES[] = {
   "trackSpeed", "trackAccel", "trackMaxLag", "trackMode", "coalesceMs",
   "coalesceSteps", "streamRateWindow", "streamSettle", "compactLog", "protocolDebug",
   "homeSpeed", "homeAccel", "lookaheadSteps", "lookaheadSettle",
-  "pidKp", "pidKi", "pidKd", "pidMaxSpeed", "pidAccel", "pidDeadband", "pidReengageThreshold", "pidFeedforward", "pidTrajAccel", "pidTrajFollow",
+  "pidKp", "pidKd", "pidMaxSpeed", "pidAccel", "pidDeadband", "pidReengageThreshold", "pidFeedforward", "pidFfWindowMs",
   "tmcRunCurrent", "tmcStallEnabled", "positionRequest", "ddpRxLog", "ddpAck"
 };
 static const int ALL_TUNABLE_COUNT = sizeof(ALL_TUNABLE_NAMES) / sizeof(ALL_TUNABLE_NAMES[0]);
@@ -131,18 +129,16 @@ static bool setTunable(const String& name, const String& valueStr) {
   if (name == "homeAccel") { stepperAccelHomingConfig = v; return true; }
   if (name == "lookaheadSteps") { stepperLookaheadStepsConfig = v; return true; }
   if (name == "lookaheadSettle") { stepperLookaheadSettleMsConfig = v; return true; }
-  // TRACK_MODE_PID - Kp/Ki/Kd parsed as floats (toInt()'s `v` above would
+  // TRACK_MODE_PID - Kp/Kd parsed as floats (toInt()'s `v` above would
   // truncate a gain like 1.5 to 1), everything else uses the shared int `v`.
   if (name == "pidKp") { stepperPidKpConfig = valueStr.toFloat(); return true; }
-  if (name == "pidKi") { stepperPidKiConfig = valueStr.toFloat(); return true; }
   if (name == "pidKd") { stepperPidKdConfig = valueStr.toFloat(); return true; }
   if (name == "pidMaxSpeed") { stepperPidMaxSpeedConfig = v; return true; }
   if (name == "pidAccel") { stepperPidAccelConfig = v; return true; }
   if (name == "pidDeadband") { stepperPidDeadbandConfig = v; return true; }
   if (name == "pidReengageThreshold") { stepperPidReengageThresholdConfig = v; return true; }
   if (name == "pidFeedforward") { stepperPidFeedforwardConfig = (v != 0); return true; }
-  if (name == "pidTrajAccel") { stepperPidTrajAccelConfig = v; return true; }
-  if (name == "pidTrajFollow") { stepperPidTrajFollowConfig = (v != 0); return true; }
+  if (name == "pidFfWindowMs") { stepperPidFfWindowMsConfig = v; return true; }
   // Deliberately bypasses /save-tmc entirely: that handler writes all 14 TMC
   // Preferences keys to flash on every call (real wear across a long sweep)
   // and reconstructs every other TMC field from HTTP form args, where an

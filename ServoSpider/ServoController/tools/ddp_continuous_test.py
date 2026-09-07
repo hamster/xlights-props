@@ -77,22 +77,37 @@ def ensure_homed(host, timeout=90.0):
     return False
 
 
-def build_ddp_packet(seq, value):
+def build_ddp_packet(seq, value, bits=8):
+    """Stepper position is always at byte offset 0. 8-bit sends one byte;
+    16-bit sends two, MSB first - matching ddp_handler.cpp's parse under
+    control16BitConfig (see its byteOffsetInPacket block)."""
+    if bits == 16:
+        payload = bytes([(value >> 8) & 0xFF, value & 0xFF])
+    else:
+        payload = bytes([value & 0xFF])
     header = struct.pack(DDP_HEADER_FMT, DDP_FLAGS_PUSH_V1, seq, DDP_DATA_TYPE_RGB,
-                          DDP_DESTINATION, 0, 1)
-    return header + bytes([value])
+                          DDP_DESTINATION, 0, len(payload))
+    return header + payload
 
 
-def triangle_value_wrapped(elapsed_s, period_s):
+def triangle_value_wrapped(elapsed_s, period_s, bits=8):
     """Matches DdpSender.java's triangleValue() exactly: wraps continuously
-    via elapsed % period, not a single ramp that holds after `period`."""
+    via elapsed % period, not a single ramp that holds after `period`.
+
+    The wave itself is identical at either bit depth - only the quantization
+    of each sample changes (256 levels vs 65536). That distinction matters
+    for more than position resolution: updatePidMode()'s velocity feedforward
+    estimates rate from consecutive *target* changes, so at 8-bit it is
+    differentiating a signal that only ever moves in ~60-step jumps on this
+    device, which injects real noise into the commanded speed."""
     period = max(0.01, period_s)
     phase = (elapsed_s % period) / period  # [0, 1)
+    full = 65535.0 if bits == 16 else 255.0
     if phase < 0.5:
-        value = phase * 2.0 * 255.0
+        value = phase * 2.0 * full
     else:
-        value = (1.0 - phase) * 2.0 * 255.0
-    return max(0, min(255, int(round(value))))
+        value = (1.0 - phase) * 2.0 * full
+    return max(0, min(int(full), int(round(value))))
 
 
 def run(args):
@@ -124,9 +139,9 @@ def run(args):
         elapsed = now - start
         if elapsed >= args.duration:
             break
-        value = triangle_value_wrapped(elapsed, args.period)
+        value = triangle_value_wrapped(elapsed, args.period, args.bits)
         seq = (seq % 15) + 1
-        sock.sendto(build_ddp_packet(seq, value), (args.ddp_host, DDP_PORT))
+        sock.sendto(build_ddp_packet(seq, value, args.bits), (args.ddp_host, DDP_PORT))
         sent += 1
         time.sleep(interval)
     print(f"Sent {sent} packets over {time.monotonic()-start:.1f}s")
@@ -229,7 +244,13 @@ def analyze(lines, args):
     # picked up 126 "reversals" from ordinary sender jitter in a 5-cycle
     # test - not useful). De-duplicated by time so one real reversal
     # (which can span several ticks sitting near the boundary) counts once.
-    ddp_boundary_idxs = [i for i, r in enumerate(rows) if r["ddpVal"] <= 3 or r["ddpVal"] >= 252]
+    # Scale the boundary test to the actual DDP width in use (8- vs 16-bit)
+    # rather than hardcoding 8-bit's 0..255 - inferred from the data so an
+    # existing 8-bit log still analyses identically.
+    ddp_full = 65535 if max(r["ddpVal"] for r in rows) > 255 else 255
+    ddp_lo = ddp_full * 3 // 255
+    ddp_hi = ddp_full - ddp_lo
+    ddp_boundary_idxs = [i for i, r in enumerate(rows) if r["ddpVal"] <= ddp_lo or r["ddpVal"] >= ddp_hi]
     reversal_ms = []
     last_ms = None
     for i in ddp_boundary_idxs:
@@ -288,6 +309,10 @@ def main():
     parser.add_argument("--period", type=float, default=8.0, help="Triangle wave period in seconds")
     parser.add_argument("--duration", type=float, default=60.0, help="Total test duration in seconds")
     parser.add_argument("--rate-hz", type=float, default=40.0)
+    parser.add_argument("--bits", type=int, choices=(8, 16), default=8,
+                        help="DDP stepper channel width. Must match the device's "
+                             "control16Bit setting (set it via the config file's "
+                             "control16Bit key, or the web UI).")
     parser.add_argument("--config", default=None, help="JSON file of {tunableName: value} to apply via HTTP first")
     parser.add_argument("--home-timeout", type=float, default=90.0)
     parser.add_argument("--label", default="ddp_continuous")

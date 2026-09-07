@@ -146,7 +146,6 @@ int stepperLookaheadSettleMsConfig = 150;
 //      only ever swept with Ki=0 - needs a sustained-tracking test, not
 //      a step-response one).
 float stepperPidKpConfig = 4.0f;
-float stepperPidKiConfig = 0.0f;
 float stepperPidKdConfig = 0.3f;
 // 7000 Hz per the 2026-09-06 speed/current characterization sweeps and
 // live listening on the bench: the measured stall boundary was ~8500 Hz
@@ -179,16 +178,24 @@ int stepperPidReengageThresholdConfig = 150;
 // TODO.md's "Time-budget feedforward" section for the full comparison
 // against both the pre-feedforward PID baseline and Direct mode.
 bool stepperPidFeedforwardConfig = true;
-// 30,000 - starting point, unvetted (2026-09-07) - see its declaration
-// comment (stepper_handler.h). Deliberately below stepperPidAccelConfig
-// (50,000): this is the rate limit on the *reference* pTerm chases, not
-// on the stepper's own physical response - it needs to be smooth, not
-// necessarily fast, since pidTrajVel already starts from
-// pidFeedforwardVelocity (the real measured rate) and only needs to trim
-// toward the true target on top of that.
-int stepperPidTrajAccelConfig = 30000;
-// Off by default - see its declaration comment (stepper_handler.h).
-bool stepperPidTrajFollowConfig = false;
+// 10,000 Hz/s - starting point, to be swept (2026-09-07). Chosen to match
+// the pidAccel value that measured best against Direct mode in the
+// whole-output sweep this replaces (pidAccel=10000: jerk 190 vs Direct's
+// 153, and better than Direct on both rms_error and corner tightness) -
+// the same amount of rate-limiting, now applied only to the half of the
+// output that actually needs it. See its declaration comment
+// (stepper_handler.h).
+// 200ms - swept against the real DDPDebugger-fidelity continuous wave at
+// period=8s (tools/ddp_continuous_test.py, 16-bit source). Ten 20ms ticks.
+// The sweep (jerk / rms_error / corner mean):
+//   100ms -> 377 / 295 / 466      160ms -> 310 / 291 / 482
+//   200ms -> 216 / 319 / 619      240ms -> 238 / 332 / 692
+// 200ms is the knee: it cuts jerk 55% against the pre-change baseline
+// (481) for a modest accuracy cost, and still tracks roughly 1.9x closer
+// than Direct mode on both rms_error and corner tightness while sitting
+// within 1.4x of Direct's jerk (153) - where the old config was 3.1x.
+// Longer windows keep trading accuracy for very little further jerk.
+int stepperPidFfWindowMsConfig = 200;
 
 bool stepperSettingsPendingSave = false;
 

@@ -60,7 +60,6 @@ unsigned long lastLookaheadCommandMs = 0;
 // --- TRACK_MODE_PID state --- (see that enum value's declaration comment, stepper_handler.h)
 bool pidSettled = true;
 unsigned long lastPidUpdateMs = 0;
-float pidIntegral = 0;
 long pidLastMeasuredPos = 0;   // for derivative-on-measurement, not derivative-on-error - see updatePidMode()
 // Low-pass-filtered version of the raw measured rate, used for the
 // derivative term instead of the raw value (2026-09-07 - chasing the
@@ -76,35 +75,15 @@ float pidFilteredRate = 0;
 // (513.5 baseline -> 496.9 -> 506.8, within run-to-run noise) - the
 // derivative term is NOT the dominant jerk source. Left in (a real, if
 // small, accuracy/corner-tightness improvement - 246.5->228.8 rms_error,
-// 595.5->515.2 corner mean at the heavier setting), but see pidSmoothTarget
-// below for what actually mattered.
+// 595.5->515.2 corner mean at the heavier setting).
 
-// Accel-limited trajectory reference the P-term tracks, instead of the
-// raw DDP-quantized target directly (2026-09-07, "plan #4" after the
-// derivative filter above didn't close the jerk gap to Direct mode).
-// Root cause, worked out by elimination: neither feedforward's own
-// smoothing nor the derivative filter above touched jerk, but lowering
-// pidAccel (tried earlier the same night) did - a strong hint the P-term
-// itself was the driver, since a lower accel is really just an
-// involuntary rate-limiter on how fast the stepper can react to pTerm's
-// own choppy output (pTerm recomputes from the raw, DDP-quantized target
-// every 20ms tick, so its output is exactly as jumpy as the target's own
-// quantized arrival). Rather than limit the *stepper's* reaction (which
-// also blunts real correction authority - the corner-tightness/rms_error
-// cost measured earlier), this limits the *reference signal* P-term
-// reacts to: pidSmoothTarget slews toward the real target at a bounded
-// rate/accel (pidTrajAccelConfig), so whatever choppiness exists in the
-// target's own arrival can't reach pTerm at all. Reset alongside
-// pidIntegral/pidFilteredRate whenever PID re-settles.
-float pidSmoothTarget = 0;
-float pidTrajVel = 0;
-// True whenever pidSmoothTarget needs to be (re)initialized to the actual
-// current position before it's used - set alongside every pidIntegral/
-// pidFilteredRate reset. Without this, pidSmoothTarget would start a
-// fresh engagement at its last reset value (0) rather than wherever the
-// stepper actually is, producing exactly the kind of large one-shot
-// error spike this whole mechanism exists to avoid.
-bool pidTrajNeedsInit = true;
+
+// Latches the overshoot safety net so it fires once per genuine excursion
+// outside [0, bottomPosition] rather than on every tick the trolley is
+// parked outside it - cleared only once curPos is genuinely back inside.
+// See the net itself (top of updatePidMode()) for the 3.5s freeze this
+// fixes.
+bool pidOvershootLatched = false;
 // Time-budget-aware velocity feedforward (2026-09-07 - see the user's own
 // original framing: PID had no notion of how much time it actually has to
 // get from one commanded point to the next, so it always drove at full
@@ -112,15 +91,26 @@ bool pidTrajNeedsInit = true;
 // timeline). Self-measures the real rate the incoming *target* has been
 // changing at - not an assumed DDP fps - so it adapts to whatever a show
 // was actually authored at (25fps, 40fps, anything) with nothing
-// hardcoded. See updatePidMode()'s feedforward block for the full design.
-float pidFeedforwardLastTarget = 0;        // target value as of the last observed real change
-unsigned long pidFeedforwardLastChangeMs = 0;  // when that change was observed
+// hardcoded. See updatePidMode()'s feedforward block for the full design,
+// including why this measures over a fixed time window rather than
+// between consecutive target changes.
+struct PidFfSample {
+  float target;
+  unsigned long ms;
+};
+// 320ms of history at the 20ms tick - comfortably longer than any window
+// worth configuring, so stepperPidFfWindowMsConfig is never silently
+// truncated by the buffer at usable settings.
+static const int PID_FF_HIST_LEN = 16;
+PidFfSample pidFfHist[PID_FF_HIST_LEN];
+// Scratch for the regression below - a file-scope array rather than a
+// stack one purely to keep updatePidMode()'s frame small; it holds no
+// state between calls.
+struct PidFfWorkPoint { float t; float y; };
+PidFfWorkPoint pidFfWork[PID_FF_HIST_LEN];
+int pidFfHistIdx = 0;
+int pidFfHistCount = 0;
 float pidFeedforwardVelocity = 0;          // current feedforward speed estimate, steps/s (signed)
-// If the target hasn't actually changed for this long, stop coasting on a
-// stale rate estimate - a real gap this size (several multiples of any
-// normal 25-40Hz DDP cadence) means the source paused or stopped, not that
-// it's still moving at whatever rate was last measured.
-static const unsigned long PID_FEEDFORWARD_MAX_GAP_MS = 200;
 bool pidStopSettling = false;  // mirrors streamStopSettling - wait for a forceStop() to actually finish before restarting
 int pidCurrentDirection = 0;   // -1, 0, 1
 // Throttle for re-issuing runForward()/runBackward() after FastAccelStepper
@@ -550,15 +540,34 @@ void updatePidMode() {
     // actual recovery/re-engage logic further down in this function run
     // to completion until the small excursion happened to resolve on its
     // own. Tolerance matches RAMMED_STEP_TOLERANCE's precedent
-    // (stepper_handler.cpp) for the same class of judgment call. The
-    // !pidStopSettling guard means a genuine large overshoot still stops
-    // exactly once per excursion, not repeatedly - the wait-for-settle
-    // logic later in this function is what actually recovers from there.
+    // (stepper_handler.cpp) for the same class of judgment call.
+    //
+    // pidOvershootLatched (2026-09-07 evening) is what actually makes
+    // "exactly once per excursion" true. The !pidStopSettling guard alone
+    // doesn't: pidStopSettling clears as soon as the stepper genuinely
+    // stops, but the trolley is then still parked outside bounds, so the
+    // very next tick re-fires this check, forceStop()s an already-stopped
+    // motor, and re-arms the wait - a loop that only ends when the
+    // commanded target happens to travel back to wherever the trolley is
+    // parked. Measured directly: a 3.5s freeze at curPos=15670 against
+    // bottomPosition+tolerance=15652, with the control law correctly
+    // asking to drive back down the whole time and never getting a tick
+    // in which to do it. The same loop is what made the shorter (600-700ms)
+    // top-of-travel stalls seen in earlier sweeps.
+    //
+    // Latching until curPos is genuinely back inside the bounds means the
+    // safety net fires once on the way out, then hands control to the
+    // normal control law to drive back in - which is what it was always
+    // documented to do.
     static const int PID_OVERSHOOT_TOLERANCE = 150;
-    if (!pidStopSettling &&
-        (curPos < -PID_OVERSHOOT_TOLERANCE || curPos > bottomPosition + PID_OVERSHOOT_TOLERANCE)) {
+    bool outOfBounds = (curPos < -PID_OVERSHOOT_TOLERANCE ||
+                        curPos > bottomPosition + PID_OVERSHOOT_TOLERANCE);
+    if (!outOfBounds) {
+      pidOvershootLatched = false;  // back inside - re-arm for a genuine future excursion
+    } else if (!pidStopSettling && !pidOvershootLatched) {
       stepper->forceStop();
       pidStopSettling = true;
+      pidOvershootLatched = true;
       continuousRunDirection = 0;
     }
   }
@@ -572,54 +581,80 @@ void updatePidMode() {
   float target = calcPosition(positionRequest, control16BitConfig);
   float error = target - (float)currentPos;
 
-  // Feedforward measurement - runs every tick regardless of which branch
-  // below ends up firing, so the rate estimate stays continuous and isn't
-  // reset by time spent settled/hysteresis-snapping. Measures how far the
-  // *target* actually moved between the last two real changes and over
-  // how long, not how often packets arrive - correctly self-corrects for
-  // 8-bit DDP quantization (a target that only advances once every 2-3
-  // packets at 40fps still yields the right real-world rate, since both
-  // the distance and the elapsed time reflect that).
-  if (target != pidFeedforwardLastTarget) {
-    if (pidFeedforwardLastChangeMs != 0) {
-      unsigned long sinceLastChange = now - pidFeedforwardLastChangeMs;
-      if (sinceLastChange > 0 && sinceLastChange <= PID_FEEDFORWARD_MAX_GAP_MS) {
-        float instVelocity = (target - pidFeedforwardLastTarget) / (sinceLastChange / 1000.0f);
-        // Sanity clamp (2026-09-07, added chasing a rare ~1-in-6-cycles
-        // overshoot at direction reversals): right at a peak/trough, a
-        // real sender's own timing jitter (confirmed against DDPDebugger's
-        // actual source - it computes each value from real elapsed time,
-        // not a clean schedule) can occasionally produce a tiny elapsed
-        // gap paired with a target delta that straddles the reversal,
-        // yielding a wildly overstated instantaneous velocity. Clamping
-        // before it ever reaches the EMA keeps one bad sample from
-        // skewing the running estimate; the final commanded speed was
-        // already clamped to pidMaxSpeedConfig regardless, so this isn't
-        // a new behavioral ceiling, just keeping bad inputs out of the
-        // smoothed estimate itself.
-        float clampMag = (float)stepperPidMaxSpeedConfig * 1.5f;
-        if (instVelocity > clampMag) instVelocity = clampMag;
-        if (instVelocity < -clampMag) instVelocity = -clampMag;
-        // EMA - a single inter-change gap can be jittery (network timing,
-        // or landing just before/after a quantization boundary); average
-        // several together rather than trusting one sample. Weighted
-        // toward the running estimate (0.7/0.3, was 0.5/0.5) for the same
-        // reversal-overshoot reason as the clamp above - slower to react
-        // to a single outlier, still tracks a genuine sustained rate
-        // change within a handful of ticks.
-        pidFeedforwardVelocity = (pidFeedforwardVelocity == 0)
-                                      ? instVelocity
-                                      : (0.7f * pidFeedforwardVelocity + 0.3f * instVelocity);
-      }
-      // A gap longer than the timeout: leave pidFeedforwardVelocity as-is
-      // for this tick (the "stale, zero it out" handling below covers
-      // that) rather than computing a bogus instVelocity from it.
+  // Velocity feedforward measurement - runs every tick regardless of which
+  // branch below ends up firing, so the estimate stays continuous and isn't
+  // reset by time spent settled or hysteresis-snapping.
+  //
+  // Measures the target's rate over a FIXED TIME WINDOW (the oldest sample
+  // still inside stepperPidFfWindowMsConfig), not "distance since the last
+  // observed change over the time since that change". That distinction is
+  // the whole point, and it was worth real bench time to find:
+  //
+  // The old formulation divided a fine numerator by a coarse denominator.
+  // This function only samples on its own ~20ms tick, so "time since the
+  // last observed change" is quantized to whole ticks (20/40/60ms) while a
+  // 40fps source actually delivers every 25ms - the two beat against each
+  // other, and the resulting ratio swings hard even when the real motion is
+  // perfectly smooth. Measured at ~350-400 Hz/tick of chop reaching the
+  // commanded speed, making it the single largest jerk source in the loop -
+  // larger than the P and D terms combined, which is why neither the
+  // derivative filter nor a P-term-only slew limiter nor the shelved
+  // trajectory-reference layer ever moved jerk. Confirmed independent of
+  // DDP bit depth (8-bit and 16-bit both measured ~570-580 Hz/tick), which
+  // is what ruled quantization out as the cause.
+  //
+  // Over a fixed window the denominator is a real elapsed time, so there is
+  // no beat to alias - and unlike an EMA slow enough to suppress the same
+  // noise, it adds only about half the window in lag rather than several
+  // time constants. It also needs no separate machinery: no EMA, no
+  // outlier clamp (a bounded-below denominator can't produce a wild
+  // ratio), and no "stale, zero it out" timeout - if the target stops
+  // moving, the window's own numerator goes to zero within one window,
+  // which is exactly the correct answer.
+  pidFfHist[pidFfHistIdx].target = target;
+  pidFfHist[pidFfHistIdx].ms = now;
+  pidFfHistIdx = (pidFfHistIdx + 1) % PID_FF_HIST_LEN;
+  if (pidFfHistCount < PID_FF_HIST_LEN) pidFfHistCount++;
+
+  {
+    // Least-squares slope over every sample inside the window, not the
+    // difference between its two endpoints (2026-09-07 evening, measured).
+    // An endpoint difference over a longer baseline only rescales the
+    // noise - it never averages it - which showed up exactly that way on
+    // the bench: widening a two-point window improved corner tightness a
+    // lot (the aliasing was gone) but left jerk high, while an EMA over
+    // the old estimator did the reverse (averaged the noise, but lagged
+    // real corners badly). A regression slope does both jobs with one
+    // knob: it is unbiased on a constant-rate ramp, it averages all N
+    // samples rather than trusting two, and its only cost at a genuine
+    // corner is about half the window in lag - the same cost the endpoint
+    // version already paid, for far better noise rejection.
+    unsigned long windowMs = (unsigned long)stepperPidFfWindowMsConfig;
+    int newestIdx = (pidFfHistIdx - 1 + PID_FF_HIST_LEN) % PID_FF_HIST_LEN;
+    float sumT = 0, sumY = 0;
+    int n = 0;
+    for (int back = 0; back < pidFfHistCount; back++) {
+      int idx = (newestIdx - back + PID_FF_HIST_LEN) % PID_FF_HIST_LEN;
+      unsigned long age = now - pidFfHist[idx].ms;
+      if (back > 0 && age > windowMs) break;
+      pidFfWork[n].t = -(float)age / 1000.0f;  // seconds, relative to now (<= 0)
+      pidFfWork[n].y = pidFfHist[idx].target;
+      sumT += pidFfWork[n].t;
+      sumY += pidFfWork[n].y;
+      n++;
     }
-    pidFeedforwardLastChangeMs = now;
-    pidFeedforwardLastTarget = target;
-  } else if (pidFeedforwardLastChangeMs != 0 &&
-             now - pidFeedforwardLastChangeMs > PID_FEEDFORWARD_MAX_GAP_MS) {
-    pidFeedforwardVelocity = 0;  // stale - source paused/stopped, don't keep coasting
+    if (n < 2) {
+      pidFeedforwardVelocity = 0;  // not enough history yet - no rate to report
+    } else {
+      float meanT = sumT / n, meanY = sumY / n;
+      float num = 0, den = 0;
+      for (int i = 0; i < n; i++) {
+        float dt2 = pidFfWork[i].t - meanT;
+        num += dt2 * (pidFfWork[i].y - meanY);
+        den += dt2 * dt2;
+      }
+      pidFeedforwardVelocity = (den > 1e-9f) ? (num / den) : 0;
+    }
   }
 
   if (fabs(error) <= (float)stepperPidDeadbandConfig) {
@@ -637,9 +672,7 @@ void updatePidMode() {
       logCompactMotion(positionRequest, (int)target, curPosBeforeMove, 0, (int)error,
                         true, curSpeedBeforeMove, 0);
       pidSettled = true;
-      pidIntegral = 0;
       pidFilteredRate = 0;  // don't carry a stale rate estimate into the next engagement
-      pidTrajNeedsInit = true;  // re-init pidSmoothTarget to wherever we actually are next engagement
       pidCurrentDirection = 0;
       // In sync with pidCurrentDirection's reset - if a pending direction
       // switch's forceStop()/settle got interrupted by the target landing
@@ -790,51 +823,7 @@ void updatePidMode() {
   // resonance characterized earlier this session. 0.85/0.15 instead.
   pidFilteredRate = 0.85f * pidFilteredRate + 0.15f * measuredRate;
 
-  // Accel-limited trajectory reference (2026-09-07, "plan #4" - see
-  // pidSmoothTarget's declaration comment for the full design/rationale).
-  // pTerm tracks this smooth reference instead of the raw, DDP-quantized
-  // `target` directly - `error`/`target` above are untouched and still
-  // used for the deadband/hysteresis entry checks and the moveTo()-based
-  // settle, which want the *true* position, not a lagging smoothed one.
-  //
-  // OFF BY DEFAULT (stepperPidTrajFollowConfig) - found two real,
-  // reproducible bugs testing this on the bench: at pidTrajAccel=30000 it
-  // let real, sustained lag build up during fast motion (rms_error
-  // 246.5->840.5, two real overshoot stalls); at 80000 it produced a
-  // genuine 27-second freeze. Root cause not fully solved: pidSmoothTarget
-  // keeps a velocity/position of its own that can drift arbitrarily far
-  // from reality while a forceStop()/pidStopSettling wait blocks this
-  // whole function from reaching this code at all (target keeps moving
-  // via real DDP packets during the wait; pidSmoothTarget doesn't) - the
-  // catch-up afterward can itself provoke another overshoot, repeating.
-  // At the one accel value that avoided outright failure (150000) it
-  // tracked so tightly the smoothing benefit disappeared (jerk got
-  // *worse* than not using it at all: 558.5 vs 513.5). Kept in, gated
-  // off, as a base for a more careful future attempt (needs anticipatory
-  // braking near the physical bounds, and to freeze/resync cleanly
-  // across a forceStop() wait) rather than thrown away outright.
-  float pTermError = error;  // default: raw error, unchanged behavior
-  if (stepperPidTrajFollowConfig) {
-    if (pidTrajNeedsInit) {
-      pidSmoothTarget = (float)currentPos;
-      pidTrajVel = 0;
-      pidTrajNeedsInit = false;
-    }
-    float trajError = target - pidSmoothTarget;
-    float desiredTrajVel = pidFeedforwardVelocity + trajError * 4.0f;
-    if (desiredTrajVel > stepperPidMaxSpeedConfig) desiredTrajVel = (float)stepperPidMaxSpeedConfig;
-    if (desiredTrajVel < -stepperPidMaxSpeedConfig) desiredTrajVel = -(float)stepperPidMaxSpeedConfig;
-    float maxTrajDeltaV = (float)stepperPidTrajAccelConfig * dt;
-    if (desiredTrajVel - pidTrajVel > maxTrajDeltaV) desiredTrajVel = pidTrajVel + maxTrajDeltaV;
-    if (desiredTrajVel - pidTrajVel < -maxTrajDeltaV) desiredTrajVel = pidTrajVel - maxTrajDeltaV;
-    pidTrajVel = desiredTrajVel;
-    pidSmoothTarget += pidTrajVel * dt;
-    pTermError = pidSmoothTarget - (float)currentPos;
-  } else {
-    pidTrajNeedsInit = true;  // stay ready to re-init cleanly if re-enabled live
-  }
-
-  float pTerm = stepperPidKpConfig * pTermError;
+  float pTerm = stepperPidKpConfig * error;
   float dTerm = -stepperPidKdConfig * pidFilteredRate;
   // Feedforward carries the "known" bulk of the motion (see the
   // measurement block above); toggleable so it stays A/B-testable against
@@ -842,20 +831,15 @@ void updatePidMode() {
   // this session.
   float ffTerm = stepperPidFeedforwardConfig ? pidFeedforwardVelocity : 0;
 
-  // Anti-windup: only accumulate the integral term while the combined
-  // output isn't already saturated at the speed cap - otherwise a
-  // sustained large error (e.g. right after a big DDP jump) winds the
-  // integral up far past what's useful and causes a real overshoot once
-  // error finally starts shrinking back toward zero. Includes feedforward
-  // in the saturation check - it's part of the real commanded output too.
-  float provisional = ffTerm + pTerm + dTerm + stepperPidKiConfig * pidIntegral;
-  bool saturated = fabs(provisional) >= (float)stepperPidMaxSpeedConfig;
-  if (!saturated) {
-    pidIntegral += error * dt;
-  }
-  float iTerm = stepperPidKiConfig * pidIntegral;
-
-  float speed = ffTerm + pTerm + iTerm + dTerm;
+  // Output is simply feedforward plus the P/D trim. A slew-rate limiter on
+  // the correction term was built and measured here (2026-09-07 evening) on
+  // the theory that pTerm's tick-to-tick chop was the jerk source, and
+  // removed again when the data said otherwise: limiting it to well below
+  // the P-term's own step size changed jerk by less than run-to-run noise
+  // (295 vs 310) while costing real accuracy (rms_error 318 vs 291) and
+  // corner tightness (611 vs 482). The jerk was in the feedforward
+  // estimator all along - see its measurement block above.
+  float speed = ffTerm + pTerm + dTerm;
   if (speed > stepperPidMaxSpeedConfig) speed = (float)stepperPidMaxSpeedConfig;
   if (speed < -stepperPidMaxSpeedConfig) speed = -(float)stepperPidMaxSpeedConfig;
 

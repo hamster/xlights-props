@@ -76,10 +76,10 @@
 //   normalSpeed, normalAccel, jumpStart, trackEnabled, trackThreshold,
 //   trackSpeed, trackAccel, trackMaxLag, trackMode, coalesceMs,
 //   coalesceSteps, streamRateWindow, streamSettle, compactLog, protocolDebug,
-//   homeSpeed, homeAccel, lookaheadSteps, lookaheadSettle, pidKp, pidKi,
+//   homeSpeed, homeAccel, lookaheadSteps, lookaheadSettle, pidKp,
 //   pidKd, pidMaxSpeed, pidAccel, pidDeadband, pidReengageThreshold,
-//   pidFeedforward, tmcRunCurrent, tmcStallEnabled, positionRequest,
-//   ddpRxLog, ddpAck
+//   pidFeedforward, pidFfWindowMs, tmcRunCurrent, tmcStallEnabled,
+//   positionRequest, ddpRxLog, ddpAck
 void handleExtendedSerialCommand(const String& line);
 
 // HTTP equivalent of $SET/$GET above - see its own declaration comment in

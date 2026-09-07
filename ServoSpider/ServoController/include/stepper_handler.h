@@ -251,10 +251,19 @@ enum StepperTrackMode {
 extern int stepperTrackModeConfig;
 
 // TRACK_MODE_PID parameters - see that enum value's comment for the control
-// law. Kp/Ki/Kd are floats (unlike every other tunable here) - $SET/$GET
-// special-case these three, see tuning_handler.cpp.
+// law. Kp/Kd are floats (unlike every other tunable here) - $SET/$GET
+// special-case both, see tuning_handler.cpp.
+//
+// There is deliberately no Ki (removed 2026-09-07): it was never once set
+// nonzero in any bench session, so iTerm was always exactly 0 while its
+// anti-windup guard cost a saturation check and an accumulator every tick.
+// Integral action has no obvious job here either - the deadband's
+// moveTo() snap already closes any steady-state P/D gap, and feedforward
+// now supplies the bulk velocity that an integrator would otherwise have
+// had to wind up to. Re-add it deliberately (with a real sustained-
+// tracking test) if a systematic bias ever shows up; don't restore it
+// speculatively.
 extern float stepperPidKpConfig;      // Hz per step of error (proportional gain)
-extern float stepperPidKiConfig;      // Hz per (step*second) of accumulated error (integral gain)
 extern float stepperPidKdConfig;      // Hz per (step/second) of measured-position rate (derivative gain, applied to -d(measured)/dt)
 extern int stepperPidMaxSpeedConfig;  // Hz - hard clamp on PID output magnitude
 extern int stepperPidAccelConfig;     // Hz/s - ramp rate FastAccelStepper uses when the PID output speed changes; the value the planned acceleration-characterization sweep is meant to inform
@@ -280,16 +289,15 @@ extern int stepperPidReengageThresholdConfig;
 // Kept toggleable so it stays A/B-testable against pure reactive PID with
 // the same sweep tooling used for every other change this session.
 extern bool stepperPidFeedforwardConfig;
-// steps/s^2 - accel limit on the smooth trajectory reference pTerm tracks,
-// not on the stepper itself (that's still stepperPidAccelConfig) - see
-// pidSmoothTarget's declaration comment (main.cpp) for the full design.
-extern int stepperPidTrajAccelConfig;
-// Off by default - see pTermError's declaration comment (main.cpp) for
-// two real, reproducible bugs found testing this (a real accuracy
-// regression at one accel setting, a genuine 27-second freeze at
-// another). Not root-caused; kept toggleable as a base for a more
-// careful future attempt rather than removed outright.
-extern bool stepperPidTrajFollowConfig;
+
+// ms - width of the fixed time window the velocity feedforward measures
+// the target's rate over. The feedforward estimate is the dominant jerk
+// source in the loop, and this is its smoothing knob: longer = smoother
+// commanded speed, at the cost of roughly half the window in added lag
+// following a genuine rate change (i.e. corner tightness). See
+// updatePidMode()'s feedforward block (main.cpp) for why a window beats
+// the EMA-over-consecutive-changes approach it replaced.
+extern int stepperPidFfWindowMsConfig;
 
 // TRACK_MODE_LOOKAHEAD parameters
 extern int stepperLookaheadStepsConfig;     // steps - how far beyond the commanded position to aim, in the

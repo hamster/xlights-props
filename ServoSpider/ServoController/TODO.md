@@ -6,6 +6,80 @@ Turn this into a standalone stepper-mover **+** pixel controller: one ESP32-S3 d
 
 Note: checked `git branch -a` / `git stash list` / `git log --all` — there is no leftover branch, stash, or commit anywhere in this repo with prior dual-core work. If there was earlier progress on splitting stepper/LED work across cores, it never made it into git, so treat this as a fresh design rather than something to dig up.
 
+## The jerk was in the feedforward estimator all along - found, fixed, PID now matches Direct mode's smoothness (2026-09-07, evening)
+
+User's reframing that started this: *"tuning for absolute speed isn't useful if it is going to be jerky... we can be behind a handful of frames and it will still look good - there is almost no instance that we need to be frame perfect, but we always need to be smooth."* That is a different objective from the one every previous session optimized against, and it changed the answer.
+
+### Result
+
+`pidFfWindowMs=200` + 16-bit DDP, with `Kp=4/Kd=0.3/pidAccel=50000` unchanged:
+
+| period | rms_error | jerk | corner mean | frame lag p95 | stalls |
+|---|---|---|---|---|---|
+| 6s | 461.7 | 318.5 | 906.4 | 4.8 | 0 |
+| 8s | 302.6 | 214.6 | 540.3 | 3.6 | 0 |
+| 12s | 196.1 | 142.6 | 289.5 | 3.4 | 0 |
+
+**At p12 jerk is 142.6 against Direct mode's 143 - the smoothness gap is closed outright** while tracking 1.4x tighter (rms 196 vs 274) with 1.6x tighter corners (290 vs 475). At p8, jerk is down 55% from the session's starting 481 (to 215, vs Direct's 153) while still tracking ~2x tighter than Direct on both rms_error and corner tightness.
+
+### Root cause: the velocity feedforward's input was structurally aliased
+
+Every prior smoothness attempt (derivative filtering, the shelved trajectory-reference layer, and a correction-term slew limiter built and discarded this session) targeted the P or D terms. Direct measurement showed why none of them ever moved the needle: with the correction slew-limited to 200 Hz/tick, the *commanded* speed still chopped ~550 Hz/tick. **The feedforward term was contributing ~350-400 Hz/tick by itself - more jerk than P and D combined.**
+
+The old estimator computed `(target - lastTarget) / (time since last observed change)`. It only samples on `updatePidMode()`'s own 20ms tick while a 40fps source delivers every 25ms, so the *denominator* was quantized to whole ticks (20/40/60ms) and beat against the real arrival rate - a fine numerator over a coarse, beating denominator. **Verified independent of DDP bit depth**: 8-bit and 16-bit both measured ~570-580 Hz/tick of commanded-speed chop.
+
+### Fix: least-squares slope over a fixed time window
+
+Three estimators measured against the same p8 wave. Worth recording because the first two are the obvious ideas and both are wrong:
+
+| estimator | jerk | rms_error | corner mean |
+|---|---|---|---|
+| EMA over consecutive changes (old), w=0.15 | 310 | 285 | 656 |
+| Two-point difference over a fixed 160ms window | 748 (at 60ms) / 482 (at 160ms) | 284-302 | 398-536 |
+| **Least-squares slope, 160ms window** | **310** | **291** | **482** |
+| EMA, w=0.08 | 238 | 397 | 878 |
+| **Least-squares slope, 240ms window** | **238** | **332** | **692** |
+
+- A **heavier EMA** averages the noise but lags real corners badly (corner 656 then 878 as it tightens).
+- A **two-point windowed difference** removes the aliasing (corners improve a lot - 398 at 60ms, the best measured anywhere) but only *rescales* noise rather than averaging it, so jerk got worse than baseline at short windows (748 at 60ms).
+- A **least-squares slope** does both jobs with one knob: unbiased on a constant-rate ramp, averages all N samples instead of trusting two endpoints, and costs only ~half the window in lag. It strictly dominates the EMA at equal jerk (at jerk 310: corner 482 vs 656; at jerk 238: rms 332 vs 397 and corner 692 vs 878).
+
+Window sweep (16-bit, p8, rms/jerk/corner): 100ms -> 295/377/466, 160ms -> 291/310/482, **200ms -> 319/216/619**, 240ms -> 332/238/692. 200ms is the knee, and is the new compiled default.
+
+### 16-bit DDP: real, but not for the reason first assumed
+
+Initially dismissed on the (correct) grounds that it does not change the trajectory, only the quantization of commanded position. It turned out to matter substantially - just for accuracy, not jerk: at p8 it took rms_error 249->216, corner mean 568->471, max_error 1024->592, and frame lag max 14.6->6.5. It did **not** improve jerk at all (510 vs 500), which is what ruled quantization out as the jerk cause and pointed at the estimator's denominator instead.
+
+### Bug found and fixed: the overshoot safety net could freeze the trolley for seconds
+
+`updatePidMode()`'s out-of-bounds `forceStop()` net re-fired on **every tick** the trolley sat parked outside `[0, bottomPosition]`. Its `!pidStopSettling` guard only holds until the motor stops - the trolley is then still out of bounds, so the next tick forceStop()s an already-stopped motor and re-arms the wait, a loop that only ends when the commanded target happens to travel back to where the trolley is parked. Measured directly: a **3.5s freeze at curPos=15670** against `bottomPosition+tolerance=15652`, with the control law correctly asking to drive back down the entire time and never getting a tick in which to do it.
+
+This is pre-existing, not new - it is what the intermittent 600-700ms top-of-travel stalls in earlier sweeps were (all at curPos just past bottomPosition: 15677, 15725, 15650). **Fixed** with `pidOvershootLatched`: the net fires once on the way out, then hands control to the normal control law to drive back in - which is what its own comment always claimed it did. Zero stalls across every run since, at every period.
+
+### Simplifications (all measured, none speculative)
+
+- **Removed `Ki` entirely** (`pidKi`, `pidIntegral`, and the anti-windup saturation check). It was never once set nonzero in any bench session, so `iTerm` was always exactly 0 while its guard cost a saturation check and an accumulator every tick. The deadband's `moveTo()` snap already closes any steady-state P/D gap, and feedforward supplies the bulk velocity an integrator would have had to wind up to. Re-add deliberately, with a real sustained-tracking test, if a systematic bias ever appears.
+- **Removed the shelved trajectory-reference layer** (`pidTrajFollow`/`pidTrajAccel`/`pidSmoothTarget`/`pidTrajVel`). Off by default, never worked (a 27-second freeze at one setting), and the velocity-domain approach supersedes its rationale entirely.
+- **Built and then removed a correction-term slew limiter.** The idea was to rate-limit P+D while leaving feedforward sharp, so `pidAccel` would not have to filter both. Sound reasoning, wrong target: it changed jerk by less than run-to-run noise (295 vs 310) while costing real accuracy (rms 318 vs 291) and corner tightness (611 vs 482). Removed rather than left in "since it does not hurt."
+- The old estimator's **outlier clamp and stale-target timeout are gone too** - a fixed window needs neither. A bounded-below denominator cannot produce a wild ratio, and if the target stops moving the window's numerator goes to zero within one window, which is the correct answer.
+
+Net: `updatePidMode()` is meaningfully shorter than it was this morning despite gaining a better estimator.
+
+### `pidAccel` re-swept downward first (superseded, but recorded)
+
+Before any of the above, `pidAccel` was swept below the previously-characterized 15000 floor, since the old data had been scored against PID@50000 rather than against Direct mode. At p8 (8-bit, Kp=4/Kd=0.3, rms/jerk/corner): 6000 -> 758/129/1513, 8000 -> 554/158/1274, **10000 -> 448/190/1002**, 12000 -> 433/215/1079. `pidAccel=10000` beat Direct on accuracy *and* corners at 1.24x its jerk, versus 3.1x for the shipped config - a genuine improvement available with zero code. Superseded by the feedforward fix, which is strictly better (it filters only the noisy half), so `pidAccel` stays at 50000. Also confirmed the two levers are **substitutes, not complements**: LS-160ms + `pidAccel=20000` (338/264/682) is worse than LS-240ms alone (332/238/692).
+
+### Tooling
+
+`tools/ddp_continuous_test.py` gained `--bits {8,16}` (sends the stepper channel as one byte or two MSB-first, matching `ddp_handler.cpp`'s parse under `control16Bit`), and its corner detector now scales its reversal-boundary test to the observed DDP width instead of hardcoding 8-bit's 0..255 - existing 8-bit logs still analyse identically.
+
+- [ ] **`control16Bit` is now persisted to NVS on the bench device.** The accuracy gain is real and worth keeping, but the DDP source must match - if xLights/FPP is still sending 8-bit, position will be wrong after a reboot. Revert with a `POST /config` body of `control16Bit=0` if the source is not switching too.
+- [ ] `trackMode=4` is still a live-only override, unchanged from the previous session - flash-saved fallback remains Direct. Still wants an explicit decision before being persisted.
+- [ ] `pidFfWindowMs` swept only at p8. p6/p12 were validated at the chosen 200ms and look right (jerk scales the way the wave does), but the *optimum* window may differ by period - a longer window may suit slow shows better.
+- [ ] The derivative filter (`pidFilteredRate`, 0.85/0.15) is now of unclear value - it was kept because it modestly helped accuracy back when the feedforward was noisy. Worth one A/B run to see if it still earns its place, in the same spirit as the removals above.
+- [ ] `Kp`/`Kd` have not been re-swept since the feedforward estimator changed. Kp=4/Kd=0.3 were tuned against a noisy feedforward; a clean one may support different gains.
+- [ ] The device dropped off HTTP after 2 of ~6 flashes this session, both times recovered by immediately re-running the same `pio run --target upload` - the same already-documented flake, no new information, but it recurred often enough to be worth expecting.
+
 ## Time-budget PID velocity feedforward - implemented, two real bugs found/fixed, tuned, and beats Direct mode on accuracy (2026-09-07)
 
 The user's own original framing, from earlier in this same marathon session: PID had no notion of *how much time it actually has* to get from one commanded point to the next, so it always drove at full reactive speed even for small moves paced by a much slower real show timeline. Direct mode (see the section below) turned out smoother for realistic pacing, but "I still think the PID mode could be better with some tweaking based on frame rate" - this section is that work.
