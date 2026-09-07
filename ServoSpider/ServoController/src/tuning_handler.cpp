@@ -5,6 +5,7 @@
 #include "encoder_diag.h"
 #include "core0_task.h"
 #include "tmc_handler.h"
+#include "ddp_handler.h"
 
 // Splits `line` on spaces into up to 3 tokens (command, name, value).
 // Returns the number of tokens found. Good enough for this simple protocol -
@@ -77,6 +78,10 @@ static bool getTunable(const String& name, String& valueOut) {
   // which competes with the same single-threaded WebServer everything else
   // on the device shares.
   if (name == "positionRequest") { valueOut = String(positionRequest); return true; }
+  // See ddp_handler.h's declaration comments - bench-only DDP reception
+  // diagnostics, work independent of homed state/tracking mode.
+  if (name == "ddpRxLog") { valueOut = String(ddpRxLogConfig ? 1 : 0); return true; }
+  if (name == "ddpAck") { valueOut = String(ddpAckConfig ? 1 : 0); return true; }
   return false;
 }
 
@@ -86,7 +91,7 @@ static const char* ALL_TUNABLE_NAMES[] = {
   "coalesceSteps", "streamRateWindow", "streamSettle", "compactLog", "protocolDebug",
   "homeSpeed", "homeAccel", "lookaheadSteps", "lookaheadSettle",
   "pidKp", "pidKi", "pidKd", "pidMaxSpeed", "pidAccel", "pidDeadband", "pidReengageThreshold", "tmcRunCurrent",
-  "tmcStallEnabled", "positionRequest"
+  "tmcStallEnabled", "positionRequest", "ddpRxLog", "ddpAck"
 };
 static const int ALL_TUNABLE_COUNT = sizeof(ALL_TUNABLE_NAMES) / sizeof(ALL_TUNABLE_NAMES[0]);
 
@@ -150,6 +155,9 @@ static bool setTunable(const String& name, const String& valueStr) {
   // form was submitted) - reintroducing the false-positive stalls this was
   // deliberately disabled for earlier the same session.
   if (name == "tmcStallEnabled") { tmcStallEnabledConfig = (v != 0); return true; }
+  // See ddp_handler.h's declaration comments.
+  if (name == "ddpRxLog") { ddpRxLogConfig = (v != 0); return true; }
+  if (name == "ddpAck") { ddpAckConfig = (v != 0); return true; }
   return false;
 }
 

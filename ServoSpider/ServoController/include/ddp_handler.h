@@ -16,6 +16,29 @@ extern unsigned long ddpPacketsReceived;
 // theoretical concern.
 extern unsigned long ddpPacketsRejectedOutOfOrder;
 
+// Bench-diagnostic tunables (RAM-only, $SET/$GET ddpRxLog / ddpAck) added
+// 2026-09-06 to directly instrument DDP reception quality - independent of
+// any tracking mode or stepper motion (the device doesn't even need to be
+// homed for these to be useful; positionRequest and these logs update
+// regardless of homed state). See tools/README.md's DDP reception test
+// section for the full methodology.
+//
+// ddpRxLogConfig: prints one clean, single-line, CSV-parseable record per
+// DDP packet - "<ms>,DRX,<seq>,<value>" for an accepted/parsed packet,
+// "<ms>,DDPREJ,<seq>,<lastAcceptedSeq>" for one rejected by the sequence
+// check - instead of protocolDebugConfig's multi-line, verbose format,
+// which is harder to parse at a 40Hz+ packet rate and also prints
+// unrelated LED/header detail this test doesn't need.
+extern bool ddpRxLogConfig;
+// ddpAckConfig: immediately echoes a small UDP ACK packet (the received
+// sequence number, 1 byte) back to the sender's own IP/port - captured
+// straight from WiFiUDP's remoteIP()/remotePort() for whatever packet was
+// just received - so the sender can directly measure round-trip time and
+// detect genuine loss (an unacked send), decoupled from this firmware's
+// own sequence-acceptance logic (the ack fires for every packet that
+// reaches the UDP layer, accepted or rejected).
+extern bool ddpAckConfig;
+
 // DDP Protocol Constants
 #define DDP_PORT 4048
 #define DDP_HEADER_SIZE 10

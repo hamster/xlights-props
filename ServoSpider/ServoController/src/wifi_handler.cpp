@@ -74,6 +74,23 @@ boolean connectToWifi() {
   Serial.print("Connected! IP address: ");
   Serial.println(WiFi.localIP());
 
+  // Disable WiFi modem sleep (power-save) - the ESP32 Arduino core's default
+  // for station mode. Never touched before 2026-09-06, when a dedicated DDP
+  // reception test (tools/ddp_reception_test.py) caught a real, sustained
+  // round-trip-time jump - a healthy <50ms baseline shifting to a flat
+  // ~400ms plateau partway through a 60s run, with 100% packet delivery and
+  // strong, stable RSSI throughout (ruling out signal quality or loss).
+  // That signature - a fixed added latency once triggered, not packet
+  // loss, not signal-strength-correlated - is the classic symptom of modem
+  // sleep: the radio periodically sleeps between AP beacon/DTIM intervals,
+  // queueing inbound traffic (including DDP) until the next wake window
+  // instead of processing it immediately. A real-time control protocol
+  // being queued for up to a DTIM interval at a time is exactly the kind
+  // of jitter this project can't tolerate - disabling it trades a small
+  // amount of extra power draw (not a concern - this is mains-powered
+  // prop hardware, not battery) for consistently low, real-time latency.
+  WiFi.setSleep(false);
+
   // Set to slow blink for connected state (timer interrupt handles it)
   statusLedBlinkInterval = 1000;
 

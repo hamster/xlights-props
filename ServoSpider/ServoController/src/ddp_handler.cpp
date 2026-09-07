@@ -10,6 +10,10 @@
 unsigned long ddpPacketsReceived = 0;
 unsigned long ddpPacketsRejectedOutOfOrder = 0;
 
+// See declaration comments (ddp_handler.h).
+bool ddpRxLogConfig = false;
+bool ddpAckConfig = false;
+
 // UDP object
 WiFiUDP ddpUdp;
 bool ddpServerStarted = false;
@@ -93,6 +97,35 @@ void handleDDP() {
                       (uint32_t)headerBytes[7];
   header.dataLen = (uint16_t)headerBytes[8] << 8 | (uint16_t)headerBytes[9];
 
+  // Bench diagnostic: echo a small ACK back to the sender immediately -
+  // before the sequence-accept/reject decision, so this reflects raw UDP
+  // arrival at this device regardless of app-level sequence handling. Uses
+  // the SAME WiFiUDP object right after the read that already completed
+  // above (remoteIP()/remotePort() stay valid until the next parsePacket()
+  // call) - beginPacket()/write()/endPacket() on a WiFiUDP object mid-loop
+  // like this is the standard Arduino UDP send pattern, safe to call from
+  // inside the receive handler.
+  if (ddpAckConfig) {
+    ddpUdp.beginPacket(ddpUdp.remoteIP(), ddpUdp.remotePort());
+    ddpUdp.write(header.sequenceNum);
+    ddpUdp.endPacket();
+  }
+
+  // Bench diagnostic: signal strength, throttled (not worth a query on
+  // every single packet at a 40Hz+ receive rate) and tagged distinctly
+  // from the DRX/DDPREJ lines above so a script parsing this stream can
+  // pull it out separately.
+  if (ddpRxLogConfig) {
+    static unsigned long lastRssiLogMs = 0;
+    unsigned long nowMs = millis();
+    if (nowMs - lastRssiLogMs >= 500) {
+      lastRssiLogMs = nowMs;
+      Serial.print(nowMs);
+      Serial.print(",RSSI,");
+      Serial.println(WiFi.RSSI());
+    }
+  }
+
   // Debug output header
   if (protocolDebugConfig) {
     Serial.print("DDP: seq ");
@@ -122,6 +155,13 @@ void handleDDP() {
       Serial.print(" (last accepted seq=");
       Serial.print(lastAcceptedDdpSeq);
       Serial.println(")");
+    }
+    if (ddpRxLogConfig) {
+      Serial.print(millis());
+      Serial.print(",DDPREJ,");
+      Serial.print(header.sequenceNum);
+      Serial.print(",");
+      Serial.println(lastAcceptedDdpSeq);
     }
     while (ddpUdp.available()) {
       ddpUdp.read();
@@ -215,6 +255,13 @@ void handleDDP() {
           Serial.print("  -> Stepper (16-bit, byte offset 0-1) value: ");
           Serial.println(positionRequest);
         }
+        if (ddpRxLogConfig) {
+          Serial.print(millis());
+          Serial.print(",DRX,");
+          Serial.print(header.sequenceNum);
+          Serial.print(",");
+          Serial.println(positionRequest);
+        }
       } else {
         if (protocolDebugConfig) {
           Serial.println("  -> Stepper (16-bit, byte offset 0-1) not in this packet");
@@ -231,6 +278,13 @@ void handleDDP() {
 
         if (protocolDebugConfig) {
           Serial.print("  -> Stepper (8-bit, byte offset 0) value: ");
+          Serial.println(positionRequest);
+        }
+        if (ddpRxLogConfig) {
+          Serial.print(millis());
+          Serial.print(",DRX,");
+          Serial.print(header.sequenceNum);
+          Serial.print(",");
           Serial.println(positionRequest);
         }
       } else {
