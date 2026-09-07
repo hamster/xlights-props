@@ -596,9 +596,32 @@ First full `tuning_harness.py` run against tuned PID (`config_pid.json`, `Kp=15/
 
 Error scales down smoothly and monotonically with duration (exactly the expected pattern, matching how every pre-PID mode behaved in the very first characterization session), no un-homing anywhere, no stuck episodes, both directions clean (the earlier "up-direction oscillation" concern - visible in an intermediate, not-yet-fully-fixed pass - turned out to be a symptom of bug 1/2 above, not a separate real gravity-direction asymmetry; resolved once both were fixed).
 
-- [ ] A real, bounded, visible high-frequency ripple remains in actual speed throughout active tracking (roughly 500-4500Hz, ~0.2-0.3s period, both directions) - doesn't prevent good overall accuracy (error stays within a few hundred steps) and isn't a bug in the same sense as the two above, but likely reflects noise in the derivative term's rate estimate (measured position rate, sampled every ~20ms) reacting to real quantization in a live DDP stream rather than a clean single step. Worth a closer look before calling PID fully production-ready - possibly a small amount of Kd smoothing/filtering, or accepting it as within tolerance.
+### Bug 3: the hysteresis band's own `moveTo()` could go "dead" too, plus a real logging-completeness gap (2026-09-06, after fixing `send_triangle_wave()`)
+
+After fixing the sender's own timing artifact (see the "Raw DDP trace jumpiness" section further down), re-ran the full sweep and the 16s run regressed hard - `rms_error=1515`, `max_error=5299`, `near_stall_pct=16.1%` (vs. `234`/`526`/`1.0%` before). The plot showed the exact same "stuck at position 0 for 2+ seconds, then one big catch-up jump" signature as bug 2 above, which was supposedly already fixed.
+
+Added targeted diagnostics (`isRunning()`/`isQueueEmpty()`/`isRampGeneratorActive()`/current speed, printed whenever the hysteresis branch is waiting) and reproduced it directly: `isRunning=1 ... qEmpty=0 rampActive=0 speedHz=0`. **The hysteresis band's `moveTo()` can go "dead" the same way `runForward()`/`runBackward()` do** (see `retryMoveIfDied()`'s original 2026-09-01 finding) - a nonempty queue alone satisfies `isRunning()`, even when the ramp generator never actually starts producing steps. Bug 2's fix (wait for `!isRunning()` before re-issuing) never re-issues in this state, since a dead-but-nonempty queue reads as running forever.
+
+**Fixed**: treat "genuinely running" as `isRunning() && (isRampGeneratorActive() || currentSpeed != 0)`, not just `isRunning()` alone, and retry (throttled to 100ms, same pattern as `retryMoveIfDied()`/`lastPidRunRetryMs`) when it isn't.
+
+**While investigating this, also found and fixed a real logging-completeness gap** the user specifically asked to verify before running more tests: `updatePidMode()` only wrote a Compact Motion Log row when actually issuing a correction, not on every ~20ms tick - so a real, smoothly-received DDP stream could update `positionRequest` many times while PID sat fully idle/settled, and none of it would appear in the log; the next row logged would then show an artificially large `ddpVal` jump indistinguishable from a dropped packet. **Confirmed this was 100% a logging artifact, not a reception one**, two independent ways: (1) the sender-fix's own packet-count check (321 sent, 321 received, 0 rejected) already ruled out loss at the transport level; (2) a dedicated `protocolDebugConfig=1` capture (which prints every packet as it's parsed, independent of any tracking-mode logging) showed **zero sequence gaps across 202 packets** on a run whose Compact Motion Log alone would have suggested ~26% of transitions were "jumpy." Fixed by logging unconditionally on every tick regardless of branch (idle-settled, hysteresis-wait, hysteresis-commit), not just when a correction actually fires.
+
+**Re-ran the full sweep with both fixes - cleanest result yet:**
+
+| duration | rms_error | max_error | near_stall_pct |
+|---|---|---|---|
+| 5s | 747 | 1497 | 1.8% |
+| 8s | 429 | 1103 | 0.2% |
+| 12s | 279 | 564 | 0.1% |
+| 16s | 213 | 442 | 0.2% |
+| 20s | 173 | 352 | 0.5% |
+
+No stuck episodes anywhere, `near_stall_pct` low and consistent throughout, `ddpVal` trace now 94% single-unit transitions (remaining ~6% explained by ordinary 20ms-log-tick-vs-~25ms-DDP-send-interval sampling mismatch, not any real gap - confirmed visually smooth in the plot too).
+
+- [ ] A real, bounded, visible high-frequency ripple remains in actual speed throughout active tracking (roughly 500-4500Hz, ~0.2-0.3s period, both directions) - doesn't prevent good overall accuracy (error stays within a few hundred steps) and isn't a bug in the same sense as the ones above, but likely reflects noise in the derivative term's rate estimate (measured position rate, sampled every ~20ms) reacting to real quantization in a live DDP stream rather than a clean single step. Worth a closer look before calling PID fully production-ready - possibly a small amount of Kd smoothing/filtering, or accepting it as within tolerance.
 - [ ] Ki tuning still not done (see above - unaffected by this section's fixes).
 - [ ] `pidReengageThreshold`/`RAMMED_STEP_TOLERANCE` were both set to 150 somewhat by feel (matching each other for consistency) rather than from a systematic sweep - reasonable given the DDP-quantization math that motivated them (~60 steps/DDP-unit on this device), but not independently verified as optimal.
+- [ ] The deadband-settled branch's own `moveTo()` (the very first snap into `pidSettled`) doesn't have the same dead-move retry as the hysteresis band - lower risk (that branch only fires once error is already within the tight deadband, so a dead move there barely matters) but not verified clean the same rigorous way.
 - [ ] Streaming mode got the jumpStart fix but *not* the retry-throttle fix (bug #2) - it has the identical exposure (same untamed "reissue every tick while `!isRunning()`" pattern) but wasn't the mode under active test, so this is unverified there. Low priority given Streaming is already deprioritized/shelved, but worth doing before ever picking Streaming back up.
 - [ ] Consider whether `retryMoveIfDied()` (currently `static`/file-local to `stepper_handler.cpp`, homing-only) should be extracted into a small shared utility now that PID has its own hand-rolled equivalent (`lastPidRunRetryMs` in `main.cpp`) - three near-identical throttled-retry implementations (homing, PID, and Streaming once #2 above is done) is real duplication.
 

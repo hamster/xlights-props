@@ -81,6 +81,20 @@ int pidCurrentDirection = 0;   // -1, 0, 1
 // switch, not the PID control law itself - throttling retries the same way
 // retryMoveIfDied() already does is the same proven fix, applied here.
 unsigned long lastPidRunRetryMs = 0;
+// Same throttled-retry pattern, for the hysteresis band's moveTo() calls
+// (see stepperPidReengageThresholdConfig's declaration comment) instead of
+// runForward()/runBackward(). Found necessary the same way, one level up
+// (2026-09-06): a 16s triangle wave left the trolley frozen at position 0
+// for 2+ seconds despite the commanded target moving smoothly away, then
+// caught up in one big jump once the drift finally exceeded the whole
+// reengage band. Direct evidence via temporary diagnostics: isRunning()
+// read true (via a non-empty queue) while isRampGeneratorActive() was
+// false and current speed was 0 - a moveTo() had gone "dead" the exact
+// same way runForward()/runBackward() do, just via !isQueueEmpty() instead
+// of isQueueRunning()/isRampGeneratorActive(). The isRunning()-only gate
+// this branch used never re-issues in that state, since a dead-but-
+// nonempty queue still reads as running.
+unsigned long lastPidHystRetryMs = 0;
 
 // Applies the tracking-vs-normal profile decision (see stepperTrackThresholdConfig's
 // declaration comment) for a move toward newTarget, given the previous target this
@@ -433,6 +447,24 @@ void updatePidMode() {
       pidIntegral = 0;
       pidCurrentDirection = 0;
       continuousRunDirection = 0;  // settling into moveTo() - not a continuous run anymore
+    } else {
+      // Already settled, nothing to do motion-wise - but still log this
+      // tick (2026-09-06), so the Compact Motion Log's ddpVal trace stays
+      // a complete, gap-free record of positionRequest at PID's own tick
+      // rate, not just a sparse sample only taken when something actually
+      // moves. Without this, a real DDP stream could update
+      // positionRequest smoothly many times while sitting fully idle here
+      // and none of it would appear in the log - the next row logged
+      // (whenever error next exceeds deadband) would then show an
+      // artificially large ddpVal jump that looks exactly like a dropped
+      // packet or WiFi hiccup but is actually just a logging gap. Confirmed
+      // this was happening on the bench: a run's log showed ~26% of ddpVal
+      // transitions jumping by 2+ units, while a parallel protocolDebug
+      // capture of the same kind of run showed zero dropped/out-of-order
+      // packets at the firmware level - the "jumpiness" was 100% a logging
+      // artifact, not a reception one.
+      logCompactMotion(positionRequest, (int)target, (int)currentPos, 0, (int)error,
+                        true, stepper->getCurrentSpeedInMilliHz(), 0);
     }
     pidLastMeasuredPos = currentPos;
     return;
@@ -443,40 +475,55 @@ void updatePidMode() {
   // gets another one-shot moveTo() snap, not full re-engagement into
   // continuous-run mode.
   //
-  // Only issues a fresh moveTo() once the *previous* one has actually
-  // finished (!isRunning()) - an earlier version of this called moveTo()
-  // unconditionally on every ~20ms tick while the target crept through
-  // this band (e.g. a slow triangle wave departing position 0), which kept
-  // resetting FastAccelStepper's ramp generator before it ever built real
-  // speed. Confirmed on the bench (2026-09-06): a 16s triangle wave left
-  // the trolley stuck at position 0 for the first 4+ seconds despite the
-  // commanded target ramping smoothly away, then caught up in one big
-  // delayed snap once it finally exceeded the whole band - the exact
-  // "constantly re-aiming never accelerates" jerkiness Direct mode is
-  // already known for, which PID's continuous-run design exists to avoid;
-  // this band had reintroduced it. Letting each small move actually
-  // complete before issuing the next fixes that, at the cost of only
-  // reacting to target drift once every real small-move's worth of time
-  // (tens to ~100ms for typical corrections at this accel/speed) rather
-  // than every tick - plenty responsive for genuine settling jitter.
+  // Only issues a fresh moveTo() once the *previous* one is no longer
+  // genuinely running (see genuinelyRunning below) - an early version of
+  // this called moveTo() unconditionally on every ~20ms tick while the
+  // target crept through this band (e.g. a slow triangle wave departing
+  // position 0), which kept resetting FastAccelStepper's ramp generator
+  // before it ever built real speed - the exact "constantly re-aiming
+  // never accelerates" jerkiness Direct mode is already known for, which
+  // PID's continuous-run design exists to avoid; this band had
+  // reintroduced it. A second version gated on plain !isRunning() (wait for
+  // the previous move to finish, don't interrupt it) - better, but still
+  // left the trolley stuck at position 0 for 2+ seconds on a slow wave:
+  // the moveTo() itself can go "dead" (queue holds a request but the ramp
+  // generator never actually starts producing steps) while still reading
+  // isRunning()==true via a nonempty queue, so a plain isRunning() check
+  // waits forever on a request that's never coming. genuinelyRunning below
+  // catches that and retries (throttled) instead of waiting on it forever.
   //
-  // A prior version also compared the new target against
+  // A separate, rejected version compared the new target against
   // lastCommandedTargetPosition (only re-snapping if it had moved more
-  // than a threshold) instead of this isRunning() gate - that created a
+  // than a threshold) instead of an isRunning()-style gate - that created a
   // real dead zone (the trolley sitting still through however wide the
   // gate was) and measurably hurt tracking accuracy on the bench. This
   // fix doesn't have that problem: it always reacts to the *current*
-  // target once idle, it just doesn't interrupt an in-flight move to do so.
+  // target once idle/dead, it just doesn't interrupt a genuinely
+  // in-flight move to do so.
   if (pidSettled && fabs(error) <= (float)stepperPidReengageThresholdConfig) {
-    if (!stepper->isRunning()) {
+    // A moveTo() can go "dead" the same way runForward()/runBackward() do
+    // (see lastPidHystRetryMs's declaration comment) - isRunning() alone
+    // doesn't detect it, since a dead-but-nonempty queue still satisfies
+    // isRunning() via !isQueueEmpty(). Treat "running" here as genuinely
+    // producing motion (ramp active or real nonzero speed), not just a
+    // nonempty queue.
+    bool genuinelyRunning = stepper->isRunning() &&
+                             (stepper->isRampGeneratorActive() || stepper->getCurrentSpeedInMilliHz() != 0);
+    if (!genuinelyRunning && (now - lastPidHystRetryMs >= 100)) {
+      lastPidHystRetryMs = now;
       stepper->setAcceleration(stepperPidAccelConfig);
       stepper->setJumpStart(jumpStartConfig);
       stepper->moveTo((int32_t)target);
       stepperBlanked = false;
       lastCommandedTargetPosition = target;
-      logCompactMotion(positionRequest, (int)target, (int)currentPos, 0, (int)error,
-                        true, stepper->getCurrentSpeedInMilliHz(), 0);
     }
+    // Log every tick regardless of whether a fresh moveTo() was actually
+    // issued this time, so the Compact Motion Log's ddpVal trace stays a
+    // complete, gap-free record of positionRequest at PID's own tick rate -
+    // see the deadband-settled branch above for the full "this was
+    // mistaken for a DDP reception problem" story.
+    logCompactMotion(positionRequest, (int)target, (int)currentPos, 0, (int)error,
+                      true, stepper->getCurrentSpeedInMilliHz(), 0);
     pidLastMeasuredPos = currentPos;
     return;  // stays settled - pidSettled untouched
   }
