@@ -10,6 +10,7 @@
 #include "tmc_handler.h"
 #include "encoder_handler.h"
 #include "persist_log.h"
+#include "tuning_handler.h"
 #include "main.h"
 #include <WiFi.h>
 #include <Preferences.h>
@@ -668,6 +669,18 @@ void handlePersistLog() {
   server.send(200, "text/plain", readPersistLog());
 }
 
+// GET /ddp-rx-log[?clear=1] - retrieves (or clears) the in-RAM DDP
+// reception log $SET ddpRxLog fills - see ddp_handler.h's declaration
+// comment for why this is HTTP, not Serial.
+void handleDdpRxLog() {
+  if (server.hasArg("clear")) {
+    clearDdpRxLog();
+    server.send(200, "text/plain", "cleared");
+    return;
+  }
+  server.send(200, "text/plain", getDdpRxLog());
+}
+
 // Static buffer for status data response (avoids heap allocation)
 static char statusDataBuffer[1900];
 
@@ -968,6 +981,8 @@ void startWebServer() {
   // Temporary compact motion CSV log toggle
   server.on("/compact-log", HTTP_GET, handleCompactLog);
   server.on("/persist-log", HTTP_GET, handlePersistLog);  // reboot-surviving diagnostic log - see persist_log.h
+  server.on("/ddp-rx-log", HTTP_GET, handleDdpRxLog);      // DDP reception bench log - see ddp_handler.h
+  server.on("/tunable", HTTP_GET, handleTunableHttp);      // $SET/$GET over HTTP - see tuning_handler.cpp
 
   // TMC2209 stall fault acknowledgement
   server.on("/clear-tmc-stall", HTTP_GET, handleClearTmcStall);

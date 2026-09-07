@@ -6,6 +6,7 @@
 #include "core0_task.h"
 #include "tmc_handler.h"
 #include "ddp_handler.h"
+#include "html_handlers.h"  // extern WebServer server - see handleTunableHttp()
 
 // Splits `line` on spaces into up to 3 tokens (command, name, value).
 // Returns the number of tokens found. Good enough for this simple protocol -
@@ -277,4 +278,50 @@ void handleExtendedSerialCommand(const String& line) {
 
   Serial.print("ERR unrecognized command: ");
   Serial.println(line);
+}
+
+// GET /tunable?name=<n>            - read one tunable
+// GET /tunable?name=<n>&value=<v>  - set one tunable (same RAM-only
+//                                    contract as $SET - no flash write)
+// GET /tunable?name=ALL            - read every tunable at once
+// Added 2026-09-06 so a bench test script can configure every RAM-only
+// tunable this file already exposes over $SET/$GET without opening a
+// serial connection at all - matters for tests specifically trying to
+// rule out USB-serial I/O as a confound (see tools/ddp_reception_test.py),
+// and for scripting from a machine that isn't physically connected to the
+// device at all. Reuses setTunable()/getTunable() directly, so every name
+// documented in this file's own comment header works identically here.
+void handleTunableHttp() {
+  if (!server.hasArg("name")) {
+    server.send(400, "application/json", "{\"success\":false,\"message\":\"missing 'name' argument\"}");
+    return;
+  }
+  String name = server.arg("name");
+
+  if (name == "ALL") {
+    String json = "{\"success\":true,\"tunables\":{";
+    for (int i = 0; i < ALL_TUNABLE_COUNT; i++) {
+      String v;
+      getTunable(String(ALL_TUNABLE_NAMES[i]), v);
+      if (i > 0) json += ",";
+      json += "\"" + String(ALL_TUNABLE_NAMES[i]) + "\":\"" + v + "\"";
+    }
+    json += "}}";
+    server.send(200, "application/json", json);
+    return;
+  }
+
+  if (server.hasArg("value")) {
+    if (!setTunable(name, server.arg("value"))) {
+      server.send(400, "application/json", "{\"success\":false,\"message\":\"unknown tunable: " + name + "\"}");
+      return;
+    }
+  }
+
+  String v;
+  if (getTunable(name, v)) {
+    server.send(200, "application/json", "{\"success\":true,\"name\":\"" + name + "\",\"value\":\"" + v + "\"}");
+  } else {
+    server.send(400, "application/json", "{\"success\":false,\"message\":\"unknown tunable: " + name + "\"}");
+  }
 }

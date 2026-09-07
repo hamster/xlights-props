@@ -23,13 +23,22 @@ extern unsigned long ddpPacketsRejectedOutOfOrder;
 // regardless of homed state). See tools/README.md's DDP reception test
 // section for the full methodology.
 //
-// ddpRxLogConfig: prints one clean, single-line, CSV-parseable record per
+// ddpRxLogConfig: records one clean, single-line, CSV-parseable entry per
 // DDP packet - "<ms>,DRX,<seq>,<value>" for an accepted/parsed packet,
 // "<ms>,DDPREJ,<seq>,<lastAcceptedSeq>" for one rejected by the sequence
-// check - instead of protocolDebugConfig's multi-line, verbose format,
-// which is harder to parse at a 40Hz+ packet rate and also prints
-// unrelated LED/header detail this test doesn't need.
+// check, plus a throttled "<ms>,RSSI,<dbm>" - into an in-RAM buffer
+// retrievable via GET /ddp-rx-log (?clear=1 to wipe), instead of over
+// Serial like protocolDebugConfig's verbose format. Deliberately NOT
+// Serial-based: a reception test needs zero serial I/O during its timed
+// portion, both to rule out USB-serial contention as a confound and to
+// match real production conditions (FPP/xLights never has a serial
+// connection open) - see tools/ddp_reception_test.py.
 extern bool ddpRxLogConfig;
+// Appends one line (no trailing newline needed) to the buffer above -
+// used by ddp_handler.cpp's own call sites; exposed here only because
+// html_handler.cpp's retrieval endpoint needs the read/clear pair.
+String getDdpRxLog();
+void clearDdpRxLog();
 // ddpAckConfig: immediately echoes a small UDP ACK packet (the received
 // sequence number, 1 byte) back to the sender's own IP/port - captured
 // straight from WiFiUDP's remoteIP()/remotePort() for whatever packet was

@@ -14,6 +14,35 @@ unsigned long ddpPacketsRejectedOutOfOrder = 0;
 bool ddpRxLogConfig = false;
 bool ddpAckConfig = false;
 
+// In-RAM buffer for ddpRxLogConfig's output - see its declaration comment
+// for why this is HTTP-retrievable (GET /ddp-rx-log) rather than printed
+// to Serial. Same bounded-growth pattern as persist_log.cpp's
+// pendingBuffer: appends freely, and once over the cap, drops the oldest
+// *complete lines* (never a partial line) rather than refusing to log
+// further - a long-running capture just keeps the most recent ~190KB
+// (roughly 8,000-9,000 lines at this format's ~22 bytes/line) instead of
+// stopping partway through a test.
+static String ddpRxLogBuffer;
+static const size_t DDP_RX_LOG_MAX_BYTES = 190000;
+
+static void appendDdpRxLog(const String& line) {
+  ddpRxLogBuffer += line;
+  ddpRxLogBuffer += '\n';
+  if (ddpRxLogBuffer.length() > DDP_RX_LOG_MAX_BYTES) {
+    size_t excess = ddpRxLogBuffer.length() - DDP_RX_LOG_MAX_BYTES;
+    int cut = ddpRxLogBuffer.indexOf('\n', excess);
+    ddpRxLogBuffer = (cut >= 0) ? ddpRxLogBuffer.substring(cut + 1) : "";
+  }
+}
+
+String getDdpRxLog() {
+  return ddpRxLogBuffer;
+}
+
+void clearDdpRxLog() {
+  ddpRxLogBuffer = "";
+}
+
 // UDP object
 WiFiUDP ddpUdp;
 bool ddpServerStarted = false;
@@ -120,9 +149,7 @@ void handleDDP() {
     unsigned long nowMs = millis();
     if (nowMs - lastRssiLogMs >= 500) {
       lastRssiLogMs = nowMs;
-      Serial.print(nowMs);
-      Serial.print(",RSSI,");
-      Serial.println(WiFi.RSSI());
+      appendDdpRxLog(String(nowMs) + ",RSSI," + String(WiFi.RSSI()));
     }
   }
 
@@ -157,11 +184,7 @@ void handleDDP() {
       Serial.println(")");
     }
     if (ddpRxLogConfig) {
-      Serial.print(millis());
-      Serial.print(",DDPREJ,");
-      Serial.print(header.sequenceNum);
-      Serial.print(",");
-      Serial.println(lastAcceptedDdpSeq);
+      appendDdpRxLog(String(millis()) + ",DDPREJ," + String(header.sequenceNum) + "," + String(lastAcceptedDdpSeq));
     }
     while (ddpUdp.available()) {
       ddpUdp.read();
@@ -256,11 +279,7 @@ void handleDDP() {
           Serial.println(positionRequest);
         }
         if (ddpRxLogConfig) {
-          Serial.print(millis());
-          Serial.print(",DRX,");
-          Serial.print(header.sequenceNum);
-          Serial.print(",");
-          Serial.println(positionRequest);
+          appendDdpRxLog(String(millis()) + ",DRX," + String(header.sequenceNum) + "," + String(positionRequest));
         }
       } else {
         if (protocolDebugConfig) {
@@ -281,11 +300,7 @@ void handleDDP() {
           Serial.println(positionRequest);
         }
         if (ddpRxLogConfig) {
-          Serial.print(millis());
-          Serial.print(",DRX,");
-          Serial.print(header.sequenceNum);
-          Serial.print(",");
-          Serial.println(positionRequest);
+          appendDdpRxLog(String(millis()) + ",DRX," + String(header.sequenceNum) + "," + String(positionRequest));
         }
       } else {
         if (protocolDebugConfig) {

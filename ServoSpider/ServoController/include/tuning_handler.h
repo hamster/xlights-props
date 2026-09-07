@@ -77,4 +77,8 @@
 //   homeSpeed, homeAccel, lookaheadSteps, lookaheadSettle
 void handleExtendedSerialCommand(const String& line);
 
+// HTTP equivalent of $SET/$GET above - see its own declaration comment in
+// tuning_handler.cpp. GET /tunable?name=<n>[&value=<v>] or name=ALL.
+void handleTunableHttp();
+
 #endif
