@@ -6,6 +6,35 @@ Turn this into a standalone stepper-mover **+** pixel controller: one ESP32-S3 d
 
 Note: checked `git branch -a` / `git stash list` / `git log --all` — there is no leftover branch, stash, or commit anywhere in this repo with prior dual-core work. If there was earlier progress on splitting stepper/LED work across cores, it never made it into git, so treat this as a fresh design rather than something to dig up.
 
+## Direct-mode reversal lag investigation + a real crash bug found and fixed (2026-09-06/07)
+
+Prompted by real-world testing: the user compared a clean reboot (no live overrides - device's true persisted defaults, which turned out to be `trackMode=0`/Direct, not PID) against real DDPDebugger/xLights playback at several cycle periods. **10-20s periods were "pretty darn smooth," 5s was jerky (mid-point), 4s clipped the travel ends without being jerky.** The 5s/4s cases are a genuine physical speed-ceiling limit, not a bug: a 5s full-range cycle needs ~6205 steps/s average against a 6500-7000Hz ceiling, essentially zero margin - confirmed by the user separately noting that changing normalSpeed (6000-8000Hz) didn't change that behavior at all, consistent with DDPDebugger's period sender using an eased/non-linear curve whose peak instantaneous velocity exceeds the simple average-speed math.
+
+The 6-12s periods being smooth "other than the end reversal being kinda jerky" turned out to be a real, fixable issue. Captured real motion data live during an actual DDPDebugger session via the new `GET /compact-log` HTTP endpoint (see below) and found: **actual position lags commanded by a large, persistent margin** (up to roughly half the travel range) throughout each leg, cruising at a nearly-constant speed well under the tracking profile's own ceiling rather than tracking tightly - then snapping to the fast `normalSpeed`/`normalAccel` profile right at each reversal once the accumulated lag exceeds `trackMaxLag` (3000 steps). That hard snap is the "end reversal jerky" the user described. Root cause: Direct mode issues a fresh `moveTo()` on every single DDP command (`handleDirectModeCommand()`), and the tracking profile's `trackAccel` (5000 steps/s²) is too low to let the ramp generator build real speed between re-targets, converging to a steady-state cruise near the average incoming rate instead of the instantaneous commanded position.
+
+**Swept `trackAccel` (5000 → 10000 → 20000 → 30000 → 50000), verifying no step loss at every level via `$CHECKSTEPS`:**
+
+| trackAccel | rms_error | max_error | jerk_per_sample (roughness) |
+|---|---|---|---|
+| 5000 (was default) | 1511 | 3221 | 92 |
+| 10000 | ~1112 | ~2385 | 98 |
+| **20000 (now saved)** | **563** | **1224** | **196** |
+| 30000 | 415 | 897 | 232 |
+| 50000 | 302 | 619 | 461 (visible speed jitter on the plateau, same texture as PID's ripple) |
+
+Higher `trackAccel` monotonically shrinks the lag (and therefore the reversal snap), but past a point trades it for a *different* roughness - small, rapid speed jitter during cruise, the same underdamped-resonance flavor PID's damping sweep found. `trackAccel=20000` looked like the knee of the curve (~63% error reduction, reversal no longer hits the speed ceiling) without the jitter showing up yet - **saved to flash** via `POST /save-stepper` (full-field payload, to avoid the endpoint's checkbox-omission-disables-it hazard - see CLAUDE.md's `/save-tmc` precedent). Widening `trackMaxLag` instead (tested at 6000) made things measurably *worse* (rms_error 2454 vs baseline 1511) - it just lets more lag accumulate before the same hard-snap correction, no benefit.
+
+- [ ] `trackAccel` beyond 20000 (30000/50000) is available if the user wants tighter tracking and doesn't mind more jitter - not chosen by default, a subjective call.
+- [ ] The 5s/4s speed-ceiling cases aren't addressed by any of this - would need either a higher safe cruise-speed ceiling (already found to sound close to stalling around 8000Hz) or accepting sub-~6s full-range cycles as outside the device's honest capability.
+
+### Real firmware crash found and fixed: heap churn from chained String concatenation in hot-path logging
+
+While running the `trackAccel` sweep, a homing attempt was interrupted mid-search by an unexpected reboot (`persist_log` showed a new boot number appearing ~2s into an active search, reset reason UNKNOWN). Root-caused to `logCompactMotion()` (`main.cpp`) building its CSV line via ~12 chained `String + String` operators, each allocating its own heap temporary - harmless occasionally, but this fires every 20-50ms during any active tracking/homing motion, and sustained heap churn at that rate caused a real, reproducible crash. The same mechanism had already produced a milder symptom earlier in the session: embedded NUL bytes in place of newlines in the `GET /compact-log` buffer (a genuine data-corruption bug, recovered post-hoc for analysis by treating NUL as an additional row separator).
+
+**Fixed**: rewrote `logCompactMotion()` to build its line into a fixed 160-byte stack buffer via `snprintf()` instead, matching this codebase's own existing convention for hot-path buffers (`handleStatusData()`'s static `statusDataBuffer`). Applied the identical fix to `ddp_handler.cpp`'s DDP reception log (`appendDdpRxLog()` and its 4 call sites) - same chained-String pattern, same risk, not yet observed to crash but sharing the exact same hazard, and the whole point of that log is extended real-world monitoring - exactly the sustained load that triggers this bug class. Verified: re-ran the `trackAccel` sweep (including the exact candidate that crashed) with the fix in place, multiple clean homing cycles, no recurrence.
+
+- [ ] Consider auditing other hot-path code for the same chained-String-concatenation pattern - this was found reactively (a live crash), not via a systematic review, so other instances may exist.
+
 ## Queued: web UI cleanup + a few real questions (2026-09-06, not yet started)
 
 Batch of settings-page cleanup the user wants queued for a later session, not acted on now. Source of truth for the UI is `web/index.html`/`web/script.js` (see [WEB_DEVELOPMENT.md](WEB_DEVELOPMENT.md) - never hand-edit `include/html.h`).
@@ -23,6 +52,7 @@ Batch of settings-page cleanup the user wants queued for a later session, not ac
 - [ ] In channel config, remove the **Serial Debug** checkbox (`web/index.html:548-550`, `id="protocolDebug"`) - folds into the new Live Log tab below instead.
 - [ ] **New "Live Log" tab**: shows the live Compact Motion Log and/or the in-RAM diagnostic log (`persist_log`/the new `ddpRxLog` buffer - see this session's `GET /ddp-rx-log` work above) rather than requiring a serial connection. Needs a decision on transport - polling `GET /ddp-rx-log`-style endpoints on an interval is the simplest fit with what already exists; a push/streaming mechanism (WebSocket, SSE) would need new server-side work. Serial Debug (`protocolDebug`) either gets a tickbox on this tab, or - open question - just stays on permanently if it's confirmed not to cost anything (needs a quick check of its actual overhead before deciding).
 - [x] **WiFi AP-mode retry timer - answered, not present.** Checked `checkWifiConnection()` (`wifi_handler.cpp:134-181`): it explicitly returns early whenever `WiFi.getMode() == WIFI_AP` (line 150), so there is currently **no** periodic attempt to fall back to station mode once the device drops into AP mode - it stays in AP until a manual reconnect (web UI/serial `w`/`a` commands) or reboot. Adding a periodic AP→STA retry (e.g., try reconnecting with saved credentials every N minutes while in AP mode, falling back to AP again on failure) is real, wanted work, not yet done.
+- [ ] **Full config export/import as JSON - checked, doesn't exist yet.** `GET /tunable?name=ALL` only covers the RAM-only bench tunables (PID gains, trackAccel, etc. - never persisted), not the full NVS-persisted config (WiFi credentials, TMC settings, protocol/channel settings, LED settings, homing speeds, etc. - everything under the `wifi-config` Preferences namespace, see CLAUDE.md's Configuration Storage section for the key list). Wanted: one `GET` endpoint that dumps the complete persisted config as JSON, and one `POST` that writes it back - real value for backup/restore/cloning between devices, and would have made several of this session's own save/reboot/re-verify cycles faster. Needs a decision on whether the WiFi password should be included in the export (plaintext credential in a JSON blob is a real sensitivity question) before implementing - worth asking the user rather than assuming either way.
 
 ## Added: bench-tuning harness (`tools/tuning_harness.py`) + a ground-truth skipped-step check
 
