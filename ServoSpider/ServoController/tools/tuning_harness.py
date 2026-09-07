@@ -381,25 +381,65 @@ def build_ddp_packet(seq, value):
     return header + bytes([value])
 
 
-def send_triangle_wave(sock, host, port, duration, rate_hz):
+def send_triangle_wave(sock, host, port, duration, rate_hz, max_stall_s=1.0):
+    """Sends a full 0->255->0 triangle wave over `duration` seconds at
+    `rate_hz` packets/sec.
+
+    Each packet's value is computed from the *scheduled* tick time
+    (tick/rate_hz), not the actual wall-clock time at the moment it's
+    sent - so the value sequence itself is a perfectly smooth,
+    deterministic ramp regardless of real-time send jitter (OS scheduling,
+    system load, whatever else this machine is doing). The previous
+    version computed each value from time.monotonic() at send time, so any
+    scheduling delay on this end showed up as a real, larger-than-one-unit
+    jump in the DDP value itself once the delayed send finally went out -
+    a host-side test artifact that looked identical to a dropped packet or
+    a firmware bug in the resulting plots. Confirmed on the bench
+    (2026-09-06) that this was the whole story and not masking any real
+    loss: a direct packet-count comparison against the device's own
+    protocolPacketsReceived counter showed every single packet arriving
+    (321 sent, 321 received, 0 rejected as out-of-order) even on a run
+    whose DDP trace showed several of these multi-unit jumps. This also
+    better matches how a real DDP source (e.g. FPP) generates its own
+    output - from a fixed show timeline, not "whatever value happens to be
+    correct for whenever it gets around to sending."
+
+    Ordinary jitter (a send running a bit late) needs no special handling:
+    the loop below just sends immediately (no sleep) when it's behind
+    schedule, so it catches back up tick-by-tick with each one still
+    carrying its own correct value. `max_stall_s` only guards the
+    pathological case - a real stall large enough that "catching up" would
+    mean flooding out a large backlog of ticks - by resyncing to real time
+    instead and logging it: a real, visible discontinuity for a real
+    stall, rather than a packet flood or a silently-absorbed gap.
+    """
     interval = 1.0 / rate_hz
+    total_ticks = max(1, round(duration * rate_hz))
     start = time.monotonic()
     seq = 0
     tick = 0
-    while True:
+    while tick <= total_ticks:
+        target_t = tick * interval
         now = time.monotonic()
-        t = now - start
-        if t >= duration:
-            break
-        value = triangle_value(t, duration)
+        behind_s = now - (start + target_t)
+
+        if behind_s > max_stall_s:
+            new_tick = min(total_ticks, int((now - start) / interval))
+            print(f"  WARNING: send_triangle_wave fell {behind_s:.2f}s behind schedule - "
+                  f"skipping ticks {tick}..{new_tick - 1} instead of flooding a catch-up burst",
+                  file=sys.stderr)
+            tick = new_tick
+            continue
+
+        if behind_s < 0:
+            time.sleep(-behind_s)
+
+        value = triangle_value(min(target_t, duration), duration)
         seq = (seq % 15) + 1
         sock.sendto(build_ddp_packet(seq, value), (host, port))
         tick += 1
-        next_tick_time = start + tick * interval
-        sleep_time = next_tick_time - time.monotonic()
-        if sleep_time > 0:
-            time.sleep(sleep_time)
-    # Final packet to land exactly on 0
+    # Final packet to land exactly on 0 (redundant with the loop's own last
+    # tick in the normal case - kept as a safety net against rounding).
     seq = (seq % 15) + 1
     sock.sendto(build_ddp_packet(seq, 0), (host, port))
 
