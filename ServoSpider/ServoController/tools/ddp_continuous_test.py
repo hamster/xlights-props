@@ -189,6 +189,64 @@ def analyze(lines, args):
     print(f"\n=== TRACKING ===")
     print(f"  rms_error: {(sum(x*x for x in lags)/len(lags))**0.5:.1f}  max_error: {max(lags)}")
 
+    # Jerk/roughness: mean |consecutive curSpeedHz delta| - same metric
+    # tuning_harness.py's compute_metrics() uses, for direct comparability
+    # against every prior sweep this project has run.
+    speeds = [r["curSpeedHz"] for r in rows]
+    jerk = sum(abs(speeds[i] - speeds[i - 1]) for i in range(1, len(speeds))) / max(1, len(speeds) - 1)
+    print(f"  jerk_per_sample: {jerk:.1f}")
+
+    # Frame lag: how many 40fps frames "behind" the commanded position
+    # actual currently is, estimated as |error| / (local commanded speed
+    # in steps/frame) - i.e. "how long, at the rate the target is actually
+    # moving right now, would it take actual to reach where commanded
+    # already is". Undefined/skipped at very low commanded speed (near a
+    # reversal or hold) - lag in steps there doesn't mean lag in *time*.
+    FRAME_S = 1.0 / 40.0
+    frame_lags = []
+    for r in rows:
+        speed_steps_per_s = abs(r["targetSpeedHz"])
+        if speed_steps_per_s < 200:  # near-zero commanded rate - steps/frame not meaningful
+            continue
+        steps_per_frame = speed_steps_per_s * FRAME_S
+        frame_lags.append(abs(r["lag"]) / steps_per_frame)
+    if frame_lags:
+        frame_lags.sort()
+        n = len(frame_lags)
+        print(f"\n=== FRAME LAG (at 40fps, only while target is actually moving) ===")
+        print(f"  mean: {sum(frame_lags)/n:.1f}  p95: {frame_lags[int(n*0.95)]:.1f}  max: {frame_lags[-1]:.1f}  "
+              f"(budget: prefer <5, hard cap 20)")
+        over_budget = sum(1 for f in frame_lags if f > 20)
+        print(f"  samples over the 20-frame hard cap: {over_budget}/{n} ({100.0*over_budget/n:.1f}%)")
+
+    # Corner tightness: max |error| within +/-0.75s of each detected
+    # reversal (a local min or max in ddpVal) - the specific "how tight are
+    # the corners" question, separate from overall rms_error which mixes
+    # in the (usually cleaner) straight-leg tracking too.
+    # Real reversals only - a genuine triangle-wave peak/trough sits AT or
+    # very near the DDP value's own boundary (0 or 255), not just any
+    # local wiggle in the interior (a naive tight-window min/max detector
+    # picked up 126 "reversals" from ordinary sender jitter in a 5-cycle
+    # test - not useful). De-duplicated by time so one real reversal
+    # (which can span several ticks sitting near the boundary) counts once.
+    ddp_boundary_idxs = [i for i, r in enumerate(rows) if r["ddpVal"] <= 3 or r["ddpVal"] >= 252]
+    reversal_ms = []
+    last_ms = None
+    for i in ddp_boundary_idxs:
+        ms = rows[i]["ms"]
+        if last_ms is None or ms - last_ms > 1000:  # new reversal, not the same one still near the boundary
+            reversal_ms.append(ms)
+        last_ms = ms
+    corner_errors = []
+    for t_center in reversal_ms:
+        window_rows = [r for r in rows if abs(r["ms"] - t_center) <= 750]
+        if window_rows:
+            corner_errors.append(max(abs(r["lag"]) for r in window_rows))
+    if corner_errors:
+        print(f"\n=== CORNER TIGHTNESS (max |error| within +/-0.75s of each of {len(reversal_ms)} real reversals) ===")
+        print(f"  mean: {sum(corner_errors)/len(corner_errors):.1f}  max: {max(corner_errors)}")
+        print(f"  per-corner: {[round(c) for c in corner_errors]}")
+
     make_plot(rows, args)
 
 

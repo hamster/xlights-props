@@ -542,12 +542,31 @@ void updatePidMode() {
       unsigned long sinceLastChange = now - pidFeedforwardLastChangeMs;
       if (sinceLastChange > 0 && sinceLastChange <= PID_FEEDFORWARD_MAX_GAP_MS) {
         float instVelocity = (target - pidFeedforwardLastTarget) / (sinceLastChange / 1000.0f);
-        // Light EMA - a single inter-change gap can be jittery (network
-        // timing, or landing just before/after a quantization boundary);
-        // average a few together rather than trusting one sample.
+        // Sanity clamp (2026-09-07, added chasing a rare ~1-in-6-cycles
+        // overshoot at direction reversals): right at a peak/trough, a
+        // real sender's own timing jitter (confirmed against DDPDebugger's
+        // actual source - it computes each value from real elapsed time,
+        // not a clean schedule) can occasionally produce a tiny elapsed
+        // gap paired with a target delta that straddles the reversal,
+        // yielding a wildly overstated instantaneous velocity. Clamping
+        // before it ever reaches the EMA keeps one bad sample from
+        // skewing the running estimate; the final commanded speed was
+        // already clamped to pidMaxSpeedConfig regardless, so this isn't
+        // a new behavioral ceiling, just keeping bad inputs out of the
+        // smoothed estimate itself.
+        float clampMag = (float)stepperPidMaxSpeedConfig * 1.5f;
+        if (instVelocity > clampMag) instVelocity = clampMag;
+        if (instVelocity < -clampMag) instVelocity = -clampMag;
+        // EMA - a single inter-change gap can be jittery (network timing,
+        // or landing just before/after a quantization boundary); average
+        // several together rather than trusting one sample. Weighted
+        // toward the running estimate (0.7/0.3, was 0.5/0.5) for the same
+        // reversal-overshoot reason as the clamp above - slower to react
+        // to a single outlier, still tracks a genuine sustained rate
+        // change within a handful of ticks.
         pidFeedforwardVelocity = (pidFeedforwardVelocity == 0)
                                       ? instVelocity
-                                      : (0.5f * pidFeedforwardVelocity + 0.5f * instVelocity);
+                                      : (0.7f * pidFeedforwardVelocity + 0.3f * instVelocity);
       }
       // A gap longer than the timeout: leave pidFeedforwardVelocity as-is
       // for this tick (the "stale, zero it out" handling below covers

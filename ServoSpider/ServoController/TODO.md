@@ -6,6 +6,82 @@ Turn this into a standalone stepper-mover **+** pixel controller: one ESP32-S3 d
 
 Note: checked `git branch -a` / `git stash list` / `git log --all` — there is no leftover branch, stash, or commit anywhere in this repo with prior dual-core work. If there was earlier progress on splitting stepper/LED work across cores, it never made it into git, so treat this as a fresh design rather than something to dig up.
 
+## Time-budget PID velocity feedforward - implemented, two real bugs found/fixed, tuned, and beats Direct mode on accuracy (2026-09-07)
+
+The user's own original framing, from earlier in this same marathon session: PID had no notion of *how much time it actually has* to get from one commanded point to the next, so it always drove at full reactive speed even for small moves paced by a much slower real show timeline. Direct mode (see the section below) turned out smoother for realistic pacing, but "I still think the PID mode could be better with some tweaking based on frame rate" - this section is that work.
+
+### Design: `pidFeedforward` (new tunable, on by default)
+
+Self-measures how fast the *target* has actually been changing in real time (not an assumed 25/40fps) and drives that velocity directly; PID's P/I/D terms then only trim the small residual error instead of doing all the work. See `updatePidMode()`'s feedforward block (`main.cpp`) for the exact implementation - tracks the last real target change and its timestamp, computes instantaneous velocity from the two, EMA-smooths it (weighted 0.7 toward the running estimate after tuning - a lighter 0.5/0.5 blend let single-sample sender jitter skew the estimate right at reversals), and zeroes it out if no real target change has happened in >200ms (source paused/stopped, stop coasting on a stale rate). A sanity clamp (±1.5x `pidMaxSpeedConfig`) keeps one wild instantaneous sample from skewing the EMA even before the final output's own clamp.
+
+### Two real bugs found testing against actual DDPDebugger data (not just the bench triangle-wave tool)
+
+Both were **new-to-this-session bugs in the reversal-freeze fix from the previous session** - real DDPDebugger playback exercises repeated continuous reversals in a way `tuning_harness.py`'s single-cycle-per-run tests never had:
+
+1. **`pidStopSettling`'s wait used plain `isRunning()`**, not the `genuinelyRunning` check (`isRunning() && speed != 0`) already applied everywhere else in this function - missed when that fix went in. Caused a real ~700ms stall exactly at the bottom-of-travel (position 0) reversal: `curSpeedHz` read exactly 0 the whole time (a genuine, complete stop) while the wait stayed blocked far past the ~50ms a decel at `stepperPidAccelConfig` should take. Fixed to match.
+2. **The overshoot safety check was re-triggering every tick** a benign few-step excursion (-32, -17, -2 observed) sat outside `[0, bottomPosition]`, calling `forceStop()`+re-arming `pidStopSettling` from scratch each time and never letting the actual recovery logic run to completion - this is what the user reported as "no stall at 0, but all kinds of stalls at the bottom" once the first bug was fixed. Added a 150-step tolerance (matching `RAMMED_STEP_TOLERANCE`'s precedent) and a `!pidStopSettling` guard so a genuine overshoot still stops exactly once per excursion.
+
+Verified with a new tool, **`tools/ddp_continuous_test.py`** - reproduces DDPDebugger's actual continuous-loop triangle wave (`elapsed % period`, matched directly against `DdpSender.java` - including its real-elapsed-time value computation, deliberately not the cleaned-up scheduled-tick sender `tuning_harness.py` uses, since fidelity to the real tool was the point) entirely over HTTP (`GET /tunable`, `GET /compact-log` - no serial connection, so it can run repeatedly with zero risk of resetting the device mid-test). This tool means DDPDebugger-fidelity regression testing no longer needs a human running DDPDebugger by hand.
+
+Also found and fixed the same night: the Compact Motion Log's HTTP ring buffer was too small (32KB only held ~13s of continuous active-tracking logging at ~50 lines/sec - a real multi-minute DDPDebugger session wrapped it, leaving only trailing idle time by the time it was fetched). Grown to 96KB.
+
+### Gain sweep against feedforward - Kp=15 badly over-drives once feedforward carries the load
+
+First test with the old Kp=15/Kd=0.3 (tuned for pure reactive PID) showed real sustained oscillation - expected, feedforward now supplies most of the velocity and Kp=15 double-drives on top of it. Swept Kp/Kd (all via `tools/ddp_continuous_test.py`, period=8s, 60s/~7 cycles per candidate):
+
+| candidate | rms_error | jerk_per_sample | corner tightness (mean) | stalls | frame lag max |
+|---|---|---|---|---|---|
+| Kp=15 (unchanged) | real oscillation, not usable | | | | |
+| Kp=3/Kd=0.3 | 315.9 | 455.2 | 591.4 | 1 (~600ms, top reversal) | 20.1 |
+| Kp=3/Kd=0.5 | 472.6 | 473.7 | 600.1 | **0** | 23.2 |
+| Kp=2/Kd=0.3 | 398.8 | 434.0 | 554.0 | 0 | **40.6 (over hard cap)** |
+| **Kp=4/Kd=0.3 (chosen)** | **251.7** | 481.3 | 508.1 | **0** | **10.0** |
+| Kp=3/Kd=0.1 | **catastrophic - see below** | | | | |
+
+**Kp=3/Kd=0.1 caused a real, severe firmware bug, not just bad tuning**: the trolley froze completely (curPos stuck at one exact unchanging value, curSpeedHz reading exactly 0 for 40+ seconds despite targetSpeedHz correctly wanting -7000) and **never self-recovered** - unlike every other stall this session, which resolved on its own within a second. Worse: the corruption **persisted across subsequent config changes** - re-testing the already-known-good Kp=4/Kd=0.3 candidate immediately afterward, without a reboot, came back with a huge first-corner error (4036 steps) before "recovering" mid-test. A full device reboot fully restored normal behavior (re-verified Kp=4/Kd=0.3 matched its original clean numbers exactly). **Not root-caused - flagged as a real, serious, unresolved bug**: avoid very low Kd (below ~0.15) with feedforward enabled until this is understood. Also coincided with a flurry of ~20 unexplained reboots (`persist_log` showed boot numbers climbing rapidly, reset reason UNKNOWN, no serial connection open) - not confirmed as the same root cause, but suspicious timing.
+
+**Kp=6 combined with a reduced `pidAccel` (20000, tried while chasing jerk - see below) also produced a real, severe instability**: rms_error 8061, 58% of samples over the 20-frame lag budget, obviously oscillating. A useful boundary to know - don't combine Kp much above 4 with a lowered accel.
+
+### `pidAccel` as a jerk lever - a real but non-free tradeoff
+
+Direct mode's own `trackAccel` (20000) is well below PID's `pidAccel` (50000) - tested whether lowering PID's accel would close some of the smoothness gap to Direct mode, since feedforward (not accel-driven reactive correction) now carries the primary "aiming" job:
+
+| pidAccel | rms_error | jerk_per_sample | corner tightness (mean) |
+|---|---|---|---|
+| 15000 | 383.9 | 254.6 | 972.6 |
+| 20000 | 317.7 | 299.5 | 806.6 |
+| 35000 | 257.8 | 449.2 | 587.8 |
+| **50000 (chosen)** | **251.7** | 481.3 | **508.1** |
+
+The relationship isn't linear - jerk barely improves 50000→35000 but drops a lot below ~20000, suggesting `pidAccel` acts like a low-pass filter on the noisy Kp/Kd correction signal only once it's low enough to meaningfully rate-limit it. But every step down also loosens corner tightness and rms_error non-trivially. Given the corner-tightness/accuracy improvement over the pre-feedforward baseline (and over Direct mode - see below) was the user's explicit priority, kept `pidAccel=50000` - the smoothness gap to Direct mode remains open, flagged below.
+
+### Final validation across realistic periods (6-15s) and vs. Direct mode
+
+Kp=4/Kd=0.3/pidAccel=50000/pidFeedforward=1, verified clean (zero stalls, frame lag comfortably under the 20-frame budget except one single-sample outlier at p12) across periods 6, 8, 10, 12, 15s - see `tools/tuning_runs/final_comparison_summary.png` for the full graphed comparison against Direct mode (`trackAccel=20000`) at the same periods:
+
+| period | PID+FF rms_error | PID+FF corner mean | PID+FF jerk | Direct rms_error | Direct corner mean | Direct jerk |
+|---|---|---|---|---|---|---|
+| 6 | 393.6 | 790.8 | 557.7 | - | - | - |
+| 8 | 246.5 | 595.5 | 513.5 | 612.5 | 1161.1 | 153.0 |
+| 10 | 189.4 | 397.6 | 418.6 | - | - | - |
+| 12 | 167.4 | 397.1 | 265.3 | 273.8 | 475.3 | 142.8 |
+| 15 | 155.8 | 275.3 | 350.1 | - | - | - |
+
+**PID+feedforward wins decisively on accuracy and corner tightness at every period tested** (roughly 2.5x better rms_error and 2x tighter corners than Direct at p8; still clearly better, if by a smaller margin, at p12). **Direct mode is still smoother moment-to-moment** (jerk ~3x lower) - this is the one part of the user's stated goal ("smooth tracking like direct mode, but tighter corners... actual closer to commanded") not yet fully closed. Given the explicit priority order in the ask (corners tighter, actual closer to commanded, "OK to be a couple frames behind... don't be more than 20 frames"), and that PID+feedforward already meets the frame-lag budget comfortably, this was judged the better overall trade and made the new default.
+
+**Applied**: `pidKp` compiled default 15.0→4.0, `pidFeedforward` compiled default false→true (`stepper_handler.cpp`) - both flashed and verified live from a genuine fresh boot. `trackMode` set to 4 (PID) *live* but **not saved to NVS** - the flash-saved fallback stays Direct mode, so an unplanned power cycle while unattended doesn't silently switch behavior without a human reviewing this first.
+
+### Operational note: a DTR/RTS toggle sequence can leave the ESP32-S3 stuck in USB download/bootloader mode
+
+Found live tonight: manually toggling DTR/RTS via raw pyserial (outside `pio.exe upload`'s own proven sequence) left the device completely unresponsive over HTTP *and* silent over serial - looked exactly like a hard crash. It wasn't: a careful serial reconnect showed `rst:0x15 (USB_UART_CHIP_RESET), boot:0x0 (DOWNLOAD(USB/UART0))` - the chip was sitting in the ROM bootloader waiting for `esptool`, not running any application code at all (explains the total silence, including no ESP-IDF boot banner). **Fix: just re-run `pio.exe run --target upload`** - a normal flash cycle's own reset sequence reliably returns it to run mode. Worth remembering before assuming a real firmware crash: check for this specific boot message pattern first.
+
+- [ ] Close the remaining smoothness gap to Direct mode (jerk ~300-550 vs Direct's ~140-155) - not yet found a change that improves this without cost elsewhere. Candidates not yet tried: filtering/smoothing the derivative-on-measurement rate estimate itself (separate from the feedforward EMA), Ki (still completely untested), or accepting the current jerk level as the cost of the much tighter tracking.
+- [ ] Root-cause the Kd=0.1 permanent freeze/corruption bug - a real, serious, reproduced-once issue, not yet understood. Until it is, treat Kd below ~0.15 as an unverified danger zone with feedforward enabled.
+- [ ] Investigate the ~20-reboot flurry that coincided with the Kd=0.1 testing window - not confirmed as the same root cause, but the timing is suspicious and reset reason was UNKNOWN (a real crash signature) for all but one of them.
+- [ ] `pidAccel` below 50000 is a real, available lever if the smoothness/corner-tightness trade is ever revisited (see the table above) - not chosen tonight, but characterized.
+- [ ] Ki still completely untested against feedforward (or ever, really - see prior sessions' notes).
+- [ ] Decide whether to persist `trackMode=4` to NVS (make PID+feedforward the real production default) - deliberately left as a live-only override tonight pending the user's own review of this report.
+
 ## Direct-mode reversal lag investigation + a real crash bug found and fixed (2026-09-06/07)
 
 Prompted by real-world testing: the user compared a clean reboot (no live overrides - device's true persisted defaults, which turned out to be `trackMode=0`/Direct, not PID) against real DDPDebugger/xLights playback at several cycle periods. **10-20s periods were "pretty darn smooth," 5s was jerky (mid-point), 4s clipped the travel ends without being jerky.** The 5s/4s cases are a genuine physical speed-ceiling limit, not a bug: a 5s full-range cycle needs ~6205 steps/s average against a 6500-7000Hz ceiling, essentially zero margin - confirmed by the user separately noting that changing normalSpeed (6000-8000Hz) didn't change that behavior at all, consistent with DDPDebugger's period sender using an eased/non-linear curve whose peak instantaneous velocity exceeds the simple average-speed math.

@@ -112,28 +112,40 @@ int stepperStreamSettleMsConfig = 150;
 int stepperLookaheadStepsConfig = 5000;
 int stepperLookaheadSettleMsConfig = 150;
 
-// TRACK_MODE_PID defaults - Kp originally tuned via a step-response sweep
-// (2026-09-06, see TODO.md's "PID gain tuning" section for the full data):
-// swept 0.5-30, zero overshoot up to Kp=8 (the P-only sweet spot, ~1020ms
-// response), real overshoot from Kp=10 up. Kd was ALSO originally picked
-// from that same step-response methodology (0.7, damping 300 steps of
-// overshoot down to near-zero) - but a step response and a live, 40fps
-// continuous DDP triangle wave turned out to be different signals: a later
-// damping sweep against the continuous wave (same day, see TODO.md's
-// "PID damping sweep" section) found the opposite result - Kd=0.7 measurably
-// WORSENS a real, sustained ~10-13Hz speed ripple during continuous
-// tracking (not locked to DDP frame rate - a genuine underdamped
-// Kp/derivative-on-measurement resonance, not an input-quantization
-// artifact), and lowering it to 0.3 measurably helps BOTH ripple and
-// rms_error, at every tested duration, with a full clean 5-duration sweep
-// on real hardware. (Kd=0 tested even better on ripple/error but hit an
-// ambiguous switch/position-drift trip during that same sweep - not
-// confirmed as a real mechanical event, but not ruled out either; 0.3 gets
-// most of the same benefit without going anywhere near that edge case, so
-// it's the safer pick pending a closer look at Kd=0.) Ki left at 0 - not
-// yet tested (needs a sustained-tracking test, not a step-response one;
-// see TODO.md).
-float stepperPidKpConfig = 15.0f;
+// TRACK_MODE_PID defaults - superseded twice since first tuned; see
+// TODO.md's "PID gain tuning", "PID damping sweep", and "Time-budget
+// feedforward" sections for the full history:
+//   1. Kp=15/Kd=0.7 - originally picked from a step-response sweep
+//      (zero overshoot up to Kp=8, real overshoot from Kp=10 up; Kd=0.7
+//      damped a single step's overshoot to near-zero).
+//   2. Kp=15/Kd=0.3 - a step response and a live 40fps continuous DDP
+//      wave turned out to be different signals: Kd=0.7 measurably
+//      WORSENED a real ~10-13Hz speed ripple during continuous tracking
+//      (a genuine underdamped Kp/derivative-on-measurement resonance,
+//      not DDP-frame-rate-locked), Kd=0.3 helped both ripple and
+//      rms_error.
+//   3. Kp=4/Kd=0.3, pidFeedforward=true (current) - the ripple sweep
+//      above never addressed the user's original design complaint (no
+//      notion of how much time is actually available between commanded
+//      points, so PID always drove at full reactive speed even for
+//      small paced moves). Added a time-budget velocity feedforward
+//      (self-measures the real rate the target has been moving at,
+//      drives that directly, PID trims only the residual) - see
+//      updatePidMode()'s feedforward block (main.cpp). Once feedforward
+//      carries the bulk of the motion, Kp=15 badly over-drives (real
+//      sustained oscillation); a fresh Kp sweep against feedforward
+//      found Kp=4 the best overall balance of rms_error/corner-
+//      tightness/frame-lag across periods 6-15s (real DDPDebugger-
+//      fidelity testing, tools/ddp_continuous_test.py) - beats the
+//      pre-feedforward baseline on both accuracy and corner tightness,
+//      though moment-to-moment jerk/ripple is still higher than Direct
+//      mode's - see TODO.md for the full comparison and what was tried
+//      to close that gap (pidAccel reduction trades corner-tightness
+//      for jerk; Kp much above 4 combined with a lower accel produced a
+//      real, reproducible oscillation - avoid). Ki still untested (Kp/Kd
+//      only ever swept with Ki=0 - needs a sustained-tracking test, not
+//      a step-response one).
+float stepperPidKpConfig = 4.0f;
 float stepperPidKiConfig = 0.0f;
 float stepperPidKdConfig = 0.3f;
 // 7000 Hz per the 2026-09-06 speed/current characterization sweeps and
@@ -160,10 +172,13 @@ int stepperPidDeadbandConfig = 30;
 // units of DDP 8-bit quantization jitter (roughly bottomPosition/255 steps
 // per unit - ~60 on this device) without re-engaging continuous-run mode.
 int stepperPidReengageThresholdConfig = 150;
-// Off by default - new, unvetted (2026-09-07), see its declaration comment
-// (stepper_handler.h) for the design. Enable via $SET/GET-/tunable for
-// bench testing before ever flipping this compiled default.
-bool stepperPidFeedforwardConfig = false;
+// On by default (2026-09-07) - see its declaration comment
+// (stepper_handler.h) for the design. Vetted via tools/ddp_continuous_test.py
+// (real DDPDebugger-fidelity testing) across periods 6-15s with the
+// Kp=4/Kd=0.3 gains above, tuned specifically against feedforward - see
+// TODO.md's "Time-budget feedforward" section for the full comparison
+// against both the pre-feedforward PID baseline and Direct mode.
+bool stepperPidFeedforwardConfig = true;
 
 bool stepperSettingsPendingSave = false;
 

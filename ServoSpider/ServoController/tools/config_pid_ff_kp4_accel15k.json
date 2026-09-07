@@ -1,0 +1,14 @@
+{
+  "normalSpeed": 7000,
+  "normalAccel": 200000,
+  "tmcRunCurrent": 1200,
+  "tmcStallEnabled": 0,
+  "trackMode": 4,
+  "pidKp": 4,
+  "pidKi": 0,
+  "pidKd": 0.3,
+  "pidMaxSpeed": 7000,
+  "pidAccel": 15000,
+  "pidDeadband": 30,
+  "pidFeedforward": 1
+}
