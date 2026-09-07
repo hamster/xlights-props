@@ -11,6 +11,7 @@ Goal: implement closed-loop PID control for DDP position tracking (replacing the
 - First real DDP triangle-wave test (not just single-step response) found two more real bugs — PID's own settling behavior near the switch was tripping the "rammed into stop" safety check, and the first fix for that reintroduced Direct mode's own "constantly re-aiming never accelerates" jerkiness. Both fixed.
 - The raw DDP trace looked jumpy in most runs. Root cause was entirely host-side, not the device: the test harness's own sender computed each value from real elapsed time, so ordinary scheduling jitter on the sending machine produced real (if artificial) jumps. Fixed, and verified two independent ways that delivery itself was never the issue - zero packets lost, zero sequence gaps.
 - Re-running the full sweep with the fixed sender exposed one more real bug (the hysteresis fix's own `moveTo()` could silently go "dead" the same way `runForward()`/`runBackward()` already had) plus a logging-completeness gap that had been making clean DDP reception look jumpy in the log. Both fixed; the full 5-duration sweep is now clean end to end, and it's the cleanest data of the whole session.
+- A later re-run of the same clean sweep regressed hard - real multi-second freezes where `positionRequest` itself stopped updating. Investigated separately with dedicated instrumentation (see `TODO.md`); re-running the full sweep again after that work found no freezes at all, numbers matching the original clean baseline almost exactly - encouraging, but not proof the underlying cause is understood or fixed. Also visible in that final re-run: overall tracking is genuinely smooth (matches the user's own "jerky but smooth" read watching it live), but a real, bounded high-frequency ripple in actual speed is present underneath and still unexplained.
 
 ## Direction bug: `setJumpStart()` fires backward in continuous-run mode
 
@@ -179,14 +180,40 @@ The 12s/16s pair confirms the same thing a different way: the 12s run's own log 
 
 Unlike the freezes above, the 5s run's error trace is smooth and continuous throughout - "Actual" is working the whole time, just can't keep up. A 5s full-cycle wave needs to cross the whole ~15,500-step range in 2.5s, requiring something like 6200Hz average speed against a 7000Hz cap - not much margin once acceleration/deceleration time is subtracted. The 5s run has been the worst of every duration tested all session, in every sweep - this is an inherent consequence of asking for a faster wave than the system's tuned speed ceiling supports, not a new regression.
 
+## Re-run after the DDP reception instrumentation work (2026-09-06, `pid_v2_*`) — freeze did not recur, ripple visible but "smooth"
+
+Same sweep again (`tuning_harness.py --config config_pid.json`, same gains/environment as `pid_final`/`pid_observed` above), run after this session's DDP reception instrumentation work (network-retrievable reception log, `WiFi.setSleep(false)`, and — earlier the same day — a dedicated combined motion+reception test that also came back clean; see `TODO.md`). The user watched this run directly and described it as "jerky but smooth."
+
+| duration | rms_error | max_error | near_stall_pct | notes |
+|---|---|---|---|---|
+| 5s | 744 | 1501 | 1.5% | matches `pid_final`'s 747/1497 almost exactly |
+| 8s | 437 | 1192 | 1.3% | matches `pid_final`'s 429/1103 |
+| 12s | 283 | 752 | 0.9% | matches `pid_final`'s 279/564 |
+| 16s | 209 | 297 | 0.0% | matches `pid_final`'s 213/442 |
+| 20s | 169 | 230 | 0.0% | matches `pid_final`'s 173/352 |
+
+**No freezes, no stuck episodes, no step loss, no re-homes needed anywhere in the sweep** — the skipped-step check before every run came back clean, and every number lines up with the original `pid_final` baseline almost digit-for-digit. The `pid_observed` regression (5s/8s/16s all badly degraded, a real 12-step loss, multi-second `positionRequest` freezes) did not reproduce.
+
+### 16s run — clean position tracking, but a real speed ripple underneath
+
+![16s run - clean tracking, visible speed ripple](tuning_runs/pid_v2_20260906_220241_dur16s.png)
+
+### 8s run — same pattern, ripple more pronounced at higher required speed
+
+![8s run - clean tracking, visible speed ripple](tuning_runs/pid_v2_20260906_220241_dur8s.png)
+
+This is very likely what "jerky but smooth" is describing: the **Position** panel (top) tracks the commanded ramp cleanly with no visible discontinuity — genuinely smooth motion at the level a person watching the trolley would judge it. The **Actual Speed** panel (third) tells a different story underneath: a real, sustained oscillation (roughly 1000-3000Hz swings, ~0.2-0.3s period) riding on top of the average cruise speed, in both directions, the whole time it's moving. This is the same not-yet-explained ripple flagged in "Still open" below — small enough in position terms not to show up as visible jerkiness in the trace, but real enough to be audible/felt as roughness in the drivetrain (worm gear + motor) even while the net result looks smooth on a plot. Worth a closer look (likely Kd reacting to rate-estimate noise) before calling PID fully production-ready, independent of the DDP freeze question.
+
+**On the freeze bug specifically**: this clean result, plus the same-day combined motion+reception test (also clean — see `TODO.md`), is encouraging but still not proof it's fixed, since nothing that directly touches DDP receive/parse logic changed. `WiFi.setSleep(false)` remains the leading candidate explanation if it stays clean across more/longer runs.
+
 ## Where things landed
 
 **Working PID gains**: `Kp=15, Ki=0, Kd=0.7, MaxSpeed=7000, Accel=50000, Deadband=30, ReengageThreshold=150`. **Environment**: `1200mA run current, 200,000 accel, 7000Hz cruise cap` (current and accel saved via the web UI; the 7000Hz speed cap is a live override only — see below).
 
 ## Still open
 
-- **New, real, not-yet-root-caused**: multi-second freezes where `positionRequest` itself stops updating (not a stepper/motion issue - see the section above) - either genuine sustained WiFi packet loss or a DDP sequence-validation edge case, not yet distinguished. Needs a live-monitored re-run (poll `/status-data`'s packet counters during a run) to settle which.
-- A real, bounded, visible high-frequency ripple remains in actual speed during active tracking (~500–4500Hz, ~0.2–0.3s period, both directions) — doesn't hurt overall accuracy but isn't fully explained; likely Kd reacting to rate-estimate noise on a live, continuously-updating target rather than a clean single step.
+- **Multi-second `positionRequest` freeze — not reproduced since, but not confirmed fixed.** Two clean re-runs since (a dedicated combined motion+reception test, and the full duration sweep above) found zero freezes, but nothing that directly touches DDP receive/parse logic was changed - `WiFi.setSleep(false)` is the leading candidate if it stays clean across more/longer sessions. See `TODO.md`'s DDP reception instrumentation sections for full detail.
+- A real, bounded, visible high-frequency ripple remains in actual speed during active tracking (~1000–4500Hz, ~0.2–0.3s period, both directions) — doesn't hurt overall accuracy and the position trace itself looks clean (see the `pid_v2` re-run above - user's own read watching it live was "jerky but smooth"), but isn't fully explained; likely Kd reacting to rate-estimate noise on a live, continuously-updating target rather than a clean single step.
 - Ki hasn't been tuned — the deadband snap already closes any P/PD steady-state gap for a single step, so this needs a genuinely different test (sustained tracking of a moving target, not step response) to matter.
 - `pidReengageThreshold` / the ram-check's tolerance (150, matched to each other) were chosen from the DDP-quantization math, not an independent sweep.
 - `normalSpeed=7000Hz` is currently a live override only, not saved — a reboot reverts it to the saved 8000Hz until it's explicitly saved via the web UI or a different number is settled on.
