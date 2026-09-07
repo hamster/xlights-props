@@ -843,9 +843,58 @@ void updatePidMode() {
   if (speed > stepperPidMaxSpeedConfig) speed = (float)stepperPidMaxSpeedConfig;
   if (speed < -stepperPidMaxSpeedConfig) speed = -(float)stepperPidMaxSpeedConfig;
 
+  // --- Directional containment guards -------------------------------------
+  //
+  // Both exist because of a real, damaging incident (2026-09-07 evening): the
+  // trolley was driven 11,911 steps past the top switch and wound up the back
+  // side of the pulley, destroying the zero reference. Root cause was the
+  // pidOvershootLatched change made earlier the same evening: it correctly
+  // stopped the safety net from re-firing every tick (which had caused a 3.5s
+  // freeze), but left nothing preventing the control law from then driving
+  // *further* out of bounds. Firing once and handing back control is only safe
+  // if "back" is the sole direction still permitted.
+  //
+  // Guard 1 - position bounds. While outside [0, bottomPosition], permit only
+  // motion that reduces the excursion. Costs nothing in normal operation
+  // (curPos is in range, so neither branch fires) and makes the runaway
+  // structurally impossible rather than merely unlikely.
+  if (currentPos < 0 && speed < 0) speed = 0;
+  if (currentPos > bottomPosition && speed > 0) speed = 0;
+
+  // Guard 2 - the homing switch is authoritative, the step counter is not.
+  // This is the one that would have caught the incident above even with a
+  // lying counter, and it is the more important of the two: once the motor
+  // stalls against a hard stop, FastAccelStepper keeps emitting steps and
+  // getCurrentPosition() keeps counting them, so curPos becomes fiction and
+  // every bounds check derived from it (including Guard 1) is comparing
+  // against a number that no longer describes the physical world. The switch
+  // is a direct physical measurement and stays true regardless. The switch
+  // sits at the top of travel (position 0), so negative speed is "toward the
+  // switch" - if it reads tripped, refuse to drive further that way no matter
+  // what the counter claims. The log from the incident shows the switch
+  // reading tripped for 22 rows while the counter ran on down to -11911.
+  if (isHomingSwitchTripped() && speed < 0) speed = 0;
+
   int newDirection = (speed > 0) ? 1 : (speed < 0 ? -1 : 0);
   uint32_t speedHz = (uint32_t)fabs(speed);
   if (speedHz < 50) speedHz = 50;  // floor so runForward/runBackward always gets a sane nonzero speed, matches Streaming
+
+  // A guard above zeroed the command: stop rather than fall through to the
+  // run/applySpeedAcceleration() path below, which has no way to express
+  // "no motion" (runForward()/runBackward() both mean "keep going", and the
+  // 50Hz floor above would quietly turn a refusal into slow creep in the
+  // very direction just refused).
+  if (newDirection == 0) {
+    if (stepper->isRunning()) {
+      stepper->forceStop();
+      pidStopSettling = true;
+    }
+    pidCurrentDirection = 0;
+    continuousRunDirection = 0;
+    logCompactMotion(positionRequest, (int)target, (int)currentPos, 0, (int)error,
+                      true, stepper->getCurrentSpeedInMilliHz(), 0);
+    return;
+  }
 
   stepper->setAcceleration(stepperPidAccelConfig);
   stepper->setSpeedInHz(speedHz);

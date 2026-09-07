@@ -10,6 +10,5 @@
   "pidAccel": 50000,
   "pidDeadband": 30,
   "pidFeedforward": 1,
-  "pidCorrSlew": 999999,
   "pidFfWindowMs": 160
 }
