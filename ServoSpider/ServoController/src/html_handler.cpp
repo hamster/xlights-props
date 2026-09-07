@@ -641,6 +641,15 @@ void handleLedTest() {
   }
 }
 
+// GET /compact-log?enable=true|false - toggles compactLogEnabled (original
+// behavior, unchanged - what the Settings page checkbox calls).
+// GET /compact-log?clear=1 - clears the in-RAM buffer below.
+// GET /compact-log (no args) - retrieves the in-RAM Compact Motion Log
+// buffer as plain text (added 2026-09-06) - see protocol_common.h's
+// getCompactLog()/clearCompactLog() declaration comment for why this is
+// HTTP, not Serial: a real xLights/DDPDebugger session already talks to
+// the device over the network, and opening a serial connection to watch
+// the log would reset the ESP32 (DTR/RTS) and kill that session.
 void handleCompactLog() {
   if (server.hasArg("enable")) {
     const String& enableArg = server.arg("enable");
@@ -652,9 +661,14 @@ void handleCompactLog() {
     Serial.print("Compact motion log ");
     Serial.println(enable ? "enabled" : "disabled");
     server.send(200, "application/json", enable ? "{\"success\":true,\"compactLog\":true}" : "{\"success\":true,\"compactLog\":false}");
-  } else {
-    server.send(200, "application/json", compactLogEnabled ? "{\"compactLog\":true}" : "{\"compactLog\":false}");
+    return;
   }
+  if (server.hasArg("clear")) {
+    clearCompactLog();
+    server.send(200, "text/plain", "cleared");
+    return;
+  }
+  server.send(200, "text/plain", getCompactLog());
 }
 
 // Reboot-surviving diagnostic log (see persist_log.h) - primary retrieval

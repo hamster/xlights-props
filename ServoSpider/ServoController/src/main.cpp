@@ -136,56 +136,71 @@ bool applyTrackingProfileDecision(float newTarget, float lastCommittedTarget, in
   return useTracking;
 }
 
+// In-RAM buffer for the Compact Motion Log, retrievable via GET
+// /compact-log - see protocol_common.h's getCompactLog()/clearCompactLog()
+// declaration comment for why this exists alongside (not instead of) the
+// Serial output below: a real xLights/DDPDebugger session already talks to
+// the device over the network, and opening a serial connection to watch
+// the log would reset the ESP32 (DTR/RTS) and kill that session. Same
+// bounded-growth/drop-oldest-complete-line pattern as ddp_handler.cpp's
+// ddpRxLogBuffer.
+static String compactLogBuffer;
+static const size_t COMPACT_LOG_MAX_BYTES = 190000;
+
+static void appendCompactLog(const String& line) {
+  compactLogBuffer += line;
+  compactLogBuffer += '\n';
+  if (compactLogBuffer.length() > COMPACT_LOG_MAX_BYTES) {
+    size_t excess = compactLogBuffer.length() - COMPACT_LOG_MAX_BYTES;
+    int cut = compactLogBuffer.indexOf('\n', excess);
+    compactLogBuffer = (cut >= 0) ? compactLogBuffer.substring(cut + 1) : "";
+  }
+}
+
+String getCompactLog() { return compactLogBuffer; }
+void clearCompactLog() { compactLogBuffer = ""; }
+
 // Temporary compact CSV motion log, independent of protocolDebugConfig - see
 // compactLogEnabled's declaration comment in protocol_common.h. Shared by all
 // three TRACK_MODE_* strategies so the log stays useful regardless of mode.
 void logCompactMotion(uint16_t ddpVal, int cmdPos, int curPos, int delta, int lag,
                        bool tracking, int32_t curSpeedMilliHz, int targetSpeedHz) {
   if (!compactLogEnabled) return;
-  Serial.print(millis());
-  Serial.print(",");
-  Serial.print(ddpVal);
-  Serial.print(",");
-  Serial.print(cmdPos);
-  Serial.print(",");
-  Serial.print(curPos);
-  Serial.print(",");
-  Serial.print(delta);
-  Serial.print(",");
-  Serial.print(lag);
-  Serial.print(",");
-  Serial.print(tracking ? "T" : "N");
-  Serial.print(",");
-  Serial.print(curSpeedMilliHz / 1000);
-  Serial.print(",");
-  Serial.print(targetSpeedHz);
-  Serial.print(",");
-  // Ground-truth encoder position alongside the step-counted curPos above -
-  // 0 if no encoder is wired/initialized, so existing logs without an
-  // encoder still parse the same way, just with this column always 0.
-  Serial.print(getEncoderCount());
-  Serial.print(",");
-  // Live TMC2209 StallGuard reading (updateTmc() refreshes this every
-  // STALL_POLL_INTERVAL_MS - see tmc_handler.cpp) - added 2026-09-06 after a
-  // real bench session showed repeated stall-detection trips during DDP
-  // tracking-mode motion (3 of 5 baseline runs lost real steps), with no way
-  // to see *when*, at what speed/position, or how close to the threshold
-  // SG_RESULT was running the rest of the time. 0 if TMC UART isn't
-  // connected, same "always 0, still parses" convention as encoderCount.
-  Serial.print(tmcStatus.stallGuardResult);
-  Serial.print(",");
-  // Raw homing switch state - added 2026-09-06 after running with
-  // StallGuard disabled (it was making false-positive-driven interruptions
-  // worse than the real stalls it's meant to catch, fighting attempts to
-  // get clean tracking-mode data) caused a real ram into the physical
-  // homing stop with no cutoff to catch it. Not wired into any real-time
-  // safety logic here on purpose - the user's own suggested check (motion
-  // commanded, encoder not advancing, switch reads triggered = stuck
-  // against the stop) is exactly the kind of thing that leans on the
-  // encoder, which isn't meant to outlive this tuning phase - so it's done
-  // as post-hoc analysis in tuning_harness.py instead, off this one raw
-  // logged bit, not as new production firmware logic.
-  Serial.println(isHomingSwitchTripped() ? 1 : 0);
+  String line = String(millis()) + "," + String(ddpVal) + "," + String(cmdPos) + "," +
+                String(curPos) + "," + String(delta) + "," + String(lag) + "," +
+                (tracking ? "T" : "N") + "," + String(curSpeedMilliHz / 1000) + "," +
+                String(targetSpeedHz) + "," +
+                // Ground-truth encoder position alongside the step-counted curPos
+                // above - 0 if no encoder is wired/initialized, so existing logs
+                // without an encoder still parse the same way, just with this
+                // column always 0.
+                String(getEncoderCount()) + "," +
+                // Live TMC2209 StallGuard reading (updateTmc() refreshes this
+                // every STALL_POLL_INTERVAL_MS - see tmc_handler.cpp) - added
+                // 2026-09-06 after a real bench session showed repeated
+                // stall-detection trips during DDP tracking-mode motion (3 of 5
+                // baseline runs lost real steps), with no way to see *when*, at
+                // what speed/position, or how close to the threshold SG_RESULT
+                // was running the rest of the time. 0 if TMC UART isn't
+                // connected, same "always 0, still parses" convention as
+                // encoderCount.
+                String(tmcStatus.stallGuardResult) + "," +
+                // Raw homing switch state - added 2026-09-06 after running with
+                // StallGuard disabled (it was making false-positive-driven
+                // interruptions worse than the real stalls it's meant to catch,
+                // fighting attempts to get clean tracking-mode data) caused a
+                // real ram into the physical homing stop with no cutoff to
+                // catch it. Not wired into any real-time safety logic here on
+                // purpose - the user's own suggested check (motion commanded,
+                // encoder not advancing, switch reads triggered = stuck against
+                // the stop) is exactly the kind of thing that leans on the
+                // encoder, which isn't meant to outlive this tuning phase - so
+                // it's done as post-hoc analysis in tuning_harness.py instead,
+                // off this one raw logged bit, not as new production firmware
+                // logic.
+                String(isHomingSwitchTripped() ? 1 : 0);
+  Serial.println(line);
+  appendCompactLog(line);
 }
 
 // Periodic compact-log tick, independent of the DDP/tracking-mode dispatch
