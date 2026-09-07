@@ -16,31 +16,43 @@ bool ddpAckConfig = false;
 
 // In-RAM buffer for ddpRxLogConfig's output - see its declaration comment
 // for why this is HTTP-retrievable (GET /ddp-rx-log) rather than printed
-// to Serial. Same bounded-growth pattern as persist_log.cpp's
-// pendingBuffer: appends freely, and once over the cap, drops the oldest
-// *complete lines* (never a partial line) rather than refusing to log
-// further - a long-running capture just keeps the most recent ~190KB
-// (roughly 8,000-9,000 lines at this format's ~22 bytes/line) instead of
-// stopping partway through a test.
-static String ddpRxLogBuffer;
-static const size_t DDP_RX_LOG_MAX_BYTES = 190000;
+// to Serial.
+//
+// Fixed-size ring buffer, NOT a growing/trimming String (2026-09-07) -
+// see main.cpp's compactLogRing for the full story: a String that grows
+// via += and periodically shrinks via substring() once over a byte cap
+// caused real, severe data corruption (embedded NULs) during a real
+// multi-minute session, from the repeated large reallocations that
+// pattern requires. This buffer never reallocates after startup - writes
+// wrap in place, oldest bytes are simply overwritten once full.
+static char ddpRxLogRing[32768];
+static size_t ddpRxLogHead = 0;  // next write position
+static size_t ddpRxLogLen = 0;   // valid bytes currently stored, <= sizeof(ddpRxLogRing)
+
+static void ddpRxRingAppendChar(char c) {
+  ddpRxLogRing[ddpRxLogHead] = c;
+  ddpRxLogHead = (ddpRxLogHead + 1) % sizeof(ddpRxLogRing);
+  if (ddpRxLogLen < sizeof(ddpRxLogRing)) ddpRxLogLen++;
+}
 
 static void appendDdpRxLog(const char* line) {
-  ddpRxLogBuffer += line;  // String::operator+=(const char*) appends directly, no intermediate String
-  ddpRxLogBuffer += '\n';
-  if (ddpRxLogBuffer.length() > DDP_RX_LOG_MAX_BYTES) {
-    size_t excess = ddpRxLogBuffer.length() - DDP_RX_LOG_MAX_BYTES;
-    int cut = ddpRxLogBuffer.indexOf('\n', excess);
-    ddpRxLogBuffer = (cut >= 0) ? ddpRxLogBuffer.substring(cut + 1) : "";
-  }
+  for (const char* p = line; *p; p++) ddpRxRingAppendChar(*p);
+  ddpRxRingAppendChar('\n');
 }
 
 String getDdpRxLog() {
-  return ddpRxLogBuffer;
+  String out;
+  out.reserve(ddpRxLogLen + 1);
+  size_t startIdx = (ddpRxLogLen < sizeof(ddpRxLogRing)) ? 0 : ddpRxLogHead;
+  for (size_t i = 0; i < ddpRxLogLen; i++) {
+    out += ddpRxLogRing[(startIdx + i) % sizeof(ddpRxLogRing)];
+  }
+  return out;
 }
 
 void clearDdpRxLog() {
-  ddpRxLogBuffer = "";
+  ddpRxLogHead = 0;
+  ddpRxLogLen = 0;
 }
 
 // UDP object

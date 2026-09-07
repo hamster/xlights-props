@@ -70,11 +70,16 @@
 //                            speed/accel are restored. Takes a few minutes
 //                            end to end - it's a full-range move x 64.
 //
-// Tunable names (see tools/README.md for the matching Python-side names):
+// Tunable names (see tools/README.md for the matching Python-side names;
+// this list has drifted stale before - ALL_TUNABLE_NAMES in
+// tuning_handler.cpp is the actual source of truth):
 //   normalSpeed, normalAccel, jumpStart, trackEnabled, trackThreshold,
 //   trackSpeed, trackAccel, trackMaxLag, trackMode, coalesceMs,
 //   coalesceSteps, streamRateWindow, streamSettle, compactLog, protocolDebug,
-//   homeSpeed, homeAccel, lookaheadSteps, lookaheadSettle
+//   homeSpeed, homeAccel, lookaheadSteps, lookaheadSettle, pidKp, pidKi,
+//   pidKd, pidMaxSpeed, pidAccel, pidDeadband, pidReengageThreshold,
+//   pidFeedforward, tmcRunCurrent, tmcStallEnabled, positionRequest,
+//   ddpRxLog, ddpAck
 void handleExtendedSerialCommand(const String& line);
 
 // HTTP equivalent of $SET/$GET above - see its own declaration comment in

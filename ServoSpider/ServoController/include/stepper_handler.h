@@ -275,6 +275,11 @@ extern int stepperPidDeadbandConfig;  // steps - |error| at or below this snaps 
 // even though nothing was actually wrong. Found via the first full
 // DDP-triangle-wave test against PID mode - see TODO.md.
 extern int stepperPidReengageThresholdConfig;
+// Time-budget-aware velocity feedforward toggle (2026-09-07) - see
+// updatePidMode()'s feedforward block (main.cpp) for the full design.
+// Kept toggleable so it stays A/B-testable against pure reactive PID with
+// the same sweep tooling used for every other change this session.
+extern bool stepperPidFeedforwardConfig;
 
 // TRACK_MODE_LOOKAHEAD parameters
 extern int stepperLookaheadStepsConfig;     // steps - how far beyond the commanded position to aim, in the

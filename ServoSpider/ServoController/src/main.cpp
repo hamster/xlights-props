@@ -62,6 +62,22 @@ bool pidSettled = true;
 unsigned long lastPidUpdateMs = 0;
 float pidIntegral = 0;
 long pidLastMeasuredPos = 0;   // for derivative-on-measurement, not derivative-on-error - see updatePidMode()
+// Time-budget-aware velocity feedforward (2026-09-07 - see the user's own
+// original framing: PID had no notion of how much time it actually has to
+// get from one commanded point to the next, so it always drove at full
+// reactive speed even for small moves paced by a real, much slower show
+// timeline). Self-measures the real rate the incoming *target* has been
+// changing at - not an assumed DDP fps - so it adapts to whatever a show
+// was actually authored at (25fps, 40fps, anything) with nothing
+// hardcoded. See updatePidMode()'s feedforward block for the full design.
+float pidFeedforwardLastTarget = 0;        // target value as of the last observed real change
+unsigned long pidFeedforwardLastChangeMs = 0;  // when that change was observed
+float pidFeedforwardVelocity = 0;          // current feedforward speed estimate, steps/s (signed)
+// If the target hasn't actually changed for this long, stop coasting on a
+// stale rate estimate - a real gap this size (several multiples of any
+// normal 25-40Hz DDP cadence) means the source paused or stopped, not that
+// it's still moving at whatever rate was last measured.
+static const unsigned long PID_FEEDFORWARD_MAX_GAP_MS = 200;
 bool pidStopSettling = false;  // mirrors streamStopSettling - wait for a forceStop() to actually finish before restarting
 int pidCurrentDirection = 0;   // -1, 0, 1
 // Throttle for re-issuing runForward()/runBackward() after FastAccelStepper
@@ -141,24 +157,47 @@ bool applyTrackingProfileDecision(float newTarget, float lastCommittedTarget, in
 // declaration comment for why this exists alongside (not instead of) the
 // Serial output below: a real xLights/DDPDebugger session already talks to
 // the device over the network, and opening a serial connection to watch
-// the log would reset the ESP32 (DTR/RTS) and kill that session. Same
-// bounded-growth/drop-oldest-complete-line pattern as ddp_handler.cpp's
-// ddpRxLogBuffer.
-static String compactLogBuffer;
-static const size_t COMPACT_LOG_MAX_BYTES = 190000;
+// the log would reset the ESP32 (DTR/RTS) and kill that session.
+//
+// Fixed-size ring buffer, NOT a growing/trimming String (2026-09-07,
+// found the hard way): the original version appended to a String and,
+// once over a byte cap, called substring() to drop the oldest lines -
+// each of those was a full reallocation-and-copy of a buffer that can be
+// well over 100KB. That was fine for the short bench sessions it was
+// first tested against, but a real multi-minute DDPDebugger session
+// (sustained appends, the cap getting hit and trimmed repeatedly) caused
+// real, severe corruption - over half the bytes in one real capture came
+// back as embedded NULs instead of the data that was actually logged.
+// This ring buffer never reallocates after startup: writes wrap in
+// place, oldest bytes are simply overwritten once full, no String
+// concat/substring churn at all.
+static char compactLogRing[32768];
+static size_t compactLogHead = 0;  // next write position
+static size_t compactLogLen = 0;   // valid bytes currently stored, <= sizeof(compactLogRing)
 
-static void appendCompactLog(const char* line) {
-  compactLogBuffer += line;  // String::operator+=(const char*) appends directly, no intermediate String
-  compactLogBuffer += '\n';
-  if (compactLogBuffer.length() > COMPACT_LOG_MAX_BYTES) {
-    size_t excess = compactLogBuffer.length() - COMPACT_LOG_MAX_BYTES;
-    int cut = compactLogBuffer.indexOf('\n', excess);
-    compactLogBuffer = (cut >= 0) ? compactLogBuffer.substring(cut + 1) : "";
-  }
+static void ringAppendChar(char c) {
+  compactLogRing[compactLogHead] = c;
+  compactLogHead = (compactLogHead + 1) % sizeof(compactLogRing);
+  if (compactLogLen < sizeof(compactLogRing)) compactLogLen++;
 }
 
-String getCompactLog() { return compactLogBuffer; }
-void clearCompactLog() { compactLogBuffer = ""; }
+static void appendCompactLog(const char* line) {
+  for (const char* p = line; *p; p++) ringAppendChar(*p);
+  ringAppendChar('\n');
+}
+
+String getCompactLog() {
+  String out;
+  out.reserve(compactLogLen + 1);  // one allocation, no reallocation during the loop below
+  // Oldest byte is at compactLogHead once the ring has wrapped (full);
+  // otherwise everything written so far starts at index 0.
+  size_t startIdx = (compactLogLen < sizeof(compactLogRing)) ? 0 : compactLogHead;
+  for (size_t i = 0; i < compactLogLen; i++) {
+    out += compactLogRing[(startIdx + i) % sizeof(compactLogRing)];
+  }
+  return out;
+}
+void clearCompactLog() { compactLogHead = 0; compactLogLen = 0; }
 
 // Temporary compact CSV motion log, independent of protocolDebugConfig - see
 // compactLogEnabled's declaration comment in protocol_common.h. Shared by all
@@ -466,6 +505,37 @@ void updatePidMode() {
   float target = calcPosition(positionRequest, control16BitConfig);
   float error = target - (float)currentPos;
 
+  // Feedforward measurement - runs every tick regardless of which branch
+  // below ends up firing, so the rate estimate stays continuous and isn't
+  // reset by time spent settled/hysteresis-snapping. Measures how far the
+  // *target* actually moved between the last two real changes and over
+  // how long, not how often packets arrive - correctly self-corrects for
+  // 8-bit DDP quantization (a target that only advances once every 2-3
+  // packets at 40fps still yields the right real-world rate, since both
+  // the distance and the elapsed time reflect that).
+  if (target != pidFeedforwardLastTarget) {
+    if (pidFeedforwardLastChangeMs != 0) {
+      unsigned long sinceLastChange = now - pidFeedforwardLastChangeMs;
+      if (sinceLastChange > 0 && sinceLastChange <= PID_FEEDFORWARD_MAX_GAP_MS) {
+        float instVelocity = (target - pidFeedforwardLastTarget) / (sinceLastChange / 1000.0f);
+        // Light EMA - a single inter-change gap can be jittery (network
+        // timing, or landing just before/after a quantization boundary);
+        // average a few together rather than trusting one sample.
+        pidFeedforwardVelocity = (pidFeedforwardVelocity == 0)
+                                      ? instVelocity
+                                      : (0.5f * pidFeedforwardVelocity + 0.5f * instVelocity);
+      }
+      // A gap longer than the timeout: leave pidFeedforwardVelocity as-is
+      // for this tick (the "stale, zero it out" handling below covers
+      // that) rather than computing a bogus instVelocity from it.
+    }
+    pidFeedforwardLastChangeMs = now;
+    pidFeedforwardLastTarget = target;
+  } else if (pidFeedforwardLastChangeMs != 0 &&
+             now - pidFeedforwardLastChangeMs > PID_FEEDFORWARD_MAX_GAP_MS) {
+    pidFeedforwardVelocity = 0;  // stale - source paused/stopped, don't keep coasting
+  }
+
   if (fabs(error) <= (float)stepperPidDeadbandConfig) {
     if (!pidSettled) {
       int curPosBeforeMove = (int)currentPos;
@@ -603,7 +673,19 @@ void updatePidMode() {
     // See TRACK_MODE_STREAMING's identical wait - FastAccelStepper's
     // forceStop() isn't guaranteed complete within one tick; restarting
     // before it's actually settled skips the ramp-up entirely.
-    if (stepper->isRunning()) return;
+    //
+    // Checks genuinely-still-running (speed != 0), not plain isRunning()
+    // (2026-09-07, found live testing feedforward against real
+    // DDPDebugger data): a dead-but-nonempty FastAccelStepper queue
+    // satisfies isRunning() without producing any steps - the exact same
+    // hazard already fixed for the continuous-run retry and hysteresis
+    // band checks elsewhere in this function, just missed here. Caught a
+    // real ~700ms stall exactly at the bottom-of-travel reversal this
+    // way: curSpeedHz read exactly 0 the whole time (a real, complete
+    // stop) while isRunning() apparently kept this wait blocked far past
+    // the ~50ms a decel at stepperPidAccelConfig should take.
+    bool genuinelyStillRunning = stepper->isRunning() && stepper->getCurrentSpeedInMilliHz() != 0;
+    if (genuinelyStillRunning) return;
     pidStopSettling = false;
   }
 
@@ -616,20 +698,26 @@ void updatePidMode() {
 
   float pTerm = stepperPidKpConfig * error;
   float dTerm = -stepperPidKdConfig * measuredRate;
+  // Feedforward carries the "known" bulk of the motion (see the
+  // measurement block above); toggleable so it stays A/B-testable against
+  // pure reactive PID with the same sweep tooling as every other change
+  // this session.
+  float ffTerm = stepperPidFeedforwardConfig ? pidFeedforwardVelocity : 0;
 
   // Anti-windup: only accumulate the integral term while the combined
   // output isn't already saturated at the speed cap - otherwise a
   // sustained large error (e.g. right after a big DDP jump) winds the
   // integral up far past what's useful and causes a real overshoot once
-  // error finally starts shrinking back toward zero.
-  float provisional = pTerm + dTerm + stepperPidKiConfig * pidIntegral;
+  // error finally starts shrinking back toward zero. Includes feedforward
+  // in the saturation check - it's part of the real commanded output too.
+  float provisional = ffTerm + pTerm + dTerm + stepperPidKiConfig * pidIntegral;
   bool saturated = fabs(provisional) >= (float)stepperPidMaxSpeedConfig;
   if (!saturated) {
     pidIntegral += error * dt;
   }
   float iTerm = stepperPidKiConfig * pidIntegral;
 
-  float speed = pTerm + iTerm + dTerm;
+  float speed = ffTerm + pTerm + iTerm + dTerm;
   if (speed > stepperPidMaxSpeedConfig) speed = (float)stepperPidMaxSpeedConfig;
   if (speed < -stepperPidMaxSpeedConfig) speed = -(float)stepperPidMaxSpeedConfig;
 

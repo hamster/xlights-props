@@ -160,6 +160,10 @@ int stepperPidDeadbandConfig = 30;
 // units of DDP 8-bit quantization jitter (roughly bottomPosition/255 steps
 // per unit - ~60 on this device) without re-engaging continuous-run mode.
 int stepperPidReengageThresholdConfig = 150;
+// Off by default - new, unvetted (2026-09-07), see its declaration comment
+// (stepper_handler.h) for the design. Enable via $SET/GET-/tunable for
+// bench testing before ever flipping this compiled default.
+bool stepperPidFeedforwardConfig = false;
 
 bool stepperSettingsPendingSave = false;
 
