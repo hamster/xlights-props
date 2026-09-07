@@ -30,7 +30,6 @@ Usage:
 import argparse
 import json
 import socket
-import threading
 import struct
 import sys
 import time
@@ -59,23 +58,6 @@ def http_set_tunable(host, name, value):
 def get_status(host):
     body = http_get(host, "/status-data")
     return json.loads(body)
-
-
-def ensure_homed(host, timeout=90.0):
-    status = get_status(host)
-    if status.get("homed"):
-        return True
-    http_get(host, "/home")
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        time.sleep(1.0)
-        status = get_status(host)
-        if status.get("homed"):
-            return True
-        if not status.get("isHoming"):
-            # Homing ended without success (and isn't running) - real failure.
-            return False
-    return False
 
 
 def build_ddp_packet(seq, value, bits=8):
@@ -111,12 +93,104 @@ def triangle_value_wrapped(elapsed_s, period_s, bits=8):
     return max(0, min(int(full), int(round(value))))
 
 
-def run(args):
-    print(f"Ensuring {args.ddp_host} is homed...")
-    if not ensure_homed(args.ddp_host, timeout=args.home_timeout):
-        print("ERROR: homing did not complete", file=sys.stderr)
-        sys.exit(1)
+# Rows the device's 96KB compact-log ring buffer holds before it wraps, at
+# ~52 bytes/row. Runs must fit inside this, because the alternative - draining
+# mid-run - blocks loop() for 0.5-1.0s while serving the response, during which
+# a continuous-run stepper keeps cruising completely unsupervised. That is not a
+# theoretical concern: it drove the trolley 2400-3700 steps past the bottom on
+# every single run that used mid-run draining, and caused a real step loss when
+# one of those blind windows happened to coincide with the top of travel.
+COMPACT_LOG_ROW_CAPACITY = 1890
+COMPACT_LOG_ROWS_PER_SEC = 50.0
 
+
+def verify_zero(host, home_timeout, label, rate_hz=40.0, bits=8):
+    """Command position 0 via DDP, wait for the trolley to get there, then
+    check the raw homing switch state directly - not through
+    /verify-and-rehome, see below for why.
+
+    /verify-and-rehome (startStepCheck(0, autoRehomeOnTrip=true)) is built for
+    a different situation: confirming calibration from a position ALREADY
+    believed to be near zero (its own comment: "so FPP can call one HTTP
+    request before/between shows"). From there, a trip is unexpected and
+    really does mean drift. Called after a full-travel test, though, the
+    trolley starts a whole travel away from zero - reaching it necessarily
+    drives into the switch, so a trip is the NORMAL, correct outcome of
+    successfully getting there, not evidence of anything wrong. Measured this
+    directly (2026-09-07): a run with independently-clean encoder-vs-counter
+    agreement (drift -1 step) still got flagged "STEPS WERE LOST" by that
+    endpoint and forced into an unnecessary ~20s re-home, every single time it
+    was called this way.
+
+    What the user actually asked for - drive to zero, confirm the switch
+    trips there, done - is what this does: hold DDP value 0 until position
+    settles near 0, then read homingSwitchTripped directly. If the trolley
+    settles at 0 but the switch does NOT read tripped, that is real drift
+    (the physical switch and the counter's zero have come apart), and this
+    triggers a genuine /home. Returns (ok, rehomed).
+    """
+    print(f"  [{label}] drive to zero, confirm switch trips...")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    seq = 0
+    deadline = time.monotonic() + 30.0
+    settled = False
+    st = get_status(host)
+    while time.monotonic() < deadline:
+        for _ in range(10):
+            seq = (seq % 15) + 1
+            sock.sendto(build_ddp_packet(seq, 0, bits), (host, DDP_PORT))
+            time.sleep(1.0 / rate_hz)
+        st = get_status(host)
+        if abs(st.get("position", 0)) <= 200:
+            settled = True
+            break
+    sock.close()
+
+    if not settled:
+        print(f"    WARNING: did not settle at 0 (at {st.get('position')}) - skipping switch check")
+        return (False, False)
+
+    if st.get("homingSwitchTripped"):
+        print(f"    ok - switch tripped as expected, pos={st.get('position')} "
+              f"enc={st.get('encoderCount')}")
+        return (True, False)
+
+    print(f"    *** AT POSITION 0 BUT SWITCH NOT TRIPPED - real drift. Re-homing. ***")
+    http_get(host, "/home")
+    home_deadline = time.monotonic() + home_timeout
+    while time.monotonic() < home_deadline:
+        time.sleep(1.0)
+        st = get_status(host)
+        if st.get("homed") and not st.get("isHoming"):
+            print(f"    re-homed - pos={st.get('position')} enc={st.get('encoderCount')}")
+            return (True, True)
+    print("    WARNING: re-home did not complete in time")
+    return (False, True)
+
+
+def run(args):
+    # Per-run protocol (2026-09-07, at the user's suggestion): each run is
+    # self-contained and verified at BOTH ends, so a run that loses steps is
+    # caught immediately instead of silently corrupting the zero reference for
+    # every run that follows it - which is exactly how one bad run earlier
+    # tonight invalidated the clean-looking run right after it.
+    #
+    #   1. wait for genuine idle (a previous run's verify/re-home can still be
+    #      in flight - `homed` stays true throughout one, so a plain homed
+    #      check does not catch it)
+    #   2. verify zero: drive to 0, confirm the switch trips, re-home if not
+    #      (this doubles as pre-positioning - every wave here starts at value
+    #      0, so there is no separate startup transient to trim)
+    #   3. run the wave - NO mid-run log access, see COMPACT_LOG_ROW_CAPACITY
+    #      above for why: draining mid-run blocks loop() for up to ~1s, and a
+    #      continuous-run stepper left unsupervised for that long can - and
+    #      did - cruise straight past the bottom of travel
+    #   4. fetch the log
+    #   5. verify zero again, re-home if needed - this is what actually
+    #      catches a run that lost steps, not the arithmetic drift check
+    #      this replaced (see verify_zero()'s own comment for why a direct
+    #      switch read beats /verify-and-rehome for this use pattern)
+    print(f"Applying config to {args.ddp_host}...")
     if args.config:
         with open(args.config) as f:
             config = json.load(f)
@@ -126,27 +200,6 @@ def run(args):
 
     http_set_tunable(args.ddp_host, "compactLog", 1)
 
-    # Make each run independent of the one before it (2026-09-07).
-    #
-    # Two ways runs were contaminating each other, both of which only became
-    # visible once mid-run log draining exposed the full 60s instead of the
-    # last 40s:
-    #
-    # 1. The previous run's post-check (/verify-and-rehome, which drives to 0
-    #    and may trigger a full re-home) could still be in flight when the next
-    #    wave started. ensure_homed() does not catch this - `homed` stays true
-    #    throughout a verify - so the new run's opening seconds were measured
-    #    while the device was still executing the old run's cleanup.
-    # 2. Even idle, the trolley sits wherever the previous wave's final value
-    #    left it, while every wave starts at value 0. That one-off full-range
-    #    dash was landing in the metrics as a ~15,000-step max_error and
-    #    wrecking rms_error and corner tightness.
-    #
-    # Fix both at the source rather than trimming afterwards: wait for the
-    # device to be genuinely idle, then hold the wave's own t=0 value until the
-    # trolley actually gets there, and only then clear the log and start. The
-    # captured run then begins from the correct position with no transient, so
-    # no warm-up trimming is needed and every candidate starts identically.
     print("Waiting for device to go idle (no check/home in flight)...")
     idle_deadline = time.monotonic() + 120.0
     while time.monotonic() < idle_deadline:
@@ -157,77 +210,15 @@ def run(args):
     else:
         print("  WARNING: device still busy after 120s")
 
-    start_value = triangle_value_wrapped(0.0, args.period, args.bits)
-    pre_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    print(f"Pre-positioning to the wave's t=0 value ({start_value})...")
-    pre_seq = 0
-    pos_deadline = time.monotonic() + 30.0
-    settled_reads = 0
-    while time.monotonic() < pos_deadline:
-        for _ in range(10):  # keep the stream alive; PID needs a live target
-            pre_seq = (pre_seq % 15) + 1
-            pre_sock.sendto(build_ddp_packet(pre_seq, start_value, args.bits),
-                            (args.ddp_host, DDP_PORT))
-            time.sleep(1.0 / args.rate_hz)
-        st = get_status(args.ddp_host)
-        target_pos = st.get("bottomPosition", 0) * start_value / (65535.0 if args.bits == 16 else 255.0)
-        if abs(st.get("position", 0) - target_pos) <= 200:
-            settled_reads += 1
-            if settled_reads >= 2:
-                print(f"  in position ({st.get('position')} vs target {target_pos:.0f})")
-                break
-        else:
-            settled_reads = 0
-    else:
-        st = get_status(args.ddp_host)
-        print(f"  WARNING: did not reach start position (at {st.get('position')})")
-    pre_sock.close()
+    print("Pre-run zero verification:")
+    verify_zero(args.ddp_host, args.home_timeout, "pre", args.rate_hz, args.bits)
 
     http_get(args.ddp_host, "/compact-log?clear=1")
-
-    # Baseline for the drift gate below - taken after config is applied and
-    # the device is settled, immediately before any motion.
-    STEPS_PER_COUNT = 10.0
-    _pre = get_status(args.ddp_host)
-    pre_pos = _pre.get("position", 0)
-    pre_enc = _pre.get("encoderCount", 0)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     print(f"\nSending {args.duration:.0f}s continuous triangle wave, period={args.period:.1f}s, "
           f"{args.rate_hz:.0f}fps, to {args.ddp_host}:{DDP_PORT} (real-elapsed-time value, "
           f"matching DDPDebugger's own sender - not a cleaned-up schedule)...")
-
-    # Drain the device's Compact Motion Log DURING the run, not just once at
-    # the end (2026-09-07 evening, found the hard way). The device-side ring
-    # buffer is 96KB, which at ~50 rows/sec x ~52 bytes holds only about 40
-    # seconds of active tracking - so a single fetch after a 60s run silently
-    # returned only the LAST ~40s, with the first ~20s already overwritten.
-    # Every "zero stalls" result from a >40s run was therefore scoped to the
-    # tail of that run without saying so, which is exactly where a real
-    # early-run freeze would hide.
-    #
-    # Runs on its own thread so the DDP send loop keeps its cadence - a
-    # blocking HTTP fetch on the send thread would drop packets and corrupt
-    # the very test being measured. Fetch-then-clear loses whatever few rows
-    # land between the two calls (a ~10ms window, so 1-2 rows per drain);
-    # that is a far better trade than losing a third of the run.
-    drained = []
-    drain_stop = threading.Event()
-
-    def drain_loop():
-        while not drain_stop.is_set():
-            if drain_stop.wait(args.drain_interval):
-                break
-            try:
-                chunk = http_get(args.ddp_host, "/compact-log", timeout=15.0)
-                http_get(args.ddp_host, "/compact-log?clear=1", timeout=10.0)
-                if chunk:
-                    drained.append(chunk)
-            except Exception as e:  # a failed drain must not kill the run
-                print(f"  (drain failed, continuing: {e})")
-
-    drain_thread = threading.Thread(target=drain_loop, daemon=True)
-    drain_thread.start()
 
     interval = 1.0 / args.rate_hz
     start = time.monotonic()
@@ -243,41 +234,14 @@ def run(args):
         sock.sendto(build_ddp_packet(seq, value, args.bits), (args.ddp_host, DDP_PORT))
         sent += 1
         time.sleep(interval)
+    sock.close()
     print(f"Sent {sent} packets over {time.monotonic()-start:.1f}s")
 
-    drain_stop.set()
-    drain_thread.join(timeout=20.0)
-
-    # Encoder-vs-counter drift gate (2026-09-07). A mid-travel stall makes
-    # FastAccelStepper's counter diverge from physical reality permanently -
-    # the zero reference is then wrong for every LATER run in the sweep too,
-    # which is exactly how one bad p5 run silently invalidated the p8 run that
-    # followed it (p5 drifted +3768 steps; p8 then tracked to -1 step but did
-    # it all ~3700 steps past where the firmware believed it was, running the
-    # trolley past the bottom and part way up the back of the pulley).
-    # Neither firmware guard catches this: one keys off the counter, which is
-    # the thing that lies, and the other off the top switch, which a mid-travel
-    # stall never touches. So verify here and re-home before continuing rather
-    # than carrying a corrupt reference into the next run.
-    post = get_status(args.ddp_host)
-    drift = None
-    try:
-        d_pos = post["position"] - pre_pos
-        d_enc = (post["encoderCount"] - pre_enc) * STEPS_PER_COUNT
-        drift = d_enc - d_pos
-        print(f"\nEncoder/counter drift this run: {drift:+.0f} steps "
-              f"(counter {d_pos:+d}, encoder {d_enc:+.0f})")
-    except (KeyError, TypeError):
-        print("\nWARNING: could not read encoder drift - status fields missing")
-
-
-
-    time.sleep(1.5)  # let the last few PID ticks settle before the final fetch
-    log_text = "".join(drained) + http_get(args.ddp_host, "/compact-log", timeout=15.0)
+    time.sleep(1.5)  # let the last few PID ticks settle before fetching
+    log_text = http_get(args.ddp_host, "/compact-log", timeout=15.0)
     lines = [l for l in log_text.splitlines() if l]
-    expected = int(args.duration * 50)
-    print(f"Fetched {len(lines)} compact-log rows over HTTP "
-          f"({len(drained)} mid-run drain(s); ~{expected} expected at 20ms ticks)")
+    expected = int(args.duration * COMPACT_LOG_ROWS_PER_SEC)
+    print(f"Fetched {len(lines)} compact-log rows over HTTP (~{expected} expected at 20ms ticks)")
     if len(lines) < expected * 0.85:
         print(f"  WARNING: got {100.0*len(lines)/expected:.0f}% of expected rows - "
               f"coverage may still be incomplete, treat 'no stalls' with caution")
@@ -287,64 +251,12 @@ def run(args):
         f.write(log_text)
     print(f"Wrote {out_path}")
 
-    # Physical verification, not an arithmetic threshold: command the trolley
-    # back to position 0 and confirm the homing switch actually trips there.
-    # GET /verify-and-rehome is startStepCheck(0, autoRehomeOnTrip=true) - it
-    # drives to zero, watches the switch, and triggers a full re-home if the
-    # switch says the counter was wrong.
-    #
-    # Preferred over comparing encoder counts against the step counter because
-    # it measures the one thing that cannot drift: a physical switch at a known
-    # physical place. It needs no encoder, no ratio constant, and no tolerance
-    # tuning - the switch either trips where the counter predicted or it does
-    # not. The encoder drift figure above is kept as an independent diagnostic
-    # (it localises WHEN sync was lost, which the switch check cannot), but the
-    # switch is what gates whether the next run starts from a valid reference.
-    print("\nVerifying zero reference (drive to 0, confirm switch trips)...")
-    try:
-        # /verify-and-rehome refuses with 409 while the stepper is still
-        # winding down from the wave (its own guard: "Stepper is moving").
-        # Wait it out rather than skipping the check - skipping is how a
-        # corrupted reference reaches the next run.
-        resp = None
-        for attempt in range(10):
-            try:
-                resp = json.loads(http_get(args.ddp_host, "/verify-and-rehome"))
-                break
-            except Exception as e:
-                if "409" in str(e):
-                    time.sleep(2.0)
-                    continue
-                raise
-        if resp is None:
-            print("  WARNING: stepper never went idle - verification skipped")
-        elif not resp.get("success"):
-            print(f"  verify refused: {resp.get('message')}")
-        else:
-            deadline = time.monotonic() + args.home_timeout
-            saw_check = False
-            while time.monotonic() < deadline:
-                time.sleep(1.0)
-                st = get_status(args.ddp_host)
-                if st.get("isChecking"):
-                    saw_check = True
-                    continue
-                if st.get("isHoming"):
-                    # A trip was found - the check auto-triggered a full re-home.
-                    saw_check = True
-                    print("  *** SWITCH TRIP AT ZERO CHECK - this run LOST STEPS. ***")
-                    print("  *** Its numbers are measured against a corrupted zero "
-                          "reference. Auto-re-homing... ***")
-                    continue
-                if saw_check and st.get("homed"):
-                    post2 = get_status(args.ddp_host)
-                    print(f"  verified - pos={post2.get('position')} "
-                          f"enc={post2.get('encoderCount')} homed={post2.get('homed')}")
-                    break
-            else:
-                print("  WARNING: verification did not complete in time")
-    except Exception as e:
-        print(f"  WARNING: verification failed to run: {e}")
+    print("\nPost-run zero verification:")
+    ok, rehomed = verify_zero(args.ddp_host, args.home_timeout, "post", args.rate_hz, args.bits)
+    if rehomed:
+        print("  *** This run's zero reference drifted (switch did not trip where "
+              "expected) - its numbers may be measured against a corrupted "
+              "reference. Treat them with caution. ***")
 
     analyze(lines, args)
 
@@ -567,7 +479,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--ddp-host", required=True)
     parser.add_argument("--period", type=float, default=8.0, help="Triangle wave period in seconds")
-    parser.add_argument("--duration", type=float, default=60.0, help="Total test duration in seconds")
+    parser.add_argument("--duration", type=float, default=None,
+                        help="Total test duration in seconds. Normally leave unset "
+                             "and use --trips, which sizes the run to the period.")
+    parser.add_argument("--trips", type=float, default=4.0,
+                        help="Full triangle cycles to run. Duration = trips * period. "
+                             "4 keeps a run inside the device log's ring buffer for "
+                             "periods up to ~9s, so the log never has to be drained "
+                             "mid-run (which blinds the control loop).")
     parser.add_argument("--rate-hz", type=float, default=40.0)
     parser.add_argument("--bits", type=int, choices=(8, 16), default=8,
                         help="DDP stepper channel width. Must match the device's "
@@ -579,19 +498,18 @@ def main():
                         help="Seconds of run start to exclude from metrics - the "
                              "one-off dash from wherever the previous run parked "
                              "the trolley to wherever this wave begins.")
-    parser.add_argument("--drift-limit", type=float, default=300.0,
-                        help="Max tolerated encoder-vs-counter divergence (steps) "
-                             "across a run before the run is declared to have lost "
-                             "steps and the device is re-homed. ~300 is a few times "
-                             "normal quantisation noise and well under a real stall.")
-    parser.add_argument("--drain-interval", type=float, default=20.0,
-                        help="Seconds between mid-run drains of the device's compact "
-                             "motion log. Must be short enough that the device-side "
-                             "96KB ring buffer (~40s of active tracking) cannot wrap "
-                             "between drains.")
     parser.add_argument("--label", default="ddp_continuous")
     parser.add_argument("--out", default="tuning_runs/ddp_continuous_test.png")
     args = parser.parse_args()
+    if args.duration is None:
+        args.duration = args.trips * args.period
+    est_rows = args.duration * COMPACT_LOG_ROWS_PER_SEC
+    if est_rows > COMPACT_LOG_ROW_CAPACITY:
+        fits = COMPACT_LOG_ROW_CAPACITY / COMPACT_LOG_ROWS_PER_SEC
+        print(f"WARNING: {args.duration:.0f}s (~{est_rows:.0f} rows) exceeds the device "
+              f"log's ~{COMPACT_LOG_ROW_CAPACITY}-row buffer (~{fits:.0f}s). The run "
+              f"will be captured from its TAIL only, hiding anything earlier. "
+              f"Use --trips {max(1, int(fits/args.period))} or fewer at this period.")
     run(args)
 
 
