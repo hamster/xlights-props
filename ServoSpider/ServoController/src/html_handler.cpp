@@ -43,6 +43,21 @@ void handleNotFound() {
 }
 
 void handleRoot() {
+  // Debug logging (2026-09-08) - added while chasing a real "page loads
+  // blank over the AP" report with no other lead: handleRoot() itself
+  // never logged anything, so there was no way to tell from serial whether
+  // it was even being reached for a real "/" request (vs. only ever seeing
+  // background probe requests like /generate204), whether it completed, or
+  // whether the device crashed/rebooted partway through building or
+  // sending this ~74KB page - which would explain "background color
+  // renders, body doesn't" exactly (the connection dying right after the
+  // early <style> block but before the body content finishes).
+  unsigned long handleRootStartMs = millis();
+  Serial.print("handleRoot() called from ");
+  Serial.print(server.client().remoteIP());
+  Serial.print(", free heap ");
+  Serial.println(ESP.getFreeHeap());
+
   String page = String(htmlPage);
 
   // WiFi status information
@@ -156,7 +171,17 @@ void handleRoot() {
   server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   server.sendHeader("Pragma", "no-cache");
   server.sendHeader("Expires", "0");
+  Serial.print("handleRoot() sending ");
+  Serial.print(page.length());
+  Serial.print(" bytes, built in ");
+  Serial.print(millis() - handleRootStartMs);
+  Serial.println(" ms...");
   server.send(200, "text/html", page);
+  // If this line never appears in the log right after the one above, the
+  // device crashed/rebooted (or the connection died) inside server.send()
+  // itself, not before it - genuinely useful to know which side of this
+  // line things went wrong on.
+  Serial.println("handleRoot() send() returned - response complete.");
 }
 
 void handleSaveWifi() {
