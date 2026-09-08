@@ -159,6 +159,23 @@ int stepperLookaheadSettleMsConfig = 150;
 //      tracking test, not a step-response one).
 float stepperPidKpConfig = 3.0f;
 float stepperPidKdConfig = 0.3f;
+// 0.04 - re-tuned 2026-09-07 for the current tick=5ms default (was 0.15,
+// matching the original weight chosen at the then-hardcoded 20ms tick).
+// The weight-to-effective-time-constant relationship inverts with tick
+// rate (tau = -tickMs/ln(1-w)), so 0.15 at 5ms gave only a ~31ms tau
+// versus the ~123ms tau it gave at the original 20ms - the filter was
+// unknowingly weakened 4x when the tick rate changed. Swept 0.15 (as it
+// was left) / 0.04 (tau restored to ~123ms) / 1.0 (off, raw derivative)
+// against the standard p8 wave, all three encoder-verified clean:
+//   weight   rms_error  jerk   corner  ripple_rms
+//   0.15     392.2      203.4  479.9   172.5Hz
+//   0.04     381.5      199.6  465.3   168.8Hz  <- every metric best here
+//   1.0      393.1      210.0  489.2   189.0Hz
+// 0.04 beats both other candidates on every metric simultaneously (not a
+// tradeoff) - confirms the filter still earns its place (0.15 already
+// beat "off" on everything) and that restoring its original smoothing
+// window helps further.
+float stepperPidDFilterWeightConfig = 0.04f;
 // 5ms - swept 20/10/5/2 at Kp=3 against the real DDPDebugger-fidelity
 // continuous wave (tools/ddp_continuous_test.py, p8, 16-bit), each verified
 // clean (encoder ground truth, zero real stalls, DDP reception health

@@ -281,6 +281,15 @@ extern int stepperTrackModeConfig;
 // speculatively.
 extern float stepperPidKpConfig;      // Hz per step of error (proportional gain)
 extern float stepperPidKdConfig;      // Hz per (step/second) of measured-position rate (derivative gain, applied to -d(measured)/dt)
+// Weight (0-1) in the per-tick EMA that smooths the raw derivative-on-
+// measurement rate before it drives dTerm - see updatePidMode()'s own
+// declaration comment (main.cpp) for the exact formula and history. A
+// per-SAMPLE weight, not per-unit-time, so its effective smoothing time
+// constant (tau = -tickMs / ln(1-w)) scales inversely with
+// stepperPidTickMsConfig - the two are coupled even though they're
+// separate tunables. Lower = more smoothing (longer tau) at a given tick
+// rate; 1.0 = no filtering (raw derivative passes straight through).
+extern float stepperPidDFilterWeightConfig;
 // ms - minimum interval between updatePidMode() ticks (main.cpp gates on
 // this instead of a hardcoded 20). A sampled control loop's phase margin
 // generally improves at a faster sample rate for the same continuous-time
@@ -290,11 +299,12 @@ extern float stepperPidKdConfig;      // Hz per (step/second) of measured-positi
 // dt is still computed from real elapsed time each call (self-correcting
 // if a tick occasionally overruns), so this is purely a floor, not a fixed
 // period. Two real, disclosed interactions to watch when lowering this:
-// pidFilteredRate's 0.85/0.15 EMA weight is per-SAMPLE, not per unit time,
-// so a faster tick shortens its effective time constant (weaker filtering
-// per wall-clock second) unless retuned; and the Compact Motion Log's row
-// rate rises proportionally, shrinking how much wall-clock time the 96KB
-// ring buffer can hold before wrapping.
+// stepperPidDFilterWeightConfig's EMA weight is per-SAMPLE, not per unit
+// time, so a faster tick shortens its effective time constant (weaker
+// filtering per wall-clock second) unless retuned - see that tunable's
+// own declaration comment; and the Compact Motion Log's row rate rises
+// proportionally, shrinking how much wall-clock time the 96KB ring buffer
+// can hold before wrapping.
 extern int stepperPidTickMsConfig;
 // ms - minimum interval between Compact Motion Log rows written from
 // updatePidMode()'s active-tracking log calls. Independent of

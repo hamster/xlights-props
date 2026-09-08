@@ -53,6 +53,7 @@ static bool getTunable(const String& name, String& valueOut) {
   // integer precision would be far too coarse to tune usefully).
   if (name == "pidKp") { valueOut = String(stepperPidKpConfig, 4); return true; }
   if (name == "pidKd") { valueOut = String(stepperPidKdConfig, 4); return true; }
+  if (name == "pidDFilterWeight") { valueOut = String(stepperPidDFilterWeightConfig, 4); return true; }
   if (name == "pidMaxSpeed") { valueOut = String(stepperPidMaxSpeedConfig); return true; }
   if (name == "pidAccel") { valueOut = String(stepperPidAccelConfig); return true; }
   if (name == "pidDeadband") { valueOut = String(stepperPidDeadbandConfig); return true; }
@@ -95,7 +96,7 @@ static const char* ALL_TUNABLE_NAMES[] = {
   "trackSpeed", "trackAccel", "trackMaxLag", "trackMode", "coalesceMs",
   "coalesceSteps", "streamRateWindow", "streamSettle", "compactLog", "protocolDebug",
   "homeSpeed", "homeAccel", "lookaheadSteps", "lookaheadSettle",
-  "pidKp", "pidKd", "pidMaxSpeed", "pidAccel", "pidDeadband", "pidReengageThreshold", "pidFeedforward", "pidFfWindowMs", "pidLookaheadMs", "pidTickMs", "pidLogMs",
+  "pidKp", "pidKd", "pidDFilterWeight", "pidMaxSpeed", "pidAccel", "pidDeadband", "pidReengageThreshold", "pidFeedforward", "pidFfWindowMs", "pidLookaheadMs", "pidTickMs", "pidLogMs",
   "tmcRunCurrent", "tmcStallEnabled", "positionRequest", "ddpRxLog", "ddpAck"
 };
 static const int ALL_TUNABLE_COUNT = sizeof(ALL_TUNABLE_NAMES) / sizeof(ALL_TUNABLE_NAMES[0]);
@@ -136,6 +137,7 @@ static bool setTunable(const String& name, const String& valueStr) {
   // truncate a gain like 1.5 to 1), everything else uses the shared int `v`.
   if (name == "pidKp") { stepperPidKpConfig = valueStr.toFloat(); return true; }
   if (name == "pidKd") { stepperPidKdConfig = valueStr.toFloat(); return true; }
+  if (name == "pidDFilterWeight") { stepperPidDFilterWeightConfig = valueStr.toFloat(); return true; }
   if (name == "pidMaxSpeed") { stepperPidMaxSpeedConfig = v; return true; }
   if (name == "pidAccel") { stepperPidAccelConfig = v; return true; }
   if (name == "pidDeadband") { stepperPidDeadbandConfig = v; return true; }

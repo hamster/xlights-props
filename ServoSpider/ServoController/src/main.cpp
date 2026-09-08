@@ -960,17 +960,20 @@ void updatePidMode() {
   // characterized that session, at the then-hardcoded 20ms tick. 0.85/0.15
   // instead.
   //
-  // NOT re-validated since stepperPidTickMsConfig became configurable
-  // (later the same night): this is a per-SAMPLE EMA weight, not a
-  // per-unit-time one, so its effective time constant scales inversely
-  // with tick rate - at the new tick=5ms default (4x faster than when this
-  // was tuned) the same 0.15 weight now covers roughly a quarter of the
-  // wall-clock smoothing window it did originally, weakening the filter's
-  // intended effect. The tick-rate sweep that picked tick=5ms measured a
-  // real, large ripple improvement regardless (see stepperPidTickMsConfig's
-  // declaration comment), so this isn't broken, just unconfirmed - a real
-  // open question, not yet chased. See TODO.md.
-  pidFilteredRate = 0.85f * pidFilteredRate + 0.15f * measuredRate;
+  // Made independently configurable (stepperPidDFilterWeightConfig,
+  // 2026-09-07 later) after re-validation against the new tick rate: this
+  // is a per-SAMPLE EMA weight, not a per-unit-time one, so its effective
+  // time constant scales inversely with tick rate - at tick=5ms (4x faster
+  // than when 0.15 was chosen) the same weight covered roughly a quarter
+  // of the original wall-clock smoothing window, weakening the filter's
+  // intended effect without anyone deciding that. Swept 0.15 (as-shipped,
+  // mismatched) / ~0.04 (time-constant-matched to the original ~123ms
+  // tau: w = 1-exp(-tick/tau)) / 1.0 (off - raw derivative, no filtering)
+  // against the standard p8 wave. See its declaration comment
+  // (stepper_handler.h) for the result and why the default changed or
+  // didn't.
+  pidFilteredRate = (1.0f - stepperPidDFilterWeightConfig) * pidFilteredRate
+                     + stepperPidDFilterWeightConfig * measuredRate;
 
   float pTerm = stepperPidKpConfig * pTermError;
   float dTerm = -stepperPidKdConfig * pidFilteredRate;

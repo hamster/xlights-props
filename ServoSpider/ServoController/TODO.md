@@ -50,11 +50,14 @@ individual entries below for what each one was.
   `updateRammedIntoStopCheck()`'s reliance on step-count drift as a jam
   proxy may need revisiting the same way `isRunning()`/
   `isRampGeneratorActive()` did elsewhere this session.
-- [ ] `pidFilteredRate`'s 0.85/0.15 derivative-filter EMA weight is
-  per-SAMPLE, not per unit time - at the current tick=5ms default (4x the
-  rate it was tuned at) its effective time constant is roughly 4x shorter,
-  weakening the filter's intended smoothing. Not yet re-tuned or
-  re-validated against the new tick rate.
+- [x] **Re-validated and re-tuned, 2026-09-07.** Made independently
+  configurable (`pidDFilterWeightConfig`) and swept 0.15 (as it was left) /
+  0.04 (effective time constant restored to the original ~123ms) / 1.0
+  (off) against the standard p8 wave. 0.04 won on every metric
+  simultaneously (rms_error, jerk, corner tightness, ripple) - not a
+  tradeoff - confirming the filter still earns its place and that
+  restoring its original smoothing window helps further. New compiled
+  default: 0.04 (was, unknowingly, 0.15 at the wrong tick rate).
 
 ### Wave 2 - cheap, mechanical, no design risk
 
