@@ -244,9 +244,25 @@ enum StepperTrackMode {
                               // Deliberately does NOT use the encoder for feedback - only
                               // getCurrentPosition() (this device's own step-pulse bookkeeping), so it
                               // works identically on every real device, not just the tuning bench where
-                              // an encoder happens to be wired. Gains below are untuned starting
-                              // defaults (pure-P, conservative) - see TODO.md for the planned
-                              // acceleration-characterization-then-gain-tuning sequence.
+                              // an encoder happens to be wired (the encoder is bench-only ground truth
+                              // for verifying tuning results, never read by the controller itself).
+                              //
+                              // Current state (2026-09-07, see TODO.md for the full tuning history):
+                              // a velocity feedforward (self-measures the real rate positionRequest has
+                              // been changing at, via a least-squares slope over a fixed time window -
+                              // stepperPidFfWindowMsConfig) carries the bulk of the commanded motion, so
+                              // Kp/Kd only trim the residual error rather than driving reactively from
+                              // scratch. The control tick itself is configurable
+                              // (stepperPidTickMsConfig, default 5ms) - found to be the most effective
+                              // lever against a persistent ~120-150ms-period speed ripple, since it's a
+                              // sampled-control-loop dynamic rather than a noise source any output filter
+                              // could remove. Logging cadence is deliberately independent of tick rate
+                              // (stepperPidLogMsConfig) so a fast control tick doesn't overflow the
+                              // Compact Motion Log's ring buffer. Still measurably less smooth
+                              // moment-to-moment than TRACK_MODE_DIRECT, in exchange for meaningfully
+                              // tighter tracking and corner accuracy - see the user's own framing
+                              // (TODO.md, 2026-09-07): a real prop can tolerate a few frames of lag but
+                              // must never look jerky, which is what this mode is tuned against.
 };
 extern int stepperTrackModeConfig;
 

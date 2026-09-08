@@ -916,8 +916,20 @@ void updatePidMode() {
   // Low-pass filter before it drives dTerm (2026-09-07, see
   // pidFilteredRate's declaration comment). 0.5/0.5 first tried and barely
   // moved the jerk metric (496.9 vs 513.5 baseline, within run-to-run
-  // noise) - too weak a filter for the ~80-100ms-period (~4-5 tick)
-  // resonance characterized earlier this session. 0.85/0.15 instead.
+  // noise) - too weak a filter for the ~80-100ms-period resonance
+  // characterized that session, at the then-hardcoded 20ms tick. 0.85/0.15
+  // instead.
+  //
+  // NOT re-validated since stepperPidTickMsConfig became configurable
+  // (later the same night): this is a per-SAMPLE EMA weight, not a
+  // per-unit-time one, so its effective time constant scales inversely
+  // with tick rate - at the new tick=5ms default (4x faster than when this
+  // was tuned) the same 0.15 weight now covers roughly a quarter of the
+  // wall-clock smoothing window it did originally, weakening the filter's
+  // intended effect. The tick-rate sweep that picked tick=5ms measured a
+  // real, large ripple improvement regardless (see stepperPidTickMsConfig's
+  // declaration comment), so this isn't broken, just unconfirmed - a real
+  // open question, not yet chased. See TODO.md.
   pidFilteredRate = 0.85f * pidFilteredRate + 0.15f * measuredRate;
 
   float pTerm = stepperPidKpConfig * pTermError;

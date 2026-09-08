@@ -49,6 +49,9 @@ DDP packet → ddp_handler → positionRequest (shared variable) → main loop �
 - LED data: Always starts at byte offset 2 (channel 3) for RGB pixel alignment
 - This ensures LEDs always begin on an RGB boundary regardless of stepper mode, or even if stepper control is disabled entirely
 
+### Stepper Tracking Modes
+`StepperTrackMode` (`stepper_handler.h`) selects how DDP position updates become stepper motion: Direct (`moveTo()` on every packet — simple, and the flash-persisted default across the fleet), Coalesce, Streaming (shelved — unstable, not recommended), Lookahead, and PID. **PID is the mode under active tuning** (`trackMode=4`, a RAM-only override on the tuning bench — the flash fallback stays Direct until that's a deliberate decision): closed-loop control where a velocity feedforward (self-measures the real rate `positionRequest` has been changing at via a least-squares slope over a fixed window) carries the bulk of the commanded motion, with Kp/Kd trimming only the residual error. The control tick itself is configurable (`pidTickMsConfig`, default 5ms, decoupled from Compact Motion Log rate via `pidLogMsConfig`) — raising it turned out to be the real lever against a persistent speed ripple, because that ripple is a sampled-control-loop dynamic (the loop's own sample delay), not a noise source any output filter could remove. Deliberately does not read the encoder (bench-only ground truth for verifying tuning, never fed back into control). Current tuning trades some moment-to-moment smoothness for materially tighter tracking/corner accuracy versus Direct mode — matches the user's own priority: a real prop can tolerate a few frames of lag but must never look jerky. Full control law: `TRACK_MODE_PID`'s enum comment (`stepper_handler.h`). Full multi-session tuning history (gain sweeps, the feedforward design, the tick-rate investigation): `TODO.md`.
+
 ### Module Responsibilities
 
 | Module | Purpose |

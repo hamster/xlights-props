@@ -142,10 +142,10 @@ Configuration save, which is flash-backed and deliberately deferred while
 moving). Once you've found values you like, set them for real through the
 web UI so they persist across a reboot.
 
-Tunable names: `normalSpeed`, `normalAccel`, `jumpStart`, `trackEnabled`,
-`trackThreshold`, `trackSpeed`, `trackAccel`, `trackMaxLag`, `trackMode`
-(0=Direct, 1=Coalesce, 2=Streaming), `coalesceMs`, `coalesceSteps`,
-`streamRateWindow`, `streamSettle`, `compactLog`, `protocolDebug`.
+Tunable names: see `include/tuning_handler.h`'s own doc comment for the
+authoritative, current list - it's grown substantially since PID mode
+gained feedforward, a configurable tick rate, and lookahead smoothing, and
+duplicating that list here has already drifted stale once.
 
 ## Running a tuning iteration
 
@@ -250,3 +250,71 @@ plotting code itself, without re-running anything on the bench.
 4. Repeat with the next set of values. Nothing here decides *what* to try
    next automatically - that's still a human-in-the-loop judgment call,
    informed by the plots and metrics.
+
+## `ddp_continuous_test.py` - HTTP-only, real-fidelity continuous wave
+
+A second, independent tool, added 2026-09-07 and since become the primary
+one for `TRACK_MODE_PID` tuning (see `TUNING_SESSION_2026-09-07.md` and
+`TUNING_SESSION_2026-09-07_part2.md` for the sessions built entirely
+around it). Different from `tuning_harness.py` in two load-bearing ways:
+
+- **No serial connection at all** - configuration (`GET /tunable`), the
+  DDP wave itself, and log retrieval (`GET /compact-log`) all go over
+  HTTP/UDP. Opening a serial connection resets the ESP32 via DTR/RTS (see
+  CLAUDE.md), so this can run repeatedly with zero risk of interrupting an
+  in-progress bench session or corrupting state mid-sweep.
+- **Continuously repeating wave, real sender timing** - `tuning_harness.py`
+  sends one up-down cycle per run; this matches DDPDebugger's actual
+  `DdpSender.java` exactly (`elapsed % period`, value computed from real
+  elapsed time at send, not a clean schedule), so it reproduces reversal
+  bugs and jitter characteristics a cleaner synthetic wave never would.
+
+```bash
+python ddp_continuous_test.py --ddp-host 192.168.10.181 --period 8 \
+    --trips 4 --bits 16 --config config_final_locked.json --label p8 \
+    --out tuning_runs/p8.png
+```
+
+Per-run protocol (settled on 2026-09-07 after two real methodology bugs -
+see `TODO.md`'s "PID tick rate" and "Rework test harness protocol"
+sections for the full story of what went wrong first):
+
+1. Wait for genuine idle (a previous run's verify/re-home can still be in
+   flight).
+2. **Verify zero**: drive to position 0 via `/set-position` (forced to
+   Direct mode for this one move, restored after - NOT through whatever
+   `trackMode`/PID gains are under test, and deliberately not through
+   `/verify-and-rehome`, which false-flags on this exact from-anywhere
+   usage pattern), confirm the homing switch actually trips there,
+   re-home if it doesn't. This also serves as pre-positioning, since every
+   wave here starts at value 0.
+3. Send the wave with **zero mid-run HTTP calls** - draining the log
+   mid-run blocks `loop()` for up to ~1s, long enough for a continuous-run
+   stepper to cruise unsupervised past a physical boundary (measured
+   directly, not theoretical).
+4. Fetch the log once.
+5. Verify zero again.
+
+**`--trips`** (full triangle cycles; duration = trips × period) replaces a
+flat `--duration` for exactly this reason: `COMPACT_LOG_ROW_CAPACITY` caps
+how much of a run the device's 96KB ring buffer can hold before wrapping,
+and that cap is *not* a fixed duration - it scales with however fast rows
+are actually being written (`pidLogMsConfig`, independent of
+`pidTickMsConfig` - see `stepper_handler.h`). A run that requests more
+than the buffer can hold prints a warning naming a safe `--trips` value at
+that period; heed it; the alternative is a silent tail-only capture, which
+this whole protocol exists to avoid.
+
+**`--bits {8,16}`** must match the device's actual `control16Bit` setting
+(set via the config file's `control16Bit` key or the web UI) - it only
+controls how many bytes this sender puts in the DDP packet, not what the
+device is configured to expect.
+
+`analyze_ripple.py` is a companion, standalone tool for the specific
+question a plain `analyze()` run doesn't answer well: steady-cruise speed
+ripple period/amplitude, and a dead-start/contamination detector. Run it
+directly against any `.log` this tool produces:
+
+```bash
+python analyze_ripple.py tuning_runs/p8.log
+```
