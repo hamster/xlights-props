@@ -24,6 +24,24 @@ WebServer server(80);
 // External preferences object
 extern Preferences preferences;
 
+// Wraps handleRoot() for server.onNotFound() specifically to log what was
+// actually requested (2026-09-08, added while debugging a real "page loads
+// blank over the AP" report) - the WebServer library's own
+// log_e("request handler not found") right before this fires gives no clue
+// what URI/method it was, only that some request matched no exact route.
+// Every such request still falls through to this - same behavior as before,
+// just with real visibility into what's landing here now.
+void handleNotFound() {
+  Serial.print("No exact route matched (");
+  Serial.print(server.method() == HTTP_GET ? "GET" : server.method() == HTTP_POST ? "POST" : "other");
+  Serial.print(") ");
+  Serial.print(server.uri());
+  Serial.print(" from ");
+  Serial.print(server.client().remoteIP());
+  Serial.println(" - serving the main page as fallback.");
+  handleRoot();
+}
+
 void handleRoot() {
   String page = String(htmlPage);
 
@@ -986,7 +1004,7 @@ void startWebServer() {
   server.on("/ncsi.txt", HTTP_GET, handleRoot);             // Windows
 
   // Catch-all for any other requests
-  server.onNotFound(handleRoot);
+  server.onNotFound(handleNotFound);
 
   server.begin();
   Serial.println("Web server started");
