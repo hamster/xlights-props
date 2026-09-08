@@ -25,11 +25,30 @@ individual entries below for what each one was.
   window instead of coasting, then settles cleanly afterward.
 - [ ] **Root-cause the Kd=0.1 permanent freeze/corruption bug** - a real,
   serious, reproduced-once issue (2026-09-07 early), still not understood.
-  Treat Kd below ~0.15 as an unverified danger zone with feedforward
-  enabled until this is explained.
-- [ ] Investigate the ~20-reboot flurry that coincided with the Kd=0.1
-  testing window - not confirmed as the same root cause, but the timing is
-  suspicious (reset reason UNKNOWN for all but one).
+  Distinct from the "rammed into stop" item below (removed) - this one is
+  unambiguous and severe: `curSpeedHz` stuck at exactly 0 for 40+ seconds
+  while `targetSpeedHz` correctly kept wanting motion, never self-recovered,
+  and corruption persisted across subsequent config changes until a full
+  reboot. **Reviewed 2026-09-08, kept open** (not dismissed as a one-off
+  like the item below) - genuinely reproducible-in-principle danger zone,
+  not an ambiguous/inconclusive trip, and it's now reachable through UI the
+  user didn't have when this was first found: the PID Tuning section's Kd
+  field (built this session) allows any value down to 0 with no guard.
+  **Consolidated the "~20-reboot flurry" item into this one** rather than
+  tracking it separately - it coincided with the same testing window
+  (reset reason UNKNOWN for all but one) and was never confirmed as a
+  distinct cause; investigating it independently of the freeze itself
+  isn't likely to be productive.
+  **Mitigated, not root-caused, 2026-09-08**: added a live (non-blocking)
+  warning under the Kd field (`web/index.html`/`script.js`,
+  `checkPidKdWarning()`) that appears whenever Kd drops below 0.15,
+  checked on every keystroke and once on page load so an already-saved
+  dangerous value doesn't sit silently unwarned-about. Deliberately not a
+  hard block - bench work chasing this bug down for real will need to go
+  back into this range deliberately at some point. Actually reproducing
+  the freeze again to root-cause it is real, separate work involving
+  deliberately re-triggering an unrecovered hang on real hardware - not
+  attempted this pass.
 - [x] **StallGuard / jam-detection - decided, 2026-09-08.** Stays as a
   user-selectable option (`tmcStallEnabledConfig`, Settings -> TMC2209
   Config -> "Enable Stall Detection Safety Cutoff"), **default off** - no
@@ -47,13 +66,21 @@ individual entries below for what each one was.
   it just sounds terrible" - the user, an earlier session). Anyone who
   wants the cutoff can still enable and tune it per-device via Settings;
   it's just not the shipped default.
-- [ ] Figure out what actually happened during the Kd=0 sweep's "rammed
-  into stop" trip - false positive from residual dead-run position drift
-  (most likely, per a direct "no buzz or grinding" observation) vs. a
-  genuine, if quiet, overshoot. Ties into the StallGuard item above -
-  `updateRammedIntoStopCheck()`'s reliance on step-count drift as a jam
-  proxy may need revisiting the same way `isRunning()`/
-  `isRampGeneratorActive()` did elsewhere this session.
+- [x] **Dropped, 2026-09-08 - decided not worth chasing.** Was: figure out
+  what actually happened during the Kd=0 sweep's "rammed into stop" trip.
+  Confirmed a genuine one-off before dropping it, not just declared one:
+  happened exactly once, during a single sweep run, at `Kd=0` (pure P) -
+  a candidate gain that was never adopted (the compiled default landed on
+  `Kd=0.3`, later re-swept and kept there against `Kp=3`) and every
+  subsequent verification sweep at the gains actually shipped (`Kd=0.3`
+  and others) ran clean across dozens of runs and 10+ direction reversals
+  with zero repeats. No buzz/grinding was heard at the time either
+  (argues against a genuine mechanical ram), and `updateRammedIntoStopCheck()`
+  hasn't false-tripped since in any of this project's much more extensive
+  subsequent testing. Left as an unexplained single data point rather than
+  a standing investigation - the signal-to-noise on chasing a single,
+  never-repeated event at an abandoned gain setting isn't worth the bench
+  time.
 - [x] **Re-validated and re-tuned, 2026-09-07.** Made independently
   configurable (`pidDFilterWeightConfig`) and swept 0.15 (as it was left) /
   0.04 (effective time constant restored to the original ~123ms) / 1.0

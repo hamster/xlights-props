@@ -206,6 +206,23 @@ function showNotification(message, isSuccess) {
       });
     });
 
+    // Live warning for PID Kd below the documented danger zone (2026-09-08)
+    // - see TODO.md's "Root-cause the Kd=0.1 permanent freeze/corruption
+    // bug" entry (Wave 1). Not a hard block (bench work sometimes needs to
+    // deliberately explore this range), just a visible heads-up - checked
+    // on every keystroke and once on page load so an already-saved
+    // dangerous value doesn't sit silently unwarned-about.
+    function checkPidKdWarning() {
+      var field = document.getElementById('pidKd');
+      var warning = document.getElementById('pidKdWarning');
+      if (!field || !warning) return;
+      var v = parseFloat(field.value);
+      warning.hidden = !(v >= 0 && v < 0.15);
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+      checkPidKdWarning();
+    });
+
     function handleFormSubmit(event, url) {
       event.preventDefault();
       var formData = new FormData(event.target);

@@ -714,6 +714,23 @@ function showNotification(message, isSuccess) {
       });
     });
 
+    // Live warning for PID Kd below the documented danger zone (2026-09-08)
+    // - see TODO.md's "Root-cause the Kd=0.1 permanent freeze/corruption
+    // bug" entry (Wave 1). Not a hard block (bench work sometimes needs to
+    // deliberately explore this range), just a visible heads-up - checked
+    // on every keystroke and once on page load so an already-saved
+    // dangerous value doesn't sit silently unwarned-about.
+    function checkPidKdWarning() {
+      var field = document.getElementById('pidKd');
+      var warning = document.getElementById('pidKdWarning');
+      if (!field || !warning) return;
+      var v = parseFloat(field.value);
+      warning.hidden = !(v >= 0 && v < 0.15);
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+      checkPidKdWarning();
+    });
+
     function handleFormSubmit(event, url) {
       event.preventDefault();
       var formData = new FormData(event.target);
@@ -1735,7 +1752,8 @@ function showNotification(message, isSuccess) {
 
               <div class="form-group">
                 <label for="pidKd">Kd (derivative gain, Hz per step/s of measured rate):</label>
-                <input type="number" id="pidKd" name="pidKd" value="{{PID_KD}}" min="0" max="100" step="0.0001" required>
+                <input type="number" id="pidKd" name="pidKd" value="{{PID_KD}}" min="0" max="100" step="0.0001" required oninput="checkPidKdWarning()">
+                <p id="pidKdWarning" hidden style="color: #dc3545; font-size: 12px; margin: 4px 0 0; font-weight: bold;">Below ~0.15 is an unverified danger zone with Feedforward enabled - a Kd=0.1 test once froze the trolley completely (curSpeedHz stuck at 0 while targetSpeedHz kept correctly wanting motion) for 40+ seconds, never self-recovered, and left the device in a corrupted state that persisted across further config changes until a full reboot. Not root-caused. Not blocked here - bench work sometimes needs to explore this range deliberately - but don't leave a device running down here unattended.</p>
               </div>
 
               <div class="form-group">
