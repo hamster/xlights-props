@@ -321,3 +321,65 @@ directly against any `.log` this tool produces:
 ```bash
 python analyze_ripple.py tuning_runs/p8.log
 ```
+
+## `led_stress_test.py` - combined stepper motion + LED pixel stress test
+
+Added 2026-09-08 - every other tool here only ever drove the stepper
+channel; LED support (`led_handler.cpp`, `LED_START_OFFSET`/
+`updatePixelLedsFragmented()`) had no repeatable automated bench test at
+all. Drives both at once, in the same DDP packets, the way a real show
+actually does: bytes 0-1 = 16-bit stepper position (a continuously
+repeating triangle wave, same shape as `ddp_continuous_test.py`'s, so real
+direction reversals happen throughout the run), bytes 2+ = 3 bytes/pixel
+random or "chase" RGB data for `--pixels` LEDs (150 by default).
+
+```bash
+# One-time device setup (persists control16Bit + ledPixelCount, then
+# reboots - see below for why the reboot is required):
+python led_stress_test.py --ddp-host 192.168.10.181 --configure \
+    --pixels 150 --duration 30
+
+# Subsequent runs, device already configured:
+python led_stress_test.py --ddp-host 192.168.10.181 --pixels 150 \
+    --duration 30 --pattern chase
+```
+
+**`--configure` reboots the device.** `ledPixelCount` takes effect in
+RAM/NVS immediately on `POST /config`, but `led_handler.cpp`'s
+`FastLED.addLeds<...>(leds, totalPixels)` - what actually sizes the live
+pixel buffer - only ever runs once, at boot, from whatever `ledPixelCount`
+NVS held *then*. A device that has never had LEDs configured before is
+still running with them completely uninitialized until an actual reboot
+happens; the config write alone silently isn't enough (confirmed by
+`handleConfigPost()`'s own "reboot recommended" response text). `--configure`
+does the reboot and waits for the device to come back online before
+continuing, so this is one command, not "configure, then remember to
+reboot yourself first."
+
+**Verification, after the run**, all via `/status-data`/`/led-preview`/
+`/persist-log` (nothing serial): stepper position actually changed, LED
+preview data actually changed across the run (not stuck),
+`ledMaxPixelsReceived >= --pixels` (the full pixel payload reached the
+firmware, not truncated), `ledsBlanked` stayed false (no gap in the DDP
+stream large enough to trip `ledBlankTimeConfig`), and the persist log's
+own boot markers are unchanged before/after (the same authoritative
+no-reboot check used to verify the Debug tab's crash fix - see CLAUDE.md/
+TODO.md on why comparing `uptimeSecs` instead would be misleading).
+
+**Why status/preview polling runs on its own thread (`StatusPoller`),
+not inline in the send loop**: it wasn't, in an earlier version of this
+script - and one slow HTTP round-trip (an 8s `urllib` timeout, hit for
+real on the bench) stalled DDP sending long enough to trip the device's
+own `ledBlankTimeConfig` safety blanking. That's correct firmware
+behavior reacting to a real gap - just a gap this script had caused
+itself, not the firmware being tested. Moving all HTTP polling to a
+background thread means even a fully hung HTTP call can never delay or
+gap the packet stream, matching `ddp_continuous_test.py`'s established
+"zero HTTP calls in the hot send path" principle.
+
+At 150 pixels the payload is 2 + 150×3 = 452 bytes, comfortably under
+`DDP_MAX_DATA_SIZE` (1472, `ddp_handler.h`) - deliberately single-packet,
+no DDP offset-field fragmentation. Push past ~480 pixels
+(2 + pixels×3 > 1472) and this script's packets would need real
+fragmentation to stay correct - not implemented, since 150 was the actual
+ask.

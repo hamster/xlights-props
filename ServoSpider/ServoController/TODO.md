@@ -664,6 +664,76 @@ individual entries below for what each one was.
 
 
 
+## LEDs re-verified end to end: 16-bit stepper + 150 pixels, new combined motion+LED stress tool (2026-09-08)
+
+LED support (`led_handler.cpp`) hadn't been exercised by any bench tool all
+project - every tuning tool here (`tuning_harness.py`,
+`ddp_continuous_test.py`, etc.) only ever drove the stepper channel. Asked
+directly to get LEDs going again: configure the device for 16-bit stepper
+control + 150 pixels, and build tooling that drives random patterns into
+those 150 LEDs while the trolley is *also* moving, then verify it all
+actually works.
+
+**Device configured**: `POST /config` with `control16Bit=1`,
+`ledPixelCount=150` (`stepperControl=1` too, already the default). Found
+along the way that this alone isn't enough for LEDs specifically -
+`led_handler.cpp`'s `FastLED.addLeds<...>(leds, totalPixels)`, what
+actually sizes the live pixel buffer, only ever runs once at boot from
+whatever `ledPixelCount` NVS held *then*. This device had never had LEDs
+configured before (`ledPixelCount` was 0), so the config write alone left
+LEDs still uninitialized until an actual reboot - matches
+`handleConfigPost()`'s own "reboot recommended" response text, just not
+previously exercised for real. Rebooted, re-homed, confirmed
+`ledPixelCount=150`/`control16Bit=true` both survived via `/config`.
+
+**New tool: `tools/led_stress_test.py`.** Sends combined DDP packets -
+bytes 0-1 = 16-bit stepper position (continuously repeating triangle wave,
+same shape as `ddp_continuous_test.py`'s, so real direction reversals
+happen throughout), bytes 2+ = 3 bytes/pixel RGB for 150 pixels, in the
+*same* packet, matching how a real show actually drives this device (one
+DDP stream, both channels together) rather than two separate senders.
+Two pattern modes: `random` (fully independent random RGB per pixel every
+frame - simplest possible proof the firmware is decoding fresh per-pixel
+data each packet) and `chase` (a moving bright dot with a fading tail,
+re-tinted each lap - easier to visually confirm as "a moving pattern" on
+real hardware). `--configure` handles the one-time device setup above
+(including the required reboot) as part of the same command.
+
+**A real methodology bug found and fixed while building this, same shape
+as ones this project has hit before**: the first version polled
+`/status-data`/`/led-preview` for progress/verification *inline* in the
+UDP send loop. One slow HTTP round-trip (an 8s `urllib` timeout, hit for
+real on the bench) stalled DDP sending long enough to trip the device's
+own `ledBlankTimeConfig` (5s) safety blanking - the firmware behaved
+completely correctly, reacting to a real multi-second gap in protocol
+traffic; the gap itself was self-inflicted by the test script, not
+anything wrong on the device. Fixed by moving all HTTP polling to a
+background thread (`StatusPoller`), fully decoupled from the send loop's
+timing - matches `ddp_continuous_test.py`'s established "zero HTTP calls
+in the hot send path" principle, just not followed on the first pass here.
+
+**Bench-verified, multiple runs (`random` and `chase`, 8-25s each,
+30fps, 150 pixels, 16-bit, 6-8s triangle period)**: stepper position
+genuinely changed with real direction reversals throughout; LED preview
+data (`GET /led-preview`) changed continuously across the run, not stuck;
+`ledMaxPixelsReceived` held at 150 (full pixel payload reaching the
+firmware, not truncated); `ledsBlanked` stayed false for the whole run
+once the polling fix landed (no more self-inflicted gaps); persist-log
+boot markers unchanged before/after every run (no crash/reboot). Directly
+inspected `/led-preview`'s raw hex output for a `chase` run and confirmed
+it was structurally correct, not just "changed" - a bright head pixel
+with a correctly-fading tail behind it (`00FF00`, `00D400`, `00AA00`,
+`007F00`, `005500`, `002A00` across six consecutive pixels), and separately
+confirmed the device's own 5-second `ledBlankTimeConfig` blanking fired
+correctly during idle time between runs (`ledsBlanked` flipped true), so
+that safety feature is confirmed working too, not just not-triggered.
+
+Documented in `tools/README.md`. At 150 pixels the payload (2 + 150×3 =
+452 bytes) stays comfortably under `DDP_MAX_DATA_SIZE` (1472) as a single
+non-fragmented packet - pushing past ~480 pixels would need this script to
+implement real DDP offset-field fragmentation, not attempted since 150 was
+the actual ask.
+
 ## PID tick rate found to be the real ripple lever - locked in at 5ms; a lookahead buffer tried and not adopted; Core 0 for PID explicitly declined for now (2026-09-07, late)
 
 Continuing the "smooth out the actual speed" investigation after Kp=3 was locked in: the ~120-150ms-period speed ripple survived every filtering-based lever tried (Kd, Kp, pidAccel, pidFfWindowMs) because none of them touched its actual cause. Two new ideas were tried, at the user's suggestion.
