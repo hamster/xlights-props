@@ -74,7 +74,7 @@ The trolley hangs on a rope wound onto a pulley the stepper drives through a wor
 ### Configuration Storage
 All settings stored in ESP32 Preferences (NVS flash):
 - `wifi-config` namespace
-- Keys: `ssid`, `password`, `hostname`, `protocol`, `stepperControl`, `control16Bit`, `stepSpeedHome`, `stepAccelHome`, `stepBlankTime`, `tmcRunCurrent`, `tmcHoldPercent`, `tmcStallEnabled`, `tmcStallThresh`, `tmcMicrosteps`, etc. All ≤15 chars (see NVS note below). `jumpStart`, `tmcEnabled`, `tmcRSense`, `tmcAddress`, `tmcHstrt`, `tmcHend` were removed 2026-09-07 (Wave 4) - all six are now hardcoded in firmware, not NVS-backed; any of those keys already sitting in an existing device's flash is now just an orphaned, unread value.
+- Keys: `ssid`, `password`, `hostname`, `wifiRetryInt`, `protocol`, `stepperControl`, `control16Bit`, `stepSpeedHome`, `stepAccelHome`, `stepBlankTime`, `tmcRunCurrent`, `tmcHoldPercent`, `tmcStallEnabled`, `tmcStallThresh`, `tmcMicrosteps`, etc. All ≤15 chars (see NVS note below). `jumpStart`, `tmcEnabled`, `tmcRSense`, `tmcAddress`, `tmcHstrt`, `tmcHend` were removed 2026-09-07 (Wave 4) - all six are now hardcoded in firmware, not NVS-backed; any of those keys already sitting in an existing device's flash is now just an orphaned, unread value.
 
 ## Pin Configuration
 

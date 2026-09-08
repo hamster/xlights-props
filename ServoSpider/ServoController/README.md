@@ -144,6 +144,7 @@ Homing works by unwinding the rope until the trolley falls to the bottom under g
 ### WiFi Settings
 - **SSID/Password** - Network credentials
 - **IP Mode** - DHCP or Static IP
+- **Reconnect Retry Interval** (seconds, default 20, 0=disabled) - how often the device checks its connection and retries as a client if it's down, while already in client mode with saved credentials. Has no effect while running as an Access Point (today's implicit fallback-to-AP behavior on a failed boot-time connect is unchanged by this - see TODO.md for the still-open work on an explicit Client-only/AP-fallback/AP-only mode selector). 0 disables the periodic check entirely - a dropped connection then only recovers via "Connect Now" or a reboot.
 - **AP Settings** - Custom AP name and password
 - **MAC Append** - Optionally append MAC to AP name
 

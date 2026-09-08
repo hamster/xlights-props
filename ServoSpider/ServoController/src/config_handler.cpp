@@ -36,6 +36,7 @@ static const ConfigField CONFIG_FIELDS[] = {
     {"staticIp", CF_STRING, false},
     {"staticGateway", CF_STRING, false},
     {"staticSubnet", CF_STRING, false},
+    {"wifiRetryInt", CF_INT, false},
     {"apSsid", CF_STRING, false},
     {"apPassword", CF_STRING, true},
     {"apAppendMac", CF_BOOL, false},
@@ -87,6 +88,7 @@ static String getFieldValue(const char* key) {
   if (!strcmp(key, "staticIp")) return staticIp;
   if (!strcmp(key, "staticGateway")) return staticGateway;
   if (!strcmp(key, "staticSubnet")) return staticSubnet;
+  if (!strcmp(key, "wifiRetryInt")) return String(wifiRetryIntervalConfig);
   if (!strcmp(key, "apSsid")) return ap_ssid;
   if (!strcmp(key, "apPassword")) return ap_password;
   if (!strcmp(key, "apAppendMac")) return ap_append_mac ? "1" : "0";
@@ -144,6 +146,7 @@ static bool setFieldValue(const char* key, const String& value, bool& isStepperF
   if (!strcmp(key, "staticIp")) { staticIp = value; preferences.putString("staticIp", staticIp); return true; }
   if (!strcmp(key, "staticGateway")) { staticGateway = value; preferences.putString("staticGateway", staticGateway); return true; }
   if (!strcmp(key, "staticSubnet")) { staticSubnet = value; preferences.putString("staticSubnet", staticSubnet); return true; }
+  if (!strcmp(key, "wifiRetryInt")) { wifiRetryIntervalConfig = i; preferences.putInt("wifiRetryInt", wifiRetryIntervalConfig); return true; }
   if (!strcmp(key, "apSsid")) { ap_ssid = value; preferences.putString("apSsid", ap_ssid); return true; }
   if (!strcmp(key, "apPassword")) { ap_password = value; preferences.putString("apPassword", ap_password); return true; }
   if (!strcmp(key, "apAppendMac")) { ap_append_mac = b; preferences.putBool("apAppendMac", ap_append_mac); return true; }

@@ -29,6 +29,13 @@ extern bool ap_append_mac;
 // Connection timeout
 extern const unsigned long WIFI_TIMEOUT;
 
+// How often checkWifiConnection() polls connection status while in station
+// mode with saved credentials, seconds. 0 disables the periodic check
+// entirely (a dropped connection then only recovers via a manual
+// "Connect Now" or a reboot). Matches this codebase's existing "0 =
+// disabled" convention (stepperBlankTimeConfig, ledBlankTimeConfig).
+extern int wifiRetryIntervalConfig;
+
 // DNS server for captive portal
 extern DNSServer dnsServer;
 extern const byte DNS_PORT;

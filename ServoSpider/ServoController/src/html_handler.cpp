@@ -75,6 +75,7 @@ void handleRoot() {
   page.replace("{{STATIC_IP}}", staticIp);
   page.replace("{{STATIC_GATEWAY}}", staticGateway);
   page.replace("{{STATIC_SUBNET}}", staticSubnet);
+  page.replace("{{WIFI_RETRY_INTERVAL}}", String(wifiRetryIntervalConfig));
   page.replace("{{AP_SSID}}", ap_ssid);
   page.replace("{{AP_PASSWORD}}", ap_password);
   page.replace("{{AP_APPEND_MAC_CHECKED}}", ap_append_mac ? "checked" : "");
@@ -168,6 +169,11 @@ void handleSaveWifi() {
       }
 
       preferences.putBool("useStaticIp", useStaticIp);
+    }
+
+    if (server.hasArg("wifiRetryInterval")) {
+      wifiRetryIntervalConfig = server.arg("wifiRetryInterval").toInt();
+      preferences.putInt("wifiRetryInt", wifiRetryIntervalConfig);
     }
 
     // Save to preferences

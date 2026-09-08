@@ -27,6 +27,18 @@ bool ap_append_mac = DEFAULT_AP_APPEND_MAC;
 // Connection timeout
 const unsigned long WIFI_TIMEOUT = 10000; // 10 seconds
 
+// See declaration comment (wifi_handler.h). Was a hardcoded 30s CHECK_INTERVAL
+// local to checkWifiConnection() until 2026-09-07, when it became a
+// configurable, persisted setting - default kept at 20s per the user's
+// request. The existing 3-consecutive-failed-checks debounce before actually
+// reconnecting was left untouched rather than also shortened/removed
+// alongside this - this exact function is already suspected (not confirmed)
+// as the source of a real, unexplained ~20-30s WiFi/HTTP unresponsiveness
+// observed twice on the bench (see TODO.md, Wave 3) at the old 30s/3-strike
+// settings; making reconnects trigger-happier at the same time as adding
+// this config felt like the wrong moment to also loosen that guard.
+int wifiRetryIntervalConfig = 20;
+
 // connect to wifi - returns true if successful or false if not
 boolean connectToWifi() {
   WiFi.mode(WIFI_STA);
@@ -134,13 +146,19 @@ void startAccessPoint() {
 void checkWifiConnection() {
   static unsigned long lastCheckTime = 0;
   static int disconnectCount = 0;
-  const unsigned long CHECK_INTERVAL = 30000;  // Check every 30 seconds
   const int MAX_DISCONNECT_COUNT = 3;  // Reconnect after 3 failed checks
+
+  // 0 = feature disabled entirely - see wifiRetryIntervalConfig's
+  // declaration comment (wifi_handler.h).
+  if (wifiRetryIntervalConfig <= 0) {
+    return;
+  }
+  unsigned long checkIntervalMs = (unsigned long)wifiRetryIntervalConfig * 1000UL;
 
   unsigned long currentTime = millis();
 
   // Only check periodically
-  if (currentTime - lastCheckTime < CHECK_INTERVAL) {
+  if (currentTime - lastCheckTime < checkIntervalMs) {
     return;
   }
 
@@ -173,7 +191,9 @@ void checkWifiConnection() {
         Serial.println("WiFi reconnected successfully");
         disconnectCount = 0;
       } else {
-        Serial.println("WiFi reconnect failed, will retry in 30 seconds");
+        Serial.print("WiFi reconnect failed, will retry in ");
+        Serial.print(wifiRetryIntervalConfig);
+        Serial.println(" seconds");
       }
     }
   } else {

@@ -1060,6 +1060,10 @@ void setup() {
   staticGateway = preferences.getString("staticGateway", "");
   staticSubnet = preferences.getString("staticSubnet", "255.255.255.0");
 
+  // Reconnect-monitoring poll interval, seconds (0 = disabled) - see
+  // wifiRetryIntervalConfig's declaration comment (wifi_handler.h).
+  wifiRetryIntervalConfig = preferences.getInt("wifiRetryInt", 20);
+
   // Load saved AP configuration
   ap_ssid = preferences.getString("apSsid", DEFAULT_AP_SSID);
   ap_password = preferences.getString("apPassword", DEFAULT_AP_PASSWORD);

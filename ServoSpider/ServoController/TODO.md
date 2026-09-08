@@ -309,6 +309,22 @@ individual entries below for what each one was.
   network bring-up change on hardware that's normally managed remotely;
   wanted a deliberate pass with on-bench verification of each mode rather
   than folding it into a larger mechanical cleanup commit.
+  - [x] **Adjacent, smaller piece done separately, 2026-09-07**: the
+    existing (already-implemented) "was connected as client, then dropped,
+    retry" monitor (`checkWifiConnection()`) had its 30-second poll interval
+    hardcoded - made configurable and persisted (`wifiRetryIntervalConfig`,
+    NVS key `wifiRetryInt`, default 20s, 0=disabled), with a Settings-page
+    field. Left the existing 3-consecutive-failed-checks debounce before
+    actually reconnecting untouched - didn't want to also make reconnects
+    more trigger-happy in the same change as shortening the poll interval,
+    given this exact function is already suspected (not confirmed) in the
+    unexplained WiFi/HTTP unresponsiveness noted earlier in Wave 3. This is
+    a real, separate improvement from the mode-selector item above, not a
+    substitute for it - it only ever helps a device that's already
+    successfully connected as a client and then drops; it does nothing for
+    a device stuck in AP fallback after a failed boot-time connect (which
+    is exactly what the mode-selector/explicit-retry-while-AP behavior
+    above would address).
 - [x] **Stepper Configuration**: remove the help-text paragraph above
   Homing Acceleration.
 - [x] **Settings tab**: fold Channel Configuration and LED Configuration
