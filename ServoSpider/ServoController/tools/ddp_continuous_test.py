@@ -314,6 +314,21 @@ def analyze(lines, args):
     if not rows:
         return
 
+    # Drop a leading malformed/truncated row if present - see
+    # analyze_ripple.py's matching fix for the full story (seen at
+    # pidTickMs below 20, in at least three different corrupted shapes -
+    # "0,0", "08,663,0,0", "06,53586,..." - never at the original 20ms tick
+    # across ~25 runs). A genuine first row's ms is comfortably into 4+
+    # digits by the time a run starts; a truncated line's padded/mis-parsed
+    # ms is not. Most of this file's own metrics (jerk, frame lag, encoder
+    # ground truth, real-stall detection) don't depend on ms at all and
+    # were already unaffected, but corner-tightness's reversal-window
+    # bucketing does use ms, so this is worth doing here too, not just in
+    # analyze_ripple.py.
+    while len(rows) > 1 and rows[0]["ms"] < 1000 and rows[1]["ms"] - rows[0]["ms"] > 5000:
+        print(f"  NOTE: dropped a leading malformed row (ms={rows[0]['ms']})")
+        rows = rows[1:]
+
     # Discard the startup transient (2026-09-07). Each run begins with the
     # trolley wherever the PREVIOUS run's wave happened to leave it, while the
     # new wave always starts at value 0 - so the first moments are a one-off

@@ -296,6 +296,30 @@ void logCompactMotion(uint16_t ddpVal, int cmdPos, int curPos, int delta, int la
   appendCompactLog(lineBuf);
 }
 
+// Throttled wrapper for updatePidMode()'s own "log every tick" call sites
+// (2026-09-07, added alongside stepperPidTickMsConfig becoming
+// configurable). Every one of those call sites' own comments say "log
+// every tick" meaning "every ~20ms," written back when PID's tick WAS a
+// hardcoded 20 - decoupling tick rate from log rate silently broke that
+// assumption: at pidTickMs=5, logging on literally every tick meant up to
+// 200 rows/sec, which overflowed the 96KB Compact Motion Log ring buffer
+// in under 11 seconds (confirmed on the bench - a 12s capture came back
+// missing its first ~1.1s, silently truncated). Logging has no feedback
+// into the control law, so decoupling its cadence costs nothing there.
+// max(20, tick) preserves the exact original behavior for every tick
+// value this project has ever actually used (>=20ms) and only caps the
+// rate when tick is faster than that.
+unsigned long lastPidLogMs = 0;
+void logCompactMotionPidThrottled(uint16_t ddpVal, int cmdPos, int curPos, int delta, int lag,
+                                    bool tracking, int32_t curSpeedMilliHz, int targetSpeedHz) {
+  unsigned long now = millis();
+  unsigned long intervalMs = (unsigned long)stepperPidTickMsConfig;
+  if (intervalMs < 20) intervalMs = 20;
+  if (now - lastPidLogMs < intervalMs) return;
+  lastPidLogMs = now;
+  logCompactMotion(ddpVal, cmdPos, curPos, delta, lag, tracking, curSpeedMilliHz, targetSpeedHz);
+}
+
 // Periodic compact-log tick, independent of the DDP/tracking-mode dispatch
 // below - Direct and Coalesce only log once at the moment a move is
 // committed, so a single large move (a big DDP jump, or a diagnostic
@@ -845,8 +869,11 @@ void updatePidMode() {
     // issued this time, so the Compact Motion Log's ddpVal trace stays a
     // complete, gap-free record of positionRequest at PID's own tick rate -
     // see the deadband-settled branch above for the full "this was
-    // mistaken for a DDP reception problem" story.
-    logCompactMotion(positionRequest, (int)target, (int)currentPos, 0, (int)error,
+    // mistaken for a DDP reception problem" story. Throttled (see
+    // logCompactMotionPidThrottled's declaration comment) - "every tick"
+    // meant every ~20ms when this comment was written; pidTickMs can now
+    // be faster than that.
+    logCompactMotionPidThrottled(positionRequest, (int)target, (int)currentPos, 0, (int)error,
                       true, stepper->getCurrentSpeedInMilliHz(), 0);
     pidLastMeasuredPos = currentPos;
     return;  // stays settled - pidSettled untouched
@@ -955,7 +982,7 @@ void updatePidMode() {
     }
     pidCurrentDirection = 0;
     continuousRunDirection = 0;
-    logCompactMotion(positionRequest, (int)target, (int)currentPos, 0, (int)error,
+    logCompactMotionPidThrottled(positionRequest, (int)target, (int)currentPos, 0, (int)error,
                       true, stepper->getCurrentSpeedInMilliHz(), 0);
     return;
   }
@@ -1076,7 +1103,12 @@ void updatePidMode() {
   }
 
   stepperBlanked = false;
-  logCompactMotion(positionRequest, (int)target, (int)currentPos, 0, (int)error,
+  // Throttled (see logCompactMotionPidThrottled's declaration comment) -
+  // this is the main active-tracking log call, reached on essentially
+  // every tick while continuously moving, so it's the dominant contributor
+  // to log row rate. At pidTickMs=5 this alone confirmed overflowing the
+  // 96KB ring buffer in ~11s of continuous motion before this fix.
+  logCompactMotionPidThrottled(positionRequest, (int)target, (int)currentPos, 0, (int)error,
                     true, stepper->getCurrentSpeedInMilliHz(), (int)speed);
 }
 
