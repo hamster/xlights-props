@@ -8,7 +8,12 @@ extern Preferences preferences;
 TMC2209Stepper *tmcDriver = nullptr;
 bool tmcConnected = false;
 
-bool tmcEnabledConfig = false;
+// Default true (2026-09-07, Wave 4 UI pass) - UART driver control (current
+// control, StallGuard, diagnostics) is now considered standard rather than
+// opt-in. Only affects a device that has never saved "tmcEnabled" to NVS -
+// see CLAUDE.md's Preferences note. Existing provisioned devices keep
+// whatever they already saved.
+bool tmcEnabledConfig = true;
 float tmcRSenseConfig = 0.11f;
 uint8_t tmcAddressConfig = 0;
 uint16_t tmcRunCurrentConfig = 800;

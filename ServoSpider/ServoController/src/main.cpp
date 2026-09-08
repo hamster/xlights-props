@@ -1384,7 +1384,7 @@ void setup() {
   stepperBlankTimeConfig = preferences.getInt("stepBlankTime", 0);
 
   // Load TMC2209 UART configuration
-  tmcEnabledConfig = preferences.getBool("tmcEnabled", false);
+  tmcEnabledConfig = preferences.getBool("tmcEnabled", true);
   tmcRSenseConfig = preferences.getFloat("tmcRSense", 0.11f);
   tmcAddressConfig = (uint8_t)preferences.getInt("tmcAddress", 0);
   tmcRunCurrentConfig = (uint16_t)preferences.getInt("tmcRunCurrent", 800);

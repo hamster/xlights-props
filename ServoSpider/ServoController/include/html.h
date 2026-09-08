@@ -550,18 +550,6 @@ function showNotification(message, isSuccess) {
         });
     }
 
-    function toggleCompactLog() {
-      var enabled = document.getElementById('compact-log-enabled').checked;
-      fetch('/compact-log?enable=' + enabled)
-        .then(response => response.json())
-        .then(data => {
-          console.log('Compact motion log: ' + (data.compactLog ? 'enabled' : 'disabled'));
-        })
-        .catch(error => {
-          showNotification('Error toggling compact log: ' + error, false);
-        });
-    }
-
     function fetchLedPreview() {
       fetch('/led-preview')
         .then(response => response.json())
@@ -728,40 +716,6 @@ function showNotification(message, isSuccess) {
     function setPositionStatus() {
       var inputValue = document.getElementById("setPositionInputStatus").value;
       var mode = document.querySelector('input[name="positionModeStatus"]:checked').value;
-      var position;
-
-      if (mode === "percent") {
-        var bottomPos = parseInt(document.getElementById('bottom-position').textContent);
-        position = Math.round((bottomPos * inputValue) / 100);
-        console.log('Moving to ' + inputValue + '% (position ' + position + ')');
-      } else {
-        position = inputValue;
-        console.log('Moving to position ' + position);
-      }
-
-      fetch('/set-position?position=' + position)
-        .then(response => response.text().then(text => {
-          if (!response.ok) {
-            showNotification(text, false);
-          } else {
-            console.log('Move command sent');
-          }
-        }));
-    }
-
-    function moveSteps(direction) {
-      var steps = document.getElementById("stepAmount").value;
-      var position = direction === 'forward' ? steps : -steps;
-      fetch('/move?steps=' + position)
-        .then(response => response.text())
-        .then(data => {
-          console.log('Moved ' + position + ' steps');
-        });
-    }
-
-    function setPosition() {
-      var inputValue = document.getElementById("setPositionInput").value;
-      var mode = document.querySelector('input[name="positionMode"]:checked').value;
       var position;
 
       if (mode === "percent") {
@@ -1043,12 +997,6 @@ function showNotification(message, isSuccess) {
           var ledTestCheckbox = document.getElementById('led-test-mode-enabled');
           if (ledTestCheckbox && document.activeElement !== ledTestCheckbox) {
             ledTestCheckbox.checked = data.ledTestMode || false;
-          }
-
-          // Sync compact motion log checkbox across all clients
-          var compactLogCheckbox = document.getElementById('compact-log-enabled');
-          if (compactLogCheckbox && document.activeElement !== compactLogCheckbox) {
-            compactLogCheckbox.checked = data.compactLog || false;
           }
 
           // Update locate mode indicator to sync across all clients
@@ -1386,13 +1334,6 @@ function showNotification(message, isSuccess) {
             Test Pattern
           </label>
         </div>
-
-        <div style="margin-top: 10px;">
-          <label style="font-size: 12px; cursor: pointer;">
-            <input type="checkbox" id="compact-log-enabled" onchange="toggleCompactLog()">
-            Compact Motion Log (serial, CSV)
-          </label>
-        </div>
       </div>
       </div>
     </div>
@@ -1514,7 +1455,6 @@ function showNotification(message, isSuccess) {
           <div class="form-group">
             <label for="stepperSpeedHoming">Homing Speed (Hz):</label>
             <input type="number" id="stepperSpeedHoming" name="stepperSpeedHoming" value="{{STEPPER_SPEED_HOMING}}" min="100" max="50000" required>
-            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">This is a step-pulse rate, not a physical speed - it doesn't scale with the driver's microstep setting. If you change Microsteps per Full Step under the TMC2209 driver settings, re-tune this: lower microsteps means faster physical movement for the same Hz, so a coarser microstep setting needs a lower Hz here to move at the same physical speed.</p>
           </div>
 
           <div class="form-group">
@@ -1596,82 +1536,42 @@ function showNotification(message, isSuccess) {
           <button type="submit" class="btn-primary">Save Stepper Settings</button>
         </form>
 
-        <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;">
+        <button class="collapsible" onclick="toggleCollapsible(this)">TMC2209 Config</button>
+        <div class="collapsible-content">
+          <div class="collapsible-content-inner">
+            <p style="color: #666; font-style: italic; margin-top: 0;">Optional: digital current control, StallGuard-based jam detection, and driver diagnostics over the UART link on D6/D7. Leave disabled if the driver isn't wired for UART.</p>
 
-        <h3>Stepper Control</h3>
-
-        <div class="form-group">
-          <label for="setPositionInput">Set Position:</label>
-          <div class="position-input-group">
-            <input type="number" id="setPositionInput" name="setPositionInput" value="0" min="0" max="200">
-            <div class="position-controls">
-              <div class="position-mode-selector">
-                <label>
-                  <input type="radio" name="positionMode" value="steps" checked>
-                  Steps
-                </label>
-                <label id="positionModePercentLabel" title="0-100% is normal travel range. 100-200% deliberately overshoots past the bottom to the far switch-trigger point (the rope wrapped the other way) - for setting up a starting position to test homing from, not normal operation.">
-                  <input type="radio" name="positionMode" value="percent" id="positionModePercent">
-                  Percent (0-200%)
+            <form onsubmit="return handleFormSubmit(event, '/save-tmc')">
+              <div class="form-group">
+                <label for="tmcEnabled">
+                  <input type="checkbox" id="tmcEnabled" name="tmcEnabled" {{TMC_ENABLED_CHECKED}} onchange="toggleTmcOptions()">
+                  Enable UART Driver Control
                 </label>
               </div>
-              <button onclick="setPosition()" class="btn-warning">Go</button>
-            </div>
-          </div>
-        </div>
 
-        <div class="form-group">
-          <label for="stepAmount">Step Amount:</label>
-          <input type="number" id="stepAmount" name="stepAmount" value="50" min="1" max="10000">
-        </div>
+              <div id="tmcOptionsGroup">
+                <div class="form-group">
+                  <label for="tmcRunCurrent">Run Current (mA):</label>
+                  <input type="number" id="tmcRunCurrent" name="tmcRunCurrent" value="{{TMC_RUN_CURRENT}}" min="0" max="2000" required>
+                </div>
 
-        <div class="button-row">
-          <button onclick="moveSteps('backward')" class="btn-warning">&larr; Move Backward</button>
-          <button onclick="moveSteps('forward')" class="btn-warning">Move Forward &rarr;</button>
-        </div>
+                <div class="form-group">
+                  <label for="tmcHoldPercent">Hold Current (% of run):</label>
+                  <input type="number" id="tmcHoldPercent" name="tmcHoldPercent" value="{{TMC_HOLD_PERCENT}}" min="0" max="100" required>
+                </div>
 
-        <button onclick="homeServo()" class="btn-success">Home Servo</button>
-      </div>
+                <div class="form-group">
+                  <label for="tmcStallEnabled">
+                    <input type="checkbox" id="tmcStallEnabled" name="tmcStallEnabled" {{TMC_STALL_ENABLED_CHECKED}}>
+                    Enable Stall Detection Safety Cutoff
+                  </label>
+                </div>
 
-      <!-- TMC2209 Driver Configuration Box -->
-      <div class="status-box">
-        <h4>Stepper Driver (TMC2209 UART)</h4>
-        <p style="color: #666; font-style: italic;">Optional: digital current control, StallGuard-based jam detection, and driver diagnostics over the UART link on D6/D7. Leave disabled if the driver isn't wired for UART.</p>
+                <div class="form-group">
+                  <label for="tmcStallThreshold">Stall Threshold (live SG_RESULT below this = stalled; tune on the bench, watch the live value on the Status tab):</label>
+                  <input type="number" id="tmcStallThreshold" name="tmcStallThreshold" value="{{TMC_STALL_THRESHOLD}}" min="0" max="1023" required>
+                </div>
 
-        <form onsubmit="return handleFormSubmit(event, '/save-tmc')">
-          <div class="form-group">
-            <label for="tmcEnabled">
-              <input type="checkbox" id="tmcEnabled" name="tmcEnabled" {{TMC_ENABLED_CHECKED}} onchange="toggleTmcOptions()">
-              Enable UART Driver Control
-            </label>
-          </div>
-
-          <div id="tmcOptionsGroup">
-            <div class="form-group">
-              <label for="tmcRunCurrent">Run Current (mA):</label>
-              <input type="number" id="tmcRunCurrent" name="tmcRunCurrent" value="{{TMC_RUN_CURRENT}}" min="0" max="2000" required>
-            </div>
-
-            <div class="form-group">
-              <label for="tmcHoldPercent">Hold Current (% of run):</label>
-              <input type="number" id="tmcHoldPercent" name="tmcHoldPercent" value="{{TMC_HOLD_PERCENT}}" min="0" max="100" required>
-            </div>
-
-            <div class="form-group">
-              <label for="tmcStallEnabled">
-                <input type="checkbox" id="tmcStallEnabled" name="tmcStallEnabled" {{TMC_STALL_ENABLED_CHECKED}}>
-                Enable Stall Detection Safety Cutoff
-              </label>
-            </div>
-
-            <div class="form-group">
-              <label for="tmcStallThreshold">Stall Threshold (live SG_RESULT below this = stalled; tune on the bench, watch the live value on the Status tab):</label>
-              <input type="number" id="tmcStallThreshold" name="tmcStallThreshold" value="{{TMC_STALL_THRESHOLD}}" min="0" max="1023" required>
-            </div>
-
-            <button type="button" class="collapsible" onclick="toggleCollapsible(this)">Advanced</button>
-            <div class="collapsible-content">
-              <div class="collapsible-content-inner">
                 <div class="form-group">
                   <label for="tmcMicrosteps">Microsteps per Full Step:</label>
                   <select id="tmcMicrosteps" name="tmcMicrosteps" style="width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box; border: 2px solid #ddd; border-radius: 4px;">
@@ -1708,16 +1608,16 @@ function showNotification(message, isSuccess) {
                   <input type="number" id="tmcAddress" name="tmcAddress" value="{{TMC_ADDRESS}}" min="0" max="3" required>
                 </div>
               </div>
-            </div>
-          </div>
 
-          <button type="submit" class="btn-primary">Save Driver Settings</button>
-        </form>
+              <button type="submit" class="btn-primary">Save Driver Settings</button>
+            </form>
+          </div>
+        </div>
       </div>
 
-      <!-- Channel Configuration Box -->
+      <!-- Channel + LED Configuration Box -->
       <div class="status-box">
-        <h4>Channel Configuration</h4>
+        <h4>Channel &amp; LED Configuration</h4>
         <p style="color: #666; font-style: italic;">Position and pixel data are received via DDP on port 4048. No protocol selection needed.</p>
 
         <form onsubmit="return handleFormSubmit(event, '/save-protocol')">
@@ -1754,16 +1654,16 @@ function showNotification(message, isSuccess) {
 
           <button type="submit" class="btn-primary">Save Channel Settings</button>
         </form>
-      </div>
 
-      <!-- LED Configuration Box -->
-      <div class="status-box">
-        <h4>LED Configuration</h4>
+        <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;">
+
+        <h3>LED Configuration</h3>
 
         <form onsubmit="return handleFormSubmit(event, '/save-led')">
           <div class="form-group">
             <label for="ledPixelCount">Pixel Count:</label>
             <input type="number" id="ledPixelCount" name="ledPixelCount" value="{{LED_PIXEL_COUNT}}" min="0" max="1000" required>
+            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Large pixel counts add real WiFi/DDP bandwidth and per-frame update time - a few hundred pixels is a safer practical ceiling than the 1000 the field allows; test on the bench before committing to a big run.</p>
           </div>
 
           <div class="form-group">

@@ -201,23 +201,50 @@ individual entries below for what each one was.
 
 ### Wave 4 - web UI modernization (its own epic; merges ~15 scattered items)
 
-- [ ] Remove the **Compact Motion Log** checkbox from Settings
-  (`web/index.html`, `id="compactLog"`) - bench/tuning-only, shouldn't be
-  user-facing.
-- [ ] Remove **Jump Start**, add a real **PID tuning parameters** section
-  (currently RAM-only via `$SET`/`GET /tunable`, no Settings UI or
-  Preferences persistence at all - the list has grown to 11 tunables
-  across two sessions; see `include/tuning_handler.h`'s doc comment for
-  the current, authoritative list - `pidKi` was removed 2026-09-07, don't
-  add it back), and remove the old **Small-Move Tracking** section
-  (superseded by PID mode).
-- [ ] Remove the redundant **Stepper Control** section from Settings - it
-  duplicates the Status page's own "Manual Stepper Control" collapsible.
-- [ ] Fold the **TMC2209 driver settings** panel into Stepper Configuration
-  under a single "TMC2209 Config" collapsible (no nested "Advanced" level
-  inside it), enable UART driver control by default (currently opt-in),
-  and remove the StallGuard settings from it if Wave 1's StallGuard
-  decision comes back "remove."
+- [x] Remove the **Compact Motion Log** checkbox from the UI (it was on the
+  Status tab, not Settings - the TODO's file location was slightly stale)
+  (`web/index.html`) - bench/tuning-only, shouldn't be user-facing. The
+  `/compact-log` HTTP endpoint itself is untouched - `tools/*.py` control it
+  directly and don't go through this checkbox.
+- [~] **Reclassified, NOT done** - "Remove Jump Start, add a real PID tuning
+  parameters section... and remove the old Small-Move Tracking section
+  (superseded by PID mode)." On closer look this conflates two different
+  things: adding a real PID tuning UI (genuinely missing, worth doing) vs.
+  deleting Jump Start and Small-Move Tracking (still the live, real
+  implementation for every non-PID `trackMode`, and Direct - one of the
+  modes that depends on them - remains the flash-persisted default across
+  the fleet per CLAUDE.md; PID is still a RAM-only bench override, not yet
+  the shipped default). Deleting their UI now would strand real
+  fleet-relevant settings as RAM/serial-only. Splitting this into two real
+  items instead:
+  - [ ] Add a real **PID tuning parameters** section (trackMode option 4 is
+    missing from the dropdown entirely, and none of the ~13 `pid*`
+    tunables - see `include/tuning_handler.h`'s doc comment for the
+    current list - have a Settings UI or NVS persistence; today they're
+    `$SET`/`GET /tunable` RAM-only). Real feature work: needs new
+    Preferences keys (≤15 chars each) and a `/save-pid` endpoint, not just
+    HTML.
+  - [ ] Revisit removing Jump Start / Small-Move Tracking from the UI only
+    once PID is promoted from RAM-only bench override to the actual
+    flash-persisted default - not before.
+- [x] Remove the redundant **Stepper Control** section from Settings - it
+  duplicated the Status page's own "Manual Stepper Control" collapsible
+  (same `setPosition`/`moveSteps`/`homeServo` actions, just a second set of
+  form fields). `homeServo()` in `script.js` is shared by both tabs and was
+  kept; the Settings-tab-only `setPosition()`/`moveSteps()` wrapper
+  functions were removed since nothing calls them anymore (the `/set-position`
+  and `/move` HTTP endpoints themselves are untouched - tooling hits them
+  directly).
+- [x] Fold the **TMC2209 driver settings** panel into Stepper Configuration
+  under a single "TMC2209 Config" collapsible (no nested "Advanced" level -
+  flattened those fields into the main body), and enabled UART driver
+  control by default (`tmcEnabledConfig` compiled default `false`->`true`
+  in `tmc_handler.cpp` and `main.cpp`'s NVS-load fallback). Per the
+  Preferences-default note in CLAUDE.md this only changes behavior for a
+  device that has never saved `tmcEnabled` - didn't touch the bench
+  device's already-saved value. Did **not** remove the StallGuard settings
+  from the panel - Wave 1's StallGuard decision is still open, and this
+  item was explicitly conditional on that decision coming back "remove."
 - [ ] Be ready to `#define` off the encoder status/count display
   (`id="encoder-count"`) once tracking-mode tuning is done and the encoder
   is no longer needed for bench verification. **Not yet** - tuning is
@@ -225,8 +252,6 @@ individual entries below for what each one was.
   tuning requires it as a second source of truth). Revisit only once PID
   tuning is genuinely finished, and discuss with the user first (removing
   vs. gating is still an open choice).
-- [ ] Remove the **Advanced Settings** section from Settings (exact
-  contents not yet located precisely).
 - [ ] Remove the **Serial Debug** checkbox from channel config and the
   redundant **Stepper Control** duplicate mention - both fold into a new
   **Live Log / Debug tab**: shows the Compact Motion Log and/or the
@@ -236,13 +261,21 @@ individual entries below for what each one was.
   feature; reconcile into one before building.) Needs a transport decision
   (polling an endpoint, matching the `/status-data` pattern, is the
   simplest fit) and a buffering design (how much history, RAM is limited
-  at 327KB total).
+  at 327KB total). **Not started** - real design work, not mechanical
+  cleanup; deliberately not rushed alongside the rest of this wave.
 - [ ] **WiFi settings**: add an explicit mode selector (Client only / AP
-  fallback / AP only) instead of today's implicit behavior.
-- [ ] **Stepper Configuration**: remove the help-text paragraph above
+  fallback / AP only) instead of today's implicit behavior (traced in
+  `wifi_handler.cpp`/`main.cpp`: today it always tries client first, then
+  falls back to AP on failure/no-saved-SSID - there's no way to force
+  "AP only" or "client, no fallback"). **Not started** - this is a boot-time
+  network bring-up change on hardware that's normally managed remotely;
+  wanted a deliberate pass with on-bench verification of each mode rather
+  than folding it into a larger mechanical cleanup commit.
+- [x] **Stepper Configuration**: remove the help-text paragraph above
   Homing Acceleration.
-- [ ] **Settings tab**: fold Channel Configuration and LED Configuration
-  into one panel.
+- [x] **Settings tab**: fold Channel Configuration and LED Configuration
+  into one panel (now "Channel & LED Configuration" - two forms, one box,
+  matching the pattern already used for WiFi/AP settings).
 - [ ] Surface which tracking profile (normal vs. small-move) was used
   per-move somewhere in the UI - currently only visible via serial with
   Debug enabled (`[tracking]`/`[normal]`). Natural fit for the planned
@@ -250,15 +283,15 @@ individual entries below for what each one was.
 - [ ] Changing Microsteps per Full Step requires a re-home afterward (the
   UI warns on save, but it's easy to miss) - the previously-tuned Stepper
   Speed (Hz) will feel like a different physical speed since distance per
-  step changed.
-- [ ] Web UI: consider a hint/warning in the LED settings section once
-  real practical WiFi pixel-count limits are established (pixel count
-  input already allows up to `MAX_LEDS`=1000, no code change needed, just
-  a UI hint).
-- [ ] Consider documenting `stepperControlEnabled = false` (pixel-only
-  prop) as a first-class supported use case - it already works today
-  (channels 1-2 stay reserved/unused, LEDs still start at channel 3), just
-  isn't called out anywhere.
+  step changed. Standing note, not actionable without a real design for
+  how to make the warning harder to miss.
+- [x] Web UI: hint/warning in the LED settings section about practical WiFi
+  pixel-count limits (pixel count input still allows up to `MAX_LEDS`=1000,
+  no code change needed - added the hint text next to the field).
+- [x] Documented `stepperControlEnabled = false` (pixel-only prop) as a
+  first-class supported use case in README.md's Channel Settings section -
+  it already worked (channels 1-2 stay reserved/unused, LEDs still start at
+  channel 3), just wasn't called out clearly before.
 
 ### Wave 5 - bigger, deliberately-deferred design work
 

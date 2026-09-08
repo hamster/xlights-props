@@ -68,12 +68,12 @@ DDP is the only supported protocol — ArtNet was deliberately dropped (see [TOD
    - Enable "Auto Home on Bootup" if desired
 
 4. **Configure Channels**
-   - Navigate to Settings tab → Channel Configuration
+   - Navigate to Settings tab → Channel & LED Configuration
    - Enable/disable stepper control and 16-bit mode as needed
    - Servo position is fixed at DDP byte 1 (or bytes 1-2 in 16-bit mode)
 
 5. **Configure Pixels (optional)**
-   - Navigate to Settings tab → LED Configuration
+   - Same Channel & LED Configuration panel, further down (its own form/Save button)
    - Set pixel count, color order, gamma, brightness, and any null/spacer pixels
    - Pixel data always starts at channel 3 (byte offset 2), leaving channel 2 unused as padding — this keeps the RGB boundary aligned regardless of 8-bit/16-bit stepper mode or whether stepper control is enabled at all
 
@@ -162,14 +162,14 @@ Homing works by unwinding the rope until the trolley falls to the bottom under g
 - **Auto Home on Boot**: Enable/disable automatic homing
 
 ### Channel Settings
-- **Stepper Control**: Enable/disable stepper channel(s) entirely (pixel-only props don't need it)
+- **Stepper Control**: Enable/disable stepper channel(s) entirely. A pixel-only prop (no stepper hardware at all) is a first-class supported case — disabling this leaves channels 1-2 reserved/unused, and pixel data still starts at channel 3 exactly as it does with stepper control enabled, so an xLights sequence built for a stepper+pixel prop drives the pixels identically on a pixel-only one.
 - **16-bit Stepper Control**: Use two channels for finer position resolution
 - **Debug mode**: Verbose serial logging of incoming DDP data
 - **LED Blank Time**: Seconds of no DDP traffic before pixels turn off (0 = disabled)
 - **Stepper Blank Time**: Seconds of no DDP traffic before the stepper returns to position 0 (0 = disabled)
 
 ### Stepper Driver Settings (TMC2209 UART, optional)
-Requires the driver's UART (single-wire PDN_UART pad) wired to D6 (TX) / D7 (RX); leave "Enable UART Driver Control" off if it isn't. Off by default — enabling it does not change the motor's current/behavior until you also set Run Current, since the firmware won't apply digital current control until told to.
+Lives under Settings tab → Stepper Configuration → "TMC2209 Config" (folded into that panel as of 2026-09-07, rather than its own box). Requires the driver's UART (single-wire PDN_UART pad) wired to D6 (TX) / D7 (RX); leave "Enable UART Driver Control" off if it isn't. On by default as of 2026-09-07 (a device that has never saved this setting starts with it enabled) — enabling it does not by itself change the motor's current/behavior until you also set Run Current, since the firmware won't apply digital current control until told to.
 - **Run Current** (mA) / **Hold Current** (% of run) — replaces the board's physical Vref trimpot once enabled; the trimpot has no further effect after this is turned on
 - **Stall Detection** — a firmware-side safety cutoff that watches the driver's live StallGuard reading (`SG_RESULT`) and force-stops the motor if it drops below a configured threshold while moving, e.g. a jammed rope. This needs bench tuning: watch the live `SG_RESULT` value on the Status tab under normal moves vs. a deliberately blocked one to pick a threshold, then enable the cutoff. It's independent of the physical homing switch and doesn't affect homing.
 - **Advanced**:

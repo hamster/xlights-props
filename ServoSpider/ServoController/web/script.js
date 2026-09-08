@@ -63,18 +63,6 @@ function showNotification(message, isSuccess) {
         });
     }
 
-    function toggleCompactLog() {
-      var enabled = document.getElementById('compact-log-enabled').checked;
-      fetch('/compact-log?enable=' + enabled)
-        .then(response => response.json())
-        .then(data => {
-          console.log('Compact motion log: ' + (data.compactLog ? 'enabled' : 'disabled'));
-        })
-        .catch(error => {
-          showNotification('Error toggling compact log: ' + error, false);
-        });
-    }
-
     function fetchLedPreview() {
       fetch('/led-preview')
         .then(response => response.json())
@@ -241,40 +229,6 @@ function showNotification(message, isSuccess) {
     function setPositionStatus() {
       var inputValue = document.getElementById("setPositionInputStatus").value;
       var mode = document.querySelector('input[name="positionModeStatus"]:checked').value;
-      var position;
-
-      if (mode === "percent") {
-        var bottomPos = parseInt(document.getElementById('bottom-position').textContent);
-        position = Math.round((bottomPos * inputValue) / 100);
-        console.log('Moving to ' + inputValue + '% (position ' + position + ')');
-      } else {
-        position = inputValue;
-        console.log('Moving to position ' + position);
-      }
-
-      fetch('/set-position?position=' + position)
-        .then(response => response.text().then(text => {
-          if (!response.ok) {
-            showNotification(text, false);
-          } else {
-            console.log('Move command sent');
-          }
-        }));
-    }
-
-    function moveSteps(direction) {
-      var steps = document.getElementById("stepAmount").value;
-      var position = direction === 'forward' ? steps : -steps;
-      fetch('/move?steps=' + position)
-        .then(response => response.text())
-        .then(data => {
-          console.log('Moved ' + position + ' steps');
-        });
-    }
-
-    function setPosition() {
-      var inputValue = document.getElementById("setPositionInput").value;
-      var mode = document.querySelector('input[name="positionMode"]:checked').value;
       var position;
 
       if (mode === "percent") {
@@ -556,12 +510,6 @@ function showNotification(message, isSuccess) {
           var ledTestCheckbox = document.getElementById('led-test-mode-enabled');
           if (ledTestCheckbox && document.activeElement !== ledTestCheckbox) {
             ledTestCheckbox.checked = data.ledTestMode || false;
-          }
-
-          // Sync compact motion log checkbox across all clients
-          var compactLogCheckbox = document.getElementById('compact-log-enabled');
-          if (compactLogCheckbox && document.activeElement !== compactLogCheckbox) {
-            compactLogCheckbox.checked = data.compactLog || false;
           }
 
           // Update locate mode indicator to sync across all clients
