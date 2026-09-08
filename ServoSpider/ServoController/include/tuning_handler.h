@@ -78,7 +78,7 @@
 //   coalesceSteps, streamRateWindow, streamSettle, compactLog, protocolDebug,
 //   homeSpeed, homeAccel, lookaheadSteps, lookaheadSettle, pidKp,
 //   pidKd, pidMaxSpeed, pidAccel, pidDeadband, pidReengageThreshold,
-//   pidFeedforward, pidFfWindowMs, pidLookaheadMs, pidTickMs,
+//   pidFeedforward, pidFfWindowMs, pidLookaheadMs, pidTickMs, pidLogMs,
 //   tmcRunCurrent, tmcStallEnabled, positionRequest, ddpRxLog, ddpAck
 void handleExtendedSerialCommand(const String& line);
 

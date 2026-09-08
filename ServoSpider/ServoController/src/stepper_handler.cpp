@@ -191,6 +191,9 @@ float stepperPidKdConfig = 0.3f;
 // metric in tools/ddp_continuous_test.py's analyze() and worked around in
 // analyze_ripple.py (drops it), but not explained. See TODO.md.
 int stepperPidTickMsConfig = 5;
+// 20ms - see its declaration comment (stepper_handler.h) for why this is
+// independent of stepperPidTickMsConfig rather than derived from it.
+int stepperPidLogMsConfig = 20;
 // 7000 Hz per the 2026-09-06 speed/current characterization sweeps and
 // live listening on the bench: the measured stall boundary was ~8500 Hz
 // (up)/~9000 Hz (down) at 1200-1400mA and 50,000 steps/s^2 accel, but that

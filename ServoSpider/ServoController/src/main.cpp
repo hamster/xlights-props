@@ -306,16 +306,22 @@ void logCompactMotion(uint16_t ddpVal, int cmdPos, int curPos, int delta, int la
 // in under 11 seconds (confirmed on the bench - a 12s capture came back
 // missing its first ~1.1s, silently truncated). Logging has no feedback
 // into the control law, so decoupling its cadence costs nothing there.
-// max(20, tick) preserves the exact original behavior for every tick
-// value this project has ever actually used (>=20ms) and only caps the
-// rate when tick is faster than that.
+//
+// Independently configurable (stepperPidLogMsConfig), NOT just derived as
+// max(20, tick) - found necessary the same evening: throttling the log to
+// 20ms while validating pidTickMs=5 silently hid the very improvement
+// being measured, since jerk_per_sample is computed from consecutive
+// *logged* rows - a 20ms-throttled log downsamples a real 5ms-resolution
+// improvement back to 20ms-equivalent before any analysis tool ever sees
+// it. Default 20ms preserves original behavior/safe capture windows for
+// normal use; set to match pidTickMs for a short diagnostic capture that
+// needs full control-rate resolution, accepting a shorter safe window in
+// trade (see COMPACT_LOG_ROW_CAPACITY in tools/ddp_continuous_test.py).
 unsigned long lastPidLogMs = 0;
 void logCompactMotionPidThrottled(uint16_t ddpVal, int cmdPos, int curPos, int delta, int lag,
                                     bool tracking, int32_t curSpeedMilliHz, int targetSpeedHz) {
   unsigned long now = millis();
-  unsigned long intervalMs = (unsigned long)stepperPidTickMsConfig;
-  if (intervalMs < 20) intervalMs = 20;
-  if (now - lastPidLogMs < intervalMs) return;
+  if (now - lastPidLogMs < (unsigned long)stepperPidLogMsConfig) return;
   lastPidLogMs = now;
   logCompactMotion(ddpVal, cmdPos, curPos, delta, lag, tracking, curSpeedMilliHz, targetSpeedHz);
 }

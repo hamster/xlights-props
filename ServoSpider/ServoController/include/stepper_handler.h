@@ -280,6 +280,16 @@ extern float stepperPidKdConfig;      // Hz per (step/second) of measured-positi
 // rate rises proportionally, shrinking how much wall-clock time the 96KB
 // ring buffer can hold before wrapping.
 extern int stepperPidTickMsConfig;
+// ms - minimum interval between Compact Motion Log rows written from
+// updatePidMode()'s active-tracking log calls. Independent of
+// stepperPidTickMsConfig on purpose (see logCompactMotionPidThrottled's
+// declaration comment, main.cpp) - tying it to the tick rate silently
+// hides exactly the improvement a faster tick is meant to show, since
+// jerk/ripple analysis works from consecutive logged rows. Default 20ms
+// keeps the original ~37s safe capture window at the default tick rate;
+// lower it (down to matching pidTickMs) for a short diagnostic capture
+// that needs full control-rate resolution.
+extern int stepperPidLogMsConfig;
 extern int stepperPidMaxSpeedConfig;  // Hz - hard clamp on PID output magnitude
 extern int stepperPidAccelConfig;     // Hz/s - ramp rate FastAccelStepper uses when the PID output speed changes; the value the planned acceleration-characterization sweep is meant to inform
 extern int stepperPidDeadbandConfig;  // steps - |error| at or below this snaps to an exact moveTo() and stops driving via PID, instead of continuing to output a tiny, chattery nonzero speed forever
