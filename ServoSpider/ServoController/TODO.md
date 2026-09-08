@@ -77,9 +77,26 @@ individual entries below for what each one was.
   two did). Real duplication, and worth re-examining together given how
   much was learned this project about `isRunning()`/
   `isRampGeneratorActive()` both being unreliable trust signals.
+  **Reclassified out of "cheap and mechanical," 2026-09-07**: on closer
+  look this touches battle-tested, delicately-fixed code in three
+  different call patterns (homing's search-continuation, PID's
+  direction-aware continuous-run retry, Streaming's rate-based retry) -
+  the TODO history below is full of "found the hard way" bugs in exactly
+  this logic. Real risk of a silent regression, not a quick refactor -
+  treat as Wave 3/design-level work, not Wave 2.
 - [ ] `pidReengageThreshold`/`RAMMED_STEP_TOLERANCE` (both 150) were chosen
   by feel (matched to each other, and to the DDP-quantization math) rather
-  than an independent sweep - reasonable, but not verified optimal.
+  than an independent sweep. Partial progress, 2026-09-07: `pidReengageThreshold=150`
+  has since been exercised across ~20+ real bench runs this project (every
+  reversal repeatedly re-entering and leaving the hysteresis band) with
+  zero false re-engagements and zero stuck-in-band cases - real evidence it
+  works, though not a sweep against alternatives, so "is 150 actually
+  optimal" stays open. `RAMMED_STEP_TOLERANCE` is a hardcoded
+  `static const` in `stepper_handler.cpp` (not currently exposed as a
+  tunable at all), so it hasn't been touched this pass - would need new
+  plumbing to sweep, not just an existing knob. Low priority: no false
+  StallGuard/ram-detection trips observed at the current value across the
+  same extensive testing.
 - [x] **Fixed, 2026-09-07.** Added the same throttled `genuinelyRunning`
   retry the hysteresis band already had, for consistency (the practical
   risk was always low here - a dead move just leaves the trolley exactly
@@ -93,11 +110,21 @@ individual entries below for what each one was.
   worked around in both it and `analyze_ripple.py`. Worth understanding if
   tick rate is ever pushed further - possibly a race in the Compact Motion
   Log ring buffer's read vs. write path becoming likelier at a higher
-  write rate.
+  write rate. **Already tried once, 2026-09-07**: a dedicated serial-vs-HTTP
+  capture comparison was attempted specifically to root-cause this, but
+  ran into unrelated serial-connection reliability problems on this board
+  (DTR needed explicit assertion, then a USB-CDC buffering quirk truncated
+  the capture) before it could isolate the actual artifact. Real
+  investigation effort already spent without an answer - not a quick
+  re-attempt.
 - [ ] `$CHECKSTEPS` only catches step loss in the *overshoot* direction
   (switch fires early) - can't distinguish "no drift" from "drift the
   other way" (undershoot, never reaching the switch). Worth a second check
   toward the far end if undershoot-direction loss turns out to matter.
+  **Reclassified, 2026-09-07**: this is a new capability (a second check
+  mode), not cleanup - needs a design decision first (run both checks
+  always, or only when configured; what target for the far-end check).
+  Wave 3-shaped, not Wave 2.
 
 ### Wave 3 - real decisions needed before more code
 
