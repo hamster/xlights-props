@@ -30,19 +30,23 @@ individual entries below for what each one was.
 - [ ] Investigate the ~20-reboot flurry that coincided with the Kd=0.1
   testing window - not confirmed as the same root cause, but the timing is
   suspicious (reset reason UNKNOWN for all but one).
-- [ ] **StallGuard / jam-detection: needs a real decision, not just a UI
-  trim.** `updateRammedIntoStopCheck()` only detects a jam *at* the homing
-  switch - it doesn't cover a jam mid-travel away from it (which is what
-  StallGuard originally caught, 2026-08-30). StallGuard is currently
-  disabled (false-positive-prone at the old defaults) - either re-enable it
-  at a threshold informed by real bench data (`min_sg_result` bottomed at
-  2-4 even in the improved config, so the old defaults would still
-  false-trigger), or decide on a different mid-travel jam mechanism and
-  drop the StallGuard settings entirely. Not urgent for continued bench
-  tuning ("hardware can't hurt itself, it just sounds terrible" - the
-  user, an earlier session), but worth resolving before unattended/
-  production use. (Merges what were four separate, scattered entries below
-  about this same decision.)
+- [x] **StallGuard / jam-detection - decided, 2026-09-08.** Stays as a
+  user-selectable option (`tmcStallEnabledConfig`, Settings -> TMC2209
+  Config -> "Enable Stall Detection Safety Cutoff"), **default off** - no
+  code change needed, that was already both the compiled default
+  (`tmc_handler.cpp`) and the NVS-load fallback (`main.cpp`), and the bench
+  device's own saved value already matched (`tmcStallEnabled=0` via
+  `GET /config`). Left disabled by default because it's still
+  false-positive-prone at real bench-observed `SG_RESULT` values
+  (`min_sg_result` bottomed at 2-4 even in the improved config) and
+  `updateRammedIntoStopCheck()` already covers the jam-at-the-homing-switch
+  case independently. A mid-travel jam away from the switch (what
+  StallGuard originally caught, 2026-08-30) is not covered by anything
+  while StallGuard is off - accepted as a known gap rather than something
+  needing a replacement mechanism right now ("hardware can't hurt itself,
+  it just sounds terrible" - the user, an earlier session). Anyone who
+  wants the cutoff can still enable and tune it per-device via Settings;
+  it's just not the shipped default.
 - [ ] Figure out what actually happened during the Kd=0 sweep's "rammed
   into stop" trip - false positive from residual dead-run position drift
   (most likely, per a direct "no buzz or grinding" observation) vs. a
@@ -318,8 +322,10 @@ individual entries below for what each one was.
   UART enable default-on but still a checkbox; second pass (see the
   hardcoding entry above) removed the checkbox entirely - superseded, not a
   separate outcome. Did **not** remove the StallGuard settings from the
-  panel - Wave 1's StallGuard decision is still open, and this item was
-  explicitly conditional on that decision coming back "remove."
+  panel - this item was explicitly conditional on Wave 1's StallGuard
+  decision coming back "remove," and it didn't: decided 2026-09-08 to keep
+  it as a user-selectable option, default off (see Wave 1). Settings stay
+  in the UI, unchanged.
 - [ ] Be ready to `#define` off the encoder status/count display
   (`id="encoder-count"`) once tracking-mode tuning is done and the encoder
   is no longer needed for bench verification. **Not yet** - tuning is
