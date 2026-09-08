@@ -59,6 +59,8 @@ void handleRoot() {
   Serial.println(ESP.getFreeHeap());
 
   String page = String(htmlPage);
+  Serial.print("  [checkpoint] after initial copy: ");
+  Serial.println(page.length());
 
   // WiFi status information
   if (WiFi.status() == WL_CONNECTED) {
@@ -74,6 +76,8 @@ void handleRoot() {
     page.replace("{{WIFI_NETWORK}}", getAPName());
     page.replace("{{WIFI_IP}}", WiFi.softAPIP().toString());
   }
+  Serial.print("  [checkpoint] after WiFi section: ");
+  Serial.println(page.length());
 
   // Stepper status information
   if (homed) {
@@ -100,6 +104,8 @@ void handleRoot() {
   page.replace("{{AUTO_HOME_STATUS}}", autoHomeOnBootConfig ? "Enabled" : "Disabled");
   page.replace("{{ENCODER_COUNT}}", isEncoderInitialized() ?
     String(getEncoderCount()) + " (" + String(getMissedTransitionCount()) + " missed)" : "N/A");
+  Serial.print("  [checkpoint] after stepper/position section: ");
+  Serial.println(page.length());
 
   // Configuration values
   page.replace("{{HOSTNAME}}", hostname);
@@ -128,6 +134,8 @@ void handleRoot() {
   // Coalesce/Streaming/Lookahead removed entirely 2026-09-07 ("we just have
   // Direct mode and PID") - see TODO.md and StepperTrackMode's declaration
   // comment (stepper_handler.h) for the full history.
+  Serial.print("  [checkpoint] after configuration values section: ");
+  Serial.println(page.length());
 
   // Protocol configuration values
   page.replace("{{STEPPER_CONTROL_CHECKED}}", stepperControlEnabled ? "checked" : "");
@@ -135,6 +143,8 @@ void handleRoot() {
   page.replace("{{PROTOCOL_DEBUG_CHECKED}}", protocolDebugConfig ? "checked" : "");
   page.replace("{{LED_BLANK_TIME}}", String(ledBlankTimeConfig));
   page.replace("{{STEPPER_BLANK_TIME}}", String(stepperBlankTimeConfig));
+  Serial.print("  [checkpoint] after protocol section: ");
+  Serial.println(page.length());
 
   // TMC2209 configuration values. UART driver control, sense resistor,
   // address, and SpreadCycle hysteresis (hstrt/hend) are hardcoded as of
@@ -148,6 +158,8 @@ void handleRoot() {
   for (uint16_t opt : tmcMicrostepOptions) {
     page.replace("{{TMC_USTEP_" + String(opt) + "}}", (opt == tmcMicrostepsConfig) ? "selected" : "");
   }
+  Serial.print("  [checkpoint] after TMC section: ");
+  Serial.println(page.length());
 
   // LED configuration values
   page.replace("{{LED_PIXEL_COUNT}}", String(ledPixelCount));
@@ -161,6 +173,8 @@ void handleRoot() {
   page.replace("{{LED_BRIGHTNESS}}", String(ledBrightness));
   page.replace("{{LED_START_NULL}}", String(ledStartNullPixels));
   page.replace("{{LED_END_NULL}}", String(ledEndNullPixels));
+  Serial.print("  [checkpoint] after LED section: ");
+  Serial.println(page.length());
 
   // Version information
   page.replace("{{VERSION}}", VERSION_STRING);
