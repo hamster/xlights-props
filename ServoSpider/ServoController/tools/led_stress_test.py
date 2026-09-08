@@ -210,6 +210,14 @@ class StatusPoller(threading.Thread):
         self.interval = interval
         self._stop_evt = threading.Event()
         self.preview_samples = []
+        # (position, encoderCount) at each poll - position alone is only
+        # FastAccelStepper's own step-pulse bookkeeping (getCurrentPosition()
+        # per encoder_handler.h's own header comment) and has no way to
+        # notice a commanded step that didn't physically happen; the encoder
+        # is real, independent ground truth. Recorded together so the final
+        # verification can confirm the encoder is actually moving *with*
+        # position, not just that either one alone is changing.
+        self.motion_samples = []
         self.poll_errors = 0
 
     def run(self):
@@ -218,7 +226,11 @@ class StatusPoller(threading.Thread):
                 preview = get_led_preview(self.host).get("ledPreview", "")
                 s = get_status(self.host)
                 self.preview_samples.append(preview)
+                self.motion_samples.append((s.get("position"), s.get("encoderCount"),
+                                             s.get("encoderMissed")))
                 print(f"  [poll] position={s.get('position')}  "
+                      f"encoderCount={s.get('encoderCount')}  "
+                      f"encoderMissed={s.get('encoderMissed')}  "
                       f"ledMaxPixelsReceived={s.get('ledMaxPixelsReceived')}  "
                       f"homed={s.get('homed')}  ledsBlanked={s.get('ledsBlanked')}")
             except Exception as e:
@@ -264,13 +276,22 @@ def main():
               f"less than --pixels={args.pixels} - only the configured "
               f"count will actually render; the rest of each packet's "
               f"pixel data is still sent and parsed, just unused.")
+    if not st.get("encoderInitialized"):
+        print("WARNING: encoder not initialized on this device - motion "
+              "verification will fall back to position (step-pulse "
+              "bookkeeping) alone, which is NOT real ground truth (see "
+              "encoder_handler.h: it can't tell a commanded step from one "
+              "that actually happened physically).")
 
     ensure_homed(args.ddp_host)
 
     boots_before = get_boot_markers(args.ddp_host)
     print(f"Boot markers before run: ...{boots_before[-3:]}")
 
-    pos_before = get_status(args.ddp_host).get("position")
+    st_before = get_status(args.ddp_host)
+    pos_before = st_before.get("position")
+    encoder_before = st_before.get("encoderCount")
+    encoder_missed_before = st_before.get("encoderMissed", 0)
     preview_before = get_led_preview(args.ddp_host).get("ledPreview", "")
 
     pattern_fn = PATTERNS[args.pattern]
@@ -317,6 +338,10 @@ def main():
     preview_after = get_led_preview(args.ddp_host).get("ledPreview", "")
     boots_after = get_boot_markers(args.ddp_host)
     preview_samples = [preview_before] + poller.preview_samples
+    motion_samples = ([(pos_before, encoder_before, encoder_missed_before)]
+                       + poller.motion_samples
+                       + [(st_after.get("position"), st_after.get("encoderCount"),
+                           st_after.get("encoderMissed"))])
 
     print("\n=== Verification ===")
     ok = True
@@ -332,11 +357,95 @@ def main():
     pos_after = st_after.get("position")
     if pos_after != pos_before:
         print(f"[OK]   Stepper position changed ({pos_before} -> {pos_after}) - "
-              f"trolley genuinely moved")
+              f"trolley genuinely COMMANDED to move (this is FastAccelStepper's "
+              f"own step-pulse bookkeeping, per encoder_handler.h - not proof "
+              f"of real physical motion by itself; see the encoder checks below "
+              f"for that)")
     else:
         print(f"[FAIL] Stepper position unchanged ({pos_before}) - trolley did "
               f"not move (not homed? stuck?)")
         ok = False
+
+    # Real, independent ground truth - see encoder_handler.h's header
+    # comment: position alone can't distinguish a commanded step from one
+    # that didn't actually happen physically. Only meaningful if the
+    # encoder was actually initialized (checked and warned about above).
+    encoder_after = st_after.get("encoderCount")
+    encoder_missed_after = st_after.get("encoderMissed", 0)
+    if encoder_before is None or encoder_after is None:
+        print("[SKIP] Encoder not available on this device - motion above "
+              "is only verified via step-pulse bookkeeping, not real "
+              "ground truth")
+    else:
+        if encoder_after != encoder_before:
+            print(f"[OK]   Encoder count changed ({encoder_before} -> "
+                  f"{encoder_after}) - real, physical ground-truth motion "
+                  f"confirmed, not just commanded steps")
+        else:
+            print(f"[FAIL] Encoder count unchanged ({encoder_before}) despite "
+                  f"position changing - stepper may be commanding motion "
+                  f"that isn't actually happening physically (stalled/"
+                  f"disconnected?)")
+            ok = False
+
+        encoder_range = (max(e for _, e, _ in motion_samples if e is not None)
+                          - min(e for _, e, _ in motion_samples if e is not None))
+        if encoder_range >= 50:
+            print(f"[OK]   Encoder count ranged over {encoder_range} counts "
+                  f"across the run - sustained real motion, not just a "
+                  f"couple of stray ticks")
+        else:
+            print(f"[FAIL] Encoder count only ranged over {encoder_range} "
+                  f"counts across the run - suspiciously little real motion "
+                  f"for a {args.duration:.0f}s run with a {args.period:.1f}s "
+                  f"triangle period")
+            ok = False
+
+        # Direction correlation: between consecutive samples, position and
+        # encoderCount should move the same way (both this project's sign
+        # convention, per encoder_handler.h: "increasing count = increasing
+        # stepper position" - confirmed on the bench, not just assumed).
+        # Small/noisy deltas near a reversal or a poll's own timing jitter
+        # are excluded rather than treated as disagreements.
+        agree, disagree = 0, 0
+        for (p0, e0, _), (p1, e1, _) in zip(motion_samples, motion_samples[1:]):
+            if None in (p0, e0, p1, e1):
+                continue
+            dp, de = p1 - p0, e1 - e0
+            if abs(dp) < 20 or abs(de) < 20:
+                continue  # too small to trust the sign of over one poll interval
+            if (dp > 0) == (de > 0):
+                agree += 1
+            else:
+                disagree += 1
+        if agree + disagree == 0:
+            print("[NOTE] Not enough distinct samples to check position/encoder "
+                  "direction agreement (short run or coarse poll interval)")
+        elif disagree == 0:
+            print(f"[OK]   Position and encoder agreed on direction across "
+                  f"all {agree} comparable sample intervals")
+        else:
+            print(f"[FAIL] Position and encoder DISAGREED on direction in "
+                  f"{disagree}/{agree + disagree} sample intervals - possible "
+                  f"sign/wiring/skipped-step issue")
+            ok = False
+
+        missed_delta = (encoder_missed_after or 0) - (encoder_missed_before or 0)
+        if missed_delta <= 0:
+            print(f"[OK]   No new missed quadrature transitions during the run "
+                  f"(encoderMissed unchanged at {encoder_missed_after})")
+        elif encoder_range > 0 and missed_delta / max(1, encoder_range) < 0.01:
+            print(f"[NOTE] {missed_delta} new missed transition(s) during the "
+                  f"run (encoderMissed {encoder_missed_before} -> "
+                  f"{encoder_missed_after}) - small relative to {encoder_range} "
+                  f"real counts, not flagged as a failure "
+                  f"(encoder_handler.h says this should be ~0; worth a look "
+                  f"if it keeps growing across runs)")
+        else:
+            print(f"[FAIL] {missed_delta} new missed transitions during the "
+                  f"run, large relative to {encoder_range} real counts - the "
+                  f"poll rate may not be keeping up (see encoder_handler.h)")
+            ok = False
 
     distinct_previews = len(set(preview_samples + [preview_after]))
     if distinct_previews > 1:

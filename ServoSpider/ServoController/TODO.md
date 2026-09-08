@@ -728,6 +728,25 @@ confirmed the device's own 5-second `ledBlankTimeConfig` blanking fired
 correctly during idle time between runs (`ledsBlanked` flipped true), so
 that safety feature is confirmed working too, not just not-triggered.
 
+**Encoder ground truth added the same day, after being asked directly
+"did you use the encoder to verify movement?"** - the honest answer at
+first was no: verification only checked `position`, which is
+FastAccelStepper's own step-pulse bookkeeping and (per
+`encoder_handler.h`'s own header comment) has no way to notice a commanded
+step that didn't physically happen - exactly the gap the
+[[tuning-requires-encoder-ground-truth]] memory note exists to flag.
+Fixed: the poller now also records `encoderCount`/`encoderMissed` every
+sample, and the verification checks the encoder count actually changed,
+ranged over a real amount (not a couple of stray ticks), agreed in
+direction with `position` across every comparable interval, and that
+`encoderMissed` didn't grow meaningfully. Re-ran both patterns clean: a
+consistent ~10:1 position:encoderCount ratio held throughout (e.g.
+position=10038/encoderCount=1002, position=4531/451, position=748/73),
+and direction agreed across all 13 (random run) and all 9 (chase run)
+comparable poll intervals, through every reversal, with zero new missed
+transitions in either run - real, physical, ground-truth-confirmed motion,
+not just commanded steps.
+
 Documented in `tools/README.md`. At 150 pixels the payload (2 + 150×3 =
 452 bytes) stays comfortably under `DDP_MAX_DATA_SIZE` (1472) as a single
 non-fragmented packet - pushing past ~480 pixels would need this script to

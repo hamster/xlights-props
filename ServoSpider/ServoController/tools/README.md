@@ -366,6 +366,21 @@ own boot markers are unchanged before/after (the same authoritative
 no-reboot check used to verify the Debug tab's crash fix - see CLAUDE.md/
 TODO.md on why comparing `uptimeSecs` instead would be misleading).
 
+**Encoder ground truth, added 2026-09-08** - `position` alone is only
+FastAccelStepper's own step-pulse bookkeeping (per
+`encoder_handler.h`'s own header comment: it has no way to notice a
+commanded step that didn't physically happen), so an earlier version of
+this script that checked only `position` wasn't actually proving the
+trolley moved, just that the firmware issued that many step pulses. Now
+also checks, whenever `encoderInitialized` is true: the encoder count
+changed at all; it ranged over a real amount (not a couple of stray
+ticks); it agreed in direction with `position` across every comparable
+poll interval (both should move the same way - confirmed bench convention,
+not just assumed, per `encoder_handler.h`); and `encoderMissed` didn't
+grow meaningfully relative to the real motion seen. A device with no
+encoder wired/initialized falls back to a `[SKIP]` line instead of
+silently passing on step-count bookkeeping alone.
+
 **Why status/preview polling runs on its own thread (`StatusPoller`),
 not inline in the send loop**: it wasn't, in an earlier version of this
 script - and one slow HTTP round-trip (an 8s `urllib` timeout, hit for
