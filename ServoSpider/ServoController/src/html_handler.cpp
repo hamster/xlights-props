@@ -580,20 +580,28 @@ void handleConnect() {
 
   Serial.println("Manual connection attempt...");
 
-  // preserveAp=true (2026-09-08 fix) - this is the "Connect Now" button, hit
-  // from a page that's very likely being loaded over the AP itself (that's
-  // the whole reason to click it - the credentials just saved are untested
-  // yet). The plain connectToWifi() this used to call forces WIFI_STA
-  // immediately regardless of outcome, dropping the AP before the attempt
-  // even starts - if the just-saved credentials turn out wrong for any
-  // reason, that stranded the exact person trying to fix them, contradicting
-  // this handler's own "Staying in AP mode" message on failure (untrue by
-  // that point - see connectToWifi()'s declaration comment for the full
-  // story, found via a real bench incident). connectToWifi(true) already
-  // handles the AP teardown-on-success internally, so the explicit
-  // softAPdisconnect()/WiFi.mode() calls that used to be here are redundant
-  // now.
-  if (connectToWifi(true)) {
+  // Deliberately NOT preserveAp here (2026-09-08, second pass) - unlike
+  // checkWifiConnection()'s unattended AP-fallback retry (which backs off
+  // entirely while someone's connected to the AP, since nothing asked it
+  // to run right now), this is a person explicitly clicking "Connect Now" -
+  // disrupting their own AP connection is the expected, intended outcome
+  // of that click, not something to protect them from. Beyond intent,
+  // there's a real hardware reason too: the AP and a new STA connection
+  // share one radio, and the chip generally won't shift the AP's channel
+  // to match the target network while stations are actively associated to
+  // it (that would silently disconnect them) - so preserveAp's AP_STA
+  // approach can leave the attempt unable to actually complete while a
+  // client (e.g. the very phone that just clicked this button) is
+  // connected. Plain connectToWifi() forces WIFI_STA immediately,
+  // dropping the AP (and any connected clients) up front, matching what
+  // "connect now" should mean.
+  //
+  // Still doesn't strand anyone on failure, which was the real bug fixed
+  // 2026-09-08 (first pass): if the just-saved credentials turn out wrong,
+  // explicitly restart the AP afterward rather than leaving the device
+  // sitting in a dead, disconnected STA state with nothing to fall back to.
+  bool wasAccessPoint = (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA);
+  if (connectToWifi()) {
     Serial.println("Successfully connected!");
     // Matches setup()'s own post-connect mDNS start - this path (and
     // checkWifiConnection()'s AP-fallback retry) didn't have it before
@@ -608,7 +616,11 @@ void handleConnect() {
       Serial.println("Error starting mDNS");
     }
   } else {
-    Serial.println("Connection failed. Staying in AP mode.");
+    Serial.println("Connection failed.");
+    if (wasAccessPoint) {
+      Serial.println("Restarting AP...");
+      startAccessPoint();
+    }
   }
 }
 
