@@ -6,6 +6,206 @@ Turn this into a standalone stepper-mover **+** pixel controller: one ESP32-S3 d
 
 Note: checked `git branch -a` / `git stash list` / `git log --all` — there is no leftover branch, stash, or commit anywhere in this repo with prior dual-core work. If there was earlier progress on splitting stepper/LED work across cores, it never made it into git, so treat this as a fresh design rather than something to dig up.
 
+## Open TODOs - curated, reviewed 2026-09-07
+
+This is the live tracking list. Everything below this section is the
+dated session history that produced these items - kept for the full
+backstory/rationale, but no longer the place to look for "what's still
+open." 29 stale/resolved/duplicate items were closed out (marked `[x]`
+in place, historical record preserved) during this review; see the
+individual entries below for what each one was.
+
+### Wave 1 - safety-relevant, still genuinely open
+
+- [x] **Stale-tick watchdog in `updatePidMode()`** - implemented and
+  bench-verified 2026-09-07 (see the "Needed: a stale-tick watchdog"
+  section below for the original design). Reproduced the exact hazard
+  directly: a genuinely large (98KB, 1.7s) `/compact-log` fetch during
+  active continuous-run motion now freezes position exactly across that
+  window instead of coasting, then settles cleanly afterward.
+- [ ] **Root-cause the Kd=0.1 permanent freeze/corruption bug** - a real,
+  serious, reproduced-once issue (2026-09-07 early), still not understood.
+  Treat Kd below ~0.15 as an unverified danger zone with feedforward
+  enabled until this is explained.
+- [ ] Investigate the ~20-reboot flurry that coincided with the Kd=0.1
+  testing window - not confirmed as the same root cause, but the timing is
+  suspicious (reset reason UNKNOWN for all but one).
+- [ ] **StallGuard / jam-detection: needs a real decision, not just a UI
+  trim.** `updateRammedIntoStopCheck()` only detects a jam *at* the homing
+  switch - it doesn't cover a jam mid-travel away from it (which is what
+  StallGuard originally caught, 2026-08-30). StallGuard is currently
+  disabled (false-positive-prone at the old defaults) - either re-enable it
+  at a threshold informed by real bench data (`min_sg_result` bottomed at
+  2-4 even in the improved config, so the old defaults would still
+  false-trigger), or decide on a different mid-travel jam mechanism and
+  drop the StallGuard settings entirely. Not urgent for continued bench
+  tuning ("hardware can't hurt itself, it just sounds terrible" - the
+  user, an earlier session), but worth resolving before unattended/
+  production use. (Merges what were four separate, scattered entries below
+  about this same decision.)
+- [ ] Figure out what actually happened during the Kd=0 sweep's "rammed
+  into stop" trip - false positive from residual dead-run position drift
+  (most likely, per a direct "no buzz or grinding" observation) vs. a
+  genuine, if quiet, overshoot. Ties into the StallGuard item above -
+  `updateRammedIntoStopCheck()`'s reliance on step-count drift as a jam
+  proxy may need revisiting the same way `isRunning()`/
+  `isRampGeneratorActive()` did elsewhere this session.
+- [ ] `pidFilteredRate`'s 0.85/0.15 derivative-filter EMA weight is
+  per-SAMPLE, not per unit time - at the current tick=5ms default (4x the
+  rate it was tuned at) its effective time constant is roughly 4x shorter,
+  weakening the filter's intended smoothing. Not yet re-tuned or
+  re-validated against the new tick rate.
+
+### Wave 2 - cheap, mechanical, no design risk
+
+- [ ] Audit other hot-path code for the chained-String-concatenation
+  pattern that caused a real crash in `logCompactMotion()`/
+  `appendDdpRxLog()` (2026-09-07 early) - found reactively, not via a
+  systematic review, so other instances may exist.
+- [ ] **Consolidate the three near-identical throttled-retry
+  implementations** - homing's `retryMoveIfDied()` (`stepper_handler.cpp`,
+  `static`/file-local), PID's hand-rolled equivalent
+  (`lastPidRunRetryMs`/`lastPidHystRetryMs` in `main.cpp`), and Streaming's
+  own (less-hardened - never got the `genuinelyRunning`-based fix the other
+  two did). Real duplication, and worth re-examining together given how
+  much was learned this project about `isRunning()`/
+  `isRampGeneratorActive()` both being unreliable trust signals.
+- [ ] `pidReengageThreshold`/`RAMMED_STEP_TOLERANCE` (both 150) were chosen
+  by feel (matched to each other, and to the DDP-quantization math) rather
+  than an independent sweep - reasonable, but not verified optimal.
+- [ ] The deadband-settled branch's own first `moveTo()` (the initial snap
+  into `pidSettled`) doesn't have the same dead-move retry the hysteresis
+  band has - lower risk (only fires once error is already inside the tight
+  deadband) but not verified clean the same rigorous way.
+- [ ] The malformed-leading-log-row artifact (seen at `pidTickMs` below
+  20ms, three different corrupted shapes, never at the original 20ms
+  across ~25+ runs) is real and tick-rate-correlated but not root-caused.
+  Confirmed harmless to every metric `ddp_continuous_test.py` computes,
+  worked around in both it and `analyze_ripple.py`. Worth understanding if
+  tick rate is ever pushed further - possibly a race in the Compact Motion
+  Log ring buffer's read vs. write path becoming likelier at a higher
+  write rate.
+- [ ] `$CHECKSTEPS` only catches step loss in the *overshoot* direction
+  (switch fires early) - can't distinguish "no drift" from "drift the
+  other way" (undershoot, never reaching the switch). Worth a second check
+  toward the far end if undershoot-direction loss turns out to matter.
+
+### Wave 3 - real decisions needed before more code
+
+- [ ] **Decide whether to persist `trackMode=4` (PID) to NVS**, making it
+  the real production default instead of a live-only override on the
+  bench. Flash fallback currently stays Direct. Given the user's own
+  read tonight ("current tuning is pretty OK") this may be ready to
+  decide now rather than defer again.
+- [ ] **Full travel measurement symmetry - open correctness question, not
+  yet investigated.** The homing bounce (rope paid all the way out, wound
+  back on from the other side until the switch trips a second time) may
+  not measure `bottomPosition` symmetrically if the return leg's speed
+  profile differs from the outbound leg's (already-cruising vs.
+  accelerating from rest, or gravity assisting one direction and resisting
+  the other). Needs a real look at `updateHoming()`'s speed/accel setup
+  for each leg.
+- [ ] `pidFfWindowMs` (200ms) was swept only at p8. p6/p12 were validated
+  at that value and look right (jerk scales the way the wave does), but
+  the *optimum* window may differ by period - a longer window may suit
+  slower shows better.
+- [ ] `control16Bit` is persisted to NVS on the bench device (real
+  accuracy win) - standing operational caveat, not a task: the DDP source
+  must match, or position will be wrong after a reboot. Revert with
+  `POST /config` body `control16Bit=0` if the source isn't switching too.
+- [ ] Whether `jumpStart` matters at `homeAccel=20,000` (homing's own,
+  much lower accel) hasn't been re-verified - the original A/B test was
+  only done at `normalAccel=200,000`.
+- [ ] The starting-torque stall fix (`jumpStartConfig`) could in principle
+  also help any *other* cold-start move, not just homing - e.g. the very
+  first DDP-commanded move after a period of rest. Should already help
+  there too (it's a global FastAccelStepper setting) but hasn't been
+  specifically tested for that case.
+
+### Wave 4 - web UI modernization (its own epic; merges ~15 scattered items)
+
+- [ ] Remove the **Compact Motion Log** checkbox from Settings
+  (`web/index.html`, `id="compactLog"`) - bench/tuning-only, shouldn't be
+  user-facing.
+- [ ] Remove **Jump Start**, add a real **PID tuning parameters** section
+  (currently RAM-only via `$SET`/`GET /tunable`, no Settings UI or
+  Preferences persistence at all - the list has grown to 11 tunables
+  across two sessions; see `include/tuning_handler.h`'s doc comment for
+  the current, authoritative list - `pidKi` was removed 2026-09-07, don't
+  add it back), and remove the old **Small-Move Tracking** section
+  (superseded by PID mode).
+- [ ] Remove the redundant **Stepper Control** section from Settings - it
+  duplicates the Status page's own "Manual Stepper Control" collapsible.
+- [ ] Fold the **TMC2209 driver settings** panel into Stepper Configuration
+  under a single "TMC2209 Config" collapsible (no nested "Advanced" level
+  inside it), enable UART driver control by default (currently opt-in),
+  and remove the StallGuard settings from it if Wave 1's StallGuard
+  decision comes back "remove."
+- [ ] Be ready to `#define` off the encoder status/count display
+  (`id="encoder-count"`) once tracking-mode tuning is done and the encoder
+  is no longer needed for bench verification. **Not yet** - tuning is
+  still actively using the encoder as ground truth (see the memory note:
+  tuning requires it as a second source of truth). Revisit only once PID
+  tuning is genuinely finished, and discuss with the user first (removing
+  vs. gating is still an open choice).
+- [ ] Remove the **Advanced Settings** section from Settings (exact
+  contents not yet located precisely).
+- [ ] Remove the **Serial Debug** checkbox from channel config and the
+  redundant **Stepper Control** duplicate mention - both fold into a new
+  **Live Log / Debug tab**: shows the Compact Motion Log and/or the
+  in-RAM diagnostic logs live in the browser instead of requiring a
+  serial connection. (Two earlier, half-specified proposals for this -
+  a "Live Log" tab and a separate "Debug" tab - were really the same
+  feature; reconcile into one before building.) Needs a transport decision
+  (polling an endpoint, matching the `/status-data` pattern, is the
+  simplest fit) and a buffering design (how much history, RAM is limited
+  at 327KB total).
+- [ ] **WiFi settings**: add an explicit mode selector (Client only / AP
+  fallback / AP only) instead of today's implicit behavior.
+- [ ] **Stepper Configuration**: remove the help-text paragraph above
+  Homing Acceleration.
+- [ ] **Settings tab**: fold Channel Configuration and LED Configuration
+  into one panel.
+- [ ] Surface which tracking profile (normal vs. small-move) was used
+  per-move somewhere in the UI - currently only visible via serial with
+  Debug enabled (`[tracking]`/`[normal]`). Natural fit for the planned
+  Debug tab above.
+- [ ] Changing Microsteps per Full Step requires a re-home afterward (the
+  UI warns on save, but it's easy to miss) - the previously-tuned Stepper
+  Speed (Hz) will feel like a different physical speed since distance per
+  step changed.
+- [ ] Web UI: consider a hint/warning in the LED settings section once
+  real practical WiFi pixel-count limits are established (pixel count
+  input already allows up to `MAX_LEDS`=1000, no code change needed, just
+  a UI hint).
+- [ ] Consider documenting `stepperControlEnabled = false` (pixel-only
+  prop) as a first-class supported use case - it already works today
+  (channels 1-2 stay reserved/unused, LEDs still start at channel 3), just
+  isn't called out anywhere.
+
+### Wave 5 - bigger, deliberately-deferred design work
+
+- [ ] **Core 0 for PID** - explicitly declined for the 2026-09-07 tick-rate
+  session (see that section below for the full reasoning and the concrete
+  evidence for it: `pidTickMs=2` caused real DDP packet rejection, the
+  first all session). Scope as real design work if ever picked up -
+  resolve FastAccelStepper's cross-core call safety first, then design
+  synchronization for `positionRequest` and PID's own internal state.
+- [ ] **Dual-core LED offload** - the rest of the design (Push-flag-aware
+  frame assembly, the LED semaphore/task, double-buffering if tearing
+  turns out to matter) is still just design, not code. See the dedicated
+  design section below for the full plan.
+- [ ] Confirm whether FPP actually sets the Push flag on the final
+  fragment of a multi-packet DDP frame (believed likely - standard
+  practice - but not confirmed against real captured traffic).
+  `DDPDebugger`'s Receiver tab (this repo) has a live flags-seen counter
+  built for exactly this - point a duplicate FPP output at it during a
+  real show.
+- [ ] Frame assembly logic for multi-packet DDP frames - not yet
+  implemented, pending the Push-flag confirmation above.
+
+
+
 ## PID tick rate found to be the real ripple lever - locked in at 5ms; a lookahead buffer tried and not adopted; Core 0 for PID explicitly declined for now (2026-09-07, late)
 
 Continuing the "smooth out the actual speed" investigation after Kp=3 was locked in: the ~120-150ms-period speed ripple survived every filtering-based lever tried (Kd, Kp, pidAccel, pidFfWindowMs) because none of them touched its actual cause. Two new ideas were tried, at the user's suggestion.
