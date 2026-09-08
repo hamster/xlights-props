@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include <esp_task_wdt.h>
+#include <ESPmDNS.h>
 #include "wifi_handler.h"
 #include "led_handler.h"
 #include "partition_utils.h"
@@ -269,6 +270,17 @@ void checkWifiConnection() {
     Serial.println("AP fallback: retrying client connection...");
     if (connectToWifi(true)) {
       disconnectCount = 0;  // fresh start now that we're genuinely reconnected
+      // Matches setup()'s own post-connect mDNS start - didn't have this
+      // until 2026-09-08, so hostname.local never worked after recovering
+      // via this path, only after a fresh boot.
+      if (MDNS.begin(hostname.c_str())) {
+        Serial.print("mDNS responder started: ");
+        Serial.print(hostname);
+        Serial.println(".local");
+        MDNS.addService("http", "tcp", 80);
+      } else {
+        Serial.println("Error starting mDNS");
+      }
     }
     return;
   }

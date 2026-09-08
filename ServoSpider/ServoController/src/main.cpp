@@ -1402,10 +1402,19 @@ void handleSerialCommands() {
     case 'w':
       Serial.println("Attempting to reconnect to WiFi...");
       if (ssid.length() > 0) {
-        if (connectToWifi()) {
-          Serial.println("Successfully connected! Disabling AP mode...");
-          WiFi.softAPdisconnect(true);
-          WiFi.mode(WIFI_STA);
+        // preserveAp=true (2026-09-08 fix) - the plain connectToWifi() this
+        // used to call forces WIFI_STA immediately regardless of outcome,
+        // dropping any active AP before the attempt even starts. If this
+        // command is being typed at all, the device is presumably
+        // unreachable over the network already - stranding the one thing
+        // that might still be reachable (an active AP) on a failed attempt
+        // defeats the whole point of trying from here. connectToWifi(true)
+        // already handles the AP teardown-on-success internally, so the
+        // explicit softAPdisconnect()/WiFi.mode() calls that used to be
+        // here are redundant now. See connectToWifi()'s declaration comment
+        // for the full story (found via a real bench incident).
+        if (connectToWifi(true)) {
+          Serial.println("Successfully connected!");
 
           // Start mDNS
           if (MDNS.begin(hostname.c_str())) {

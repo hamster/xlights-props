@@ -16,6 +16,7 @@
 #include <WiFi.h>
 #include <Preferences.h>
 #include <esp_task_wdt.h>
+#include <ESPmDNS.h>
 
 // Web server
 WebServer server(80);
@@ -497,10 +498,33 @@ void handleConnect() {
 
   Serial.println("Manual connection attempt...");
 
-  if (connectToWifi()) {
-    Serial.println("Successfully connected! Disabling AP mode...");
-    WiFi.softAPdisconnect(true);
-    WiFi.mode(WIFI_STA);
+  // preserveAp=true (2026-09-08 fix) - this is the "Connect Now" button, hit
+  // from a page that's very likely being loaded over the AP itself (that's
+  // the whole reason to click it - the credentials just saved are untested
+  // yet). The plain connectToWifi() this used to call forces WIFI_STA
+  // immediately regardless of outcome, dropping the AP before the attempt
+  // even starts - if the just-saved credentials turn out wrong for any
+  // reason, that stranded the exact person trying to fix them, contradicting
+  // this handler's own "Staying in AP mode" message on failure (untrue by
+  // that point - see connectToWifi()'s declaration comment for the full
+  // story, found via a real bench incident). connectToWifi(true) already
+  // handles the AP teardown-on-success internally, so the explicit
+  // softAPdisconnect()/WiFi.mode() calls that used to be here are redundant
+  // now.
+  if (connectToWifi(true)) {
+    Serial.println("Successfully connected!");
+    // Matches setup()'s own post-connect mDNS start - this path (and
+    // checkWifiConnection()'s AP-fallback retry) didn't have it before
+    // 2026-09-08, so hostname.local never worked after recovering via
+    // either of them, only after a fresh boot.
+    if (MDNS.begin(hostname.c_str())) {
+      Serial.print("mDNS responder started: ");
+      Serial.print(hostname);
+      Serial.println(".local");
+      MDNS.addService("http", "tcp", 80);
+    } else {
+      Serial.println("Error starting mDNS");
+    }
   } else {
     Serial.println("Connection failed. Staying in AP mode.");
   }
