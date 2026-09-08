@@ -52,6 +52,18 @@ static const ConfigField CONFIG_FIELDS[] = {
     {"stepTrackAccel", CF_INT, false},
     {"stepTrackMaxLag", CF_INT, false},
     {"stepTrackMode", CF_INT, false},
+    {"pidKp", CF_FLOAT, false},
+    {"pidKd", CF_FLOAT, false},
+    {"pidDFilterWt", CF_FLOAT, false},
+    {"pidTickMs", CF_INT, false},
+    {"pidLogMs", CF_INT, false},
+    {"pidMaxSpeed", CF_INT, false},
+    {"pidAccel", CF_INT, false},
+    {"pidDeadband", CF_INT, false},
+    {"pidReengageTh", CF_INT, false},
+    {"pidFeedforward", CF_BOOL, false},
+    {"pidFfWindowMs", CF_INT, false},
+    {"pidLookaheadMs", CF_INT, false},
 
     {"protocol", CF_INT, false},
     {"stepperControl", CF_BOOL, false},
@@ -104,6 +116,18 @@ static String getFieldValue(const char* key) {
   if (!strcmp(key, "stepTrackAccel")) return String(stepperTrackAccelConfig);
   if (!strcmp(key, "stepTrackMaxLag")) return String(stepperTrackMaxLagConfig);
   if (!strcmp(key, "stepTrackMode")) return String(stepperTrackModeConfig);
+  if (!strcmp(key, "pidKp")) return String(stepperPidKpConfig, 4);
+  if (!strcmp(key, "pidKd")) return String(stepperPidKdConfig, 4);
+  if (!strcmp(key, "pidDFilterWt")) return String(stepperPidDFilterWeightConfig, 4);
+  if (!strcmp(key, "pidTickMs")) return String(stepperPidTickMsConfig);
+  if (!strcmp(key, "pidLogMs")) return String(stepperPidLogMsConfig);
+  if (!strcmp(key, "pidMaxSpeed")) return String(stepperPidMaxSpeedConfig);
+  if (!strcmp(key, "pidAccel")) return String(stepperPidAccelConfig);
+  if (!strcmp(key, "pidDeadband")) return String(stepperPidDeadbandConfig);
+  if (!strcmp(key, "pidReengageTh")) return String(stepperPidReengageThresholdConfig);
+  if (!strcmp(key, "pidFeedforward")) return stepperPidFeedforwardConfig ? "1" : "0";
+  if (!strcmp(key, "pidFfWindowMs")) return String(stepperPidFfWindowMsConfig);
+  if (!strcmp(key, "pidLookaheadMs")) return String(stepperPidLookaheadMsConfig);
 
   if (!strcmp(key, "protocol")) return String((int)protocolConfig);
   if (!strcmp(key, "stepperControl")) return stepperControlEnabled ? "1" : "0";
@@ -162,6 +186,18 @@ static bool setFieldValue(const char* key, const String& value, bool& isStepperF
   if (!strcmp(key, "stepTrackAccel")) { stepperTrackAccelConfig = i; isStepperField = true; return true; }
   if (!strcmp(key, "stepTrackMaxLag")) { stepperTrackMaxLagConfig = i; isStepperField = true; return true; }
   if (!strcmp(key, "stepTrackMode")) { stepperTrackModeConfig = i; isStepperField = true; return true; }
+  if (!strcmp(key, "pidKp")) { stepperPidKpConfig = f; isStepperField = true; return true; }
+  if (!strcmp(key, "pidKd")) { stepperPidKdConfig = f; isStepperField = true; return true; }
+  if (!strcmp(key, "pidDFilterWt")) { stepperPidDFilterWeightConfig = f; isStepperField = true; return true; }
+  if (!strcmp(key, "pidTickMs")) { stepperPidTickMsConfig = i; isStepperField = true; return true; }
+  if (!strcmp(key, "pidLogMs")) { stepperPidLogMsConfig = i; isStepperField = true; return true; }
+  if (!strcmp(key, "pidMaxSpeed")) { stepperPidMaxSpeedConfig = i; isStepperField = true; return true; }
+  if (!strcmp(key, "pidAccel")) { stepperPidAccelConfig = i; isStepperField = true; return true; }
+  if (!strcmp(key, "pidDeadband")) { stepperPidDeadbandConfig = i; isStepperField = true; return true; }
+  if (!strcmp(key, "pidReengageTh")) { stepperPidReengageThresholdConfig = i; isStepperField = true; return true; }
+  if (!strcmp(key, "pidFeedforward")) { stepperPidFeedforwardConfig = b; isStepperField = true; return true; }
+  if (!strcmp(key, "pidFfWindowMs")) { stepperPidFfWindowMsConfig = i; isStepperField = true; return true; }
+  if (!strcmp(key, "pidLookaheadMs")) { stepperPidLookaheadMsConfig = i; isStepperField = true; return true; }
 
   if (!strcmp(key, "protocol")) { protocolConfig = (protocolType)i; preferences.putInt("protocol", (int)protocolConfig); return true; }
   if (!strcmp(key, "stepperControl")) { stepperControlEnabled = b; preferences.putBool("stepperControl", stepperControlEnabled); return true; }

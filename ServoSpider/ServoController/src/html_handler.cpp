@@ -125,6 +125,11 @@ void handleRoot() {
   page.replace("{{AUTO_HOME_STATUS}}", autoHomeOnBootConfig ? "Enabled" : "Disabled");
   page.replace("{{ENCODER_COUNT}}", isEncoderInitialized() ?
     String(getEncoderCount()) + " (" + String(getMissedTransitionCount()) + " missed)" : "N/A");
+#if SHOW_ENCODER_STATUS
+  page.replace("{{ENCODER_ROW_DISPLAY}}", "");
+#else
+  page.replace("{{ENCODER_ROW_DISPLAY}}", "display: none;");
+#endif
 
   // Configuration values
   page.replace("{{HOSTNAME}}", hostname);
@@ -153,6 +158,21 @@ void handleRoot() {
   // Coalesce/Streaming/Lookahead removed entirely 2026-09-07 ("we just have
   // Direct mode and PID") - see TODO.md and StepperTrackMode's declaration
   // comment (stepper_handler.h) for the full history.
+
+  // PID tuning parameters (2026-09-08) - see stepper_handler.h's own
+  // declaration comments for each one's design/tuning history.
+  page.replace("{{PID_KP}}", String(stepperPidKpConfig, 4));
+  page.replace("{{PID_KD}}", String(stepperPidKdConfig, 4));
+  page.replace("{{PID_D_FILTER_WEIGHT}}", String(stepperPidDFilterWeightConfig, 4));
+  page.replace("{{PID_TICK_MS}}", String(stepperPidTickMsConfig));
+  page.replace("{{PID_LOG_MS}}", String(stepperPidLogMsConfig));
+  page.replace("{{PID_MAX_SPEED}}", String(stepperPidMaxSpeedConfig));
+  page.replace("{{PID_ACCEL}}", String(stepperPidAccelConfig));
+  page.replace("{{PID_DEADBAND}}", String(stepperPidDeadbandConfig));
+  page.replace("{{PID_REENGAGE_THRESHOLD}}", String(stepperPidReengageThresholdConfig));
+  page.replace("{{PID_FEEDFORWARD_CHECKED}}", stepperPidFeedforwardConfig ? "checked" : "");
+  page.replace("{{PID_FF_WINDOW_MS}}", String(stepperPidFfWindowMsConfig));
+  page.replace("{{PID_LOOKAHEAD_MS}}", String(stepperPidLookaheadMsConfig));
 
   // Protocol configuration values
   page.replace("{{STEPPER_CONTROL_CHECKED}}", stepperControlEnabled ? "checked" : "");
@@ -376,6 +396,68 @@ void handleSaveStepper() {
     }
   } else {
     server.send(400, "application/json", "{\"success\":false,\"message\":\"Error: Missing stepper parameters\"}");
+  }
+}
+
+// PID tuning parameters (2026-09-08) - previously RAM-only via $SET/GET
+// /tunable with no Settings UI or NVS persistence at all. Config variables
+// are live immediately (updatePidMode() reads them fresh every tick, same
+// as every other stepper setting); the actual flash write is deferred to
+// persistStepperSettingsIfPending() for the same reason handleSaveStepper()
+// defers its own writes - see stepperSettingsPendingSave's declaration
+// comment. Kp/Kd/DFilterWeight are floats (toFloat(), not toInt()) - the
+// same special-casing $SET/$GET already give them in tuning_handler.cpp.
+void handleSavePid() {
+  if (server.hasArg("pidKp") && server.hasArg("pidKd")) {
+    stepperPidKpConfig = server.arg("pidKp").toFloat();
+    stepperPidKdConfig = server.arg("pidKd").toFloat();
+    if (server.hasArg("pidDFilterWeight")) {
+      stepperPidDFilterWeightConfig = server.arg("pidDFilterWeight").toFloat();
+    }
+    if (server.hasArg("pidTickMs")) {
+      stepperPidTickMsConfig = server.arg("pidTickMs").toInt();
+    }
+    if (server.hasArg("pidLogMs")) {
+      stepperPidLogMsConfig = server.arg("pidLogMs").toInt();
+    }
+    if (server.hasArg("pidMaxSpeed")) {
+      stepperPidMaxSpeedConfig = server.arg("pidMaxSpeed").toInt();
+    }
+    if (server.hasArg("pidAccel")) {
+      stepperPidAccelConfig = server.arg("pidAccel").toInt();
+    }
+    if (server.hasArg("pidDeadband")) {
+      stepperPidDeadbandConfig = server.arg("pidDeadband").toInt();
+    }
+    if (server.hasArg("pidReengageThreshold")) {
+      stepperPidReengageThresholdConfig = server.arg("pidReengageThreshold").toInt();
+    }
+    stepperPidFeedforwardConfig = server.hasArg("pidFeedforward");
+    if (server.hasArg("pidFfWindowMs")) {
+      stepperPidFfWindowMsConfig = server.arg("pidFfWindowMs").toInt();
+    }
+    if (server.hasArg("pidLookaheadMs")) {
+      stepperPidLookaheadMsConfig = server.arg("pidLookaheadMs").toInt();
+    }
+
+    stepperSettingsPendingSave = true;
+
+    Serial.println("PID tuning parameters updated (will save to flash once the motor is idle)");
+    Serial.print("Kp: ");
+    Serial.print(stepperPidKpConfig, 4);
+    Serial.print(", Kd: ");
+    Serial.print(stepperPidKdConfig, 4);
+    Serial.print(", tick: ");
+    Serial.print(stepperPidTickMsConfig);
+    Serial.println(" ms");
+
+    if (stepper->isRunning()) {
+      server.send(200, "application/json", "{\"success\":true,\"message\":\"PID settings applied! Will finish saving to flash once the motor is idle.\"}");
+    } else {
+      server.send(200, "application/json", "{\"success\":true,\"message\":\"PID settings saved and applied immediately!\"}");
+    }
+  } else {
+    server.send(400, "application/json", "{\"success\":false,\"message\":\"Error: Missing PID parameters\"}");
   }
 }
 
@@ -1028,6 +1110,7 @@ void startWebServer() {
   server.on("/save-wifi", HTTP_POST, handleSaveWifi);     // WiFi settings
   server.on("/save-ap", HTTP_POST, handleSaveAP);         // AP settings
   server.on("/save-stepper", HTTP_POST, handleSaveStepper); // Stepper settings
+  server.on("/save-pid", HTTP_POST, handleSavePid);           // PID tuning parameters
   server.on("/save-protocol", HTTP_POST, handleSaveProtocol);  // Protocol settings
   server.on("/save-led", HTTP_POST, handleSaveLed);            // LED settings
   server.on("/save-tmc", HTTP_POST, handleSaveTmc);             // TMC2209 driver settings

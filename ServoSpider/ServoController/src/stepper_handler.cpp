@@ -260,6 +260,21 @@ void persistStepperSettingsIfPending() {
   preferences.putInt("stepTrackMaxLag", stepperTrackMaxLagConfig);
   preferences.putInt("stepTrackMode", stepperTrackModeConfig);
 
+  // PID tuning parameters (2026-09-08) - same deferred-write reasoning as
+  // every other stepper-domain setting above.
+  preferences.putFloat("pidKp", stepperPidKpConfig);
+  preferences.putFloat("pidKd", stepperPidKdConfig);
+  preferences.putFloat("pidDFilterWt", stepperPidDFilterWeightConfig);
+  preferences.putInt("pidTickMs", stepperPidTickMsConfig);
+  preferences.putInt("pidLogMs", stepperPidLogMsConfig);
+  preferences.putInt("pidMaxSpeed", stepperPidMaxSpeedConfig);
+  preferences.putInt("pidAccel", stepperPidAccelConfig);
+  preferences.putInt("pidDeadband", stepperPidDeadbandConfig);
+  preferences.putInt("pidReengageTh", stepperPidReengageThresholdConfig);
+  preferences.putBool("pidFeedforward", stepperPidFeedforwardConfig);
+  preferences.putInt("pidFfWindowMs", stepperPidFfWindowMsConfig);
+  preferences.putInt("pidLookaheadMs", stepperPidLookaheadMsConfig);
+
   stepperSettingsPendingSave = false;
   Serial.println("Stepper settings persisted to flash (motor now idle)");
 }

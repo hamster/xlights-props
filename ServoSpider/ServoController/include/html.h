@@ -567,6 +567,32 @@ function showNotification(message, isSuccess) {
       toggleStepperOptions();
     });
 
+    // Warn immediately when Microsteps per Full Step is actually changed
+    // (2026-09-08) - it changes physical distance per step, requiring a
+    // re-home and making the previously-tuned Stepper Speed feel different.
+    // The save response already said this in a toast easy to miss after the
+    // fact; this catches it at the moment of the change instead, before the
+    // save is even submitted, and offers to revert if it was a misclick.
+    document.addEventListener('DOMContentLoaded', function() {
+      var microstepsSelect = document.getElementById('tmcMicrosteps');
+      if (!microstepsSelect) return;
+      var originalValue = microstepsSelect.value;
+      microstepsSelect.addEventListener('change', function() {
+        if (microstepsSelect.value === originalValue) return;
+        var ok = confirm(
+          'Changing Microsteps per Full Step changes the physical distance per step.\n\n' +
+          'You will need to re-home afterward, and Stepper Speed (Hz) will feel like a ' +
+          'different physical speed since the distance per step changed.\n\n' +
+          'Continue with this change?'
+        );
+        if (!ok) {
+          microstepsSelect.value = originalValue;
+        } else {
+          originalValue = microstepsSelect.value;
+        }
+      });
+    });
+
     function handleFormSubmit(event, url) {
       event.preventDefault();
       var formData = new FormData(event.target);
@@ -1242,7 +1268,7 @@ function showNotification(message, isSuccess) {
         <p><strong>Current Position:</strong> <span id="current-position">{{CURRENT_POSITION}}</span> steps (<span id="position-percent">{{POSITION_PERCENT}}</span>%)</p>
         <p><strong>Bottom Position:</strong> <span id="bottom-position">{{BOTTOM_POSITION}}</span> steps</p>
         <p><strong>Full Travel:</strong> <span id="homing-travel">{{HOMING_TRAVEL}}</span></p>
-        <p><strong>Encoder Count:</strong> <span id="encoder-count">{{ENCODER_COUNT}}</span></p>
+        <p id="encoder-count-row" style="{{ENCODER_ROW_DISPLAY}}"><strong>Encoder Count:</strong> <span id="encoder-count">{{ENCODER_COUNT}}</span></p>
         <p><strong>Auto Home on Boot:</strong> <span id="auto-home-on-boot">{{AUTO_HOME_STATUS}}</span></p>
 
         <button class="collapsible" onclick="toggleCollapsible(this)">Manual Stepper Control</button>
@@ -1547,6 +1573,87 @@ function showNotification(message, isSuccess) {
               </div>
 
               <button type="submit" class="btn-primary">Save Driver Settings</button>
+            </form>
+          </div>
+        </div>
+
+        <button type="button" class="collapsible" onclick="toggleCollapsible(this)">PID Tuning</button>
+        <div class="collapsible-content">
+          <div class="collapsible-content-inner">
+            <p style="color: #666; font-style: italic; margin-top: 0;">Only used when Tracking Motion Strategy above is set to PID - closed-loop control with velocity feedforward. See CLAUDE.md's "Stepper Tracking Modes" for the control law and TODO.md for the tuning history behind these defaults.</p>
+
+            <form onsubmit="return handleFormSubmit(event, '/save-pid')">
+              <div class="form-group">
+                <label for="pidKp">Kp (proportional gain, Hz per step of error):</label>
+                <input type="number" id="pidKp" name="pidKp" value="{{PID_KP}}" min="0" max="100" step="0.0001" required>
+              </div>
+
+              <div class="form-group">
+                <label for="pidKd">Kd (derivative gain, Hz per step/s of measured rate):</label>
+                <input type="number" id="pidKd" name="pidKd" value="{{PID_KD}}" min="0" max="100" step="0.0001" required>
+              </div>
+
+              <div class="form-group">
+                <label for="pidDFilterWeight">Derivative Filter Weight (0-1, per-tick EMA):</label>
+                <input type="number" id="pidDFilterWeight" name="pidDFilterWeight" value="{{PID_D_FILTER_WEIGHT}}" min="0" max="1" step="0.0001" required>
+                <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Lower = more smoothing. A per-sample weight, not per-unit-time - its effective smoothing window scales with the Control Tick below, so re-check this if you change the tick rate.</p>
+              </div>
+
+              <div class="form-group">
+                <label for="pidMaxSpeed">Max Speed (Hz):</label>
+                <input type="number" id="pidMaxSpeed" name="pidMaxSpeed" value="{{PID_MAX_SPEED}}" min="1" max="50000" required>
+              </div>
+
+              <div class="form-group">
+                <label for="pidAccel">Acceleration (steps/s&sup2;):</label>
+                <input type="number" id="pidAccel" name="pidAccel" value="{{PID_ACCEL}}" min="1" max="1000000" required>
+              </div>
+
+              <div class="form-group">
+                <label for="pidDeadband">Deadband (steps):</label>
+                <input type="number" id="pidDeadband" name="pidDeadband" value="{{PID_DEADBAND}}" min="0" max="100000" required>
+                <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Error at or below this snaps to an exact stop instead of continuing to drive a tiny, chattery correction forever.</p>
+              </div>
+
+              <div class="form-group">
+                <label for="pidReengageThreshold">Reengage Threshold (steps):</label>
+                <input type="number" id="pidReengageThreshold" name="pidReengageThreshold" value="{{PID_REENGAGE_THRESHOLD}}" min="0" max="100000" required>
+                <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Hysteresis band around a settled target - must be &ge; Deadband above to do anything. Keeps small DDP-quantization jitter right at a settled position from repeatedly re-engaging full continuous-run control.</p>
+              </div>
+
+              <div class="form-group">
+                <label for="pidFeedforward">
+                  <input type="checkbox" id="pidFeedforward" name="pidFeedforward" {{PID_FEEDFORWARD_CHECKED}}>
+                  Velocity Feedforward
+                </label>
+                <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Self-measures the real rate the commanded position has been changing at and uses that to carry the bulk of the motion, so Kp/Kd only trim the residual error. Recommended on - this is what lets PID mode beat Direct mode's accuracy.</p>
+              </div>
+
+              <div class="form-group">
+                <label for="pidFfWindowMs">Feedforward Window (ms):</label>
+                <input type="number" id="pidFfWindowMs" name="pidFfWindowMs" value="{{PID_FF_WINDOW_MS}}" min="0" max="5000" required>
+                <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Width of the time window the feedforward measures rate over. Longer = smoother commanded speed, at the cost of roughly half the window in added lag following a real rate change (corner tightness).</p>
+              </div>
+
+              <div class="form-group">
+                <label for="pidLookaheadMs">Reference Smoothing (ms, 0=off):</label>
+                <input type="number" id="pidLookaheadMs" name="pidLookaheadMs" value="{{PID_LOOKAHEAD_MS}}" min="0" max="5000" required>
+                <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Separate from Feedforward Window above - a plain moving average smoothing only the P-term's target. Tested and found to trade accuracy for smoothness on the same curve as just lowering Kp, not a free win; kept available, off by default.</p>
+              </div>
+
+              <div class="form-group">
+                <label for="pidTickMs">Control Tick (ms):</label>
+                <input type="number" id="pidTickMs" name="pidTickMs" value="{{PID_TICK_MS}}" min="1" max="1000" required>
+                <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Minimum interval between control-loop updates. Found to be the real lever against a persistent speed ripple (a sampled-control-loop dynamic) - lower is more responsive but logs more often (see below) and demands more CPU headroom.</p>
+              </div>
+
+              <div class="form-group">
+                <label for="pidLogMs">Compact Motion Log Rate (ms):</label>
+                <input type="number" id="pidLogMs" name="pidLogMs" value="{{PID_LOG_MS}}" min="1" max="5000" required>
+                <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Independent of Control Tick above on purpose - tying them together can overflow the log's ring buffer at a fast tick rate. Bench/tuning use only, doesn't affect motion.</p>
+              </div>
+
+              <button type="submit" class="btn-primary">Save PID Settings</button>
             </form>
           </div>
         </div>

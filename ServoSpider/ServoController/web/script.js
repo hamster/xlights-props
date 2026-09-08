@@ -80,6 +80,32 @@ function showNotification(message, isSuccess) {
       toggleStepperOptions();
     });
 
+    // Warn immediately when Microsteps per Full Step is actually changed
+    // (2026-09-08) - it changes physical distance per step, requiring a
+    // re-home and making the previously-tuned Stepper Speed feel different.
+    // The save response already said this in a toast easy to miss after the
+    // fact; this catches it at the moment of the change instead, before the
+    // save is even submitted, and offers to revert if it was a misclick.
+    document.addEventListener('DOMContentLoaded', function() {
+      var microstepsSelect = document.getElementById('tmcMicrosteps');
+      if (!microstepsSelect) return;
+      var originalValue = microstepsSelect.value;
+      microstepsSelect.addEventListener('change', function() {
+        if (microstepsSelect.value === originalValue) return;
+        var ok = confirm(
+          'Changing Microsteps per Full Step changes the physical distance per step.\n\n' +
+          'You will need to re-home afterward, and Stepper Speed (Hz) will feel like a ' +
+          'different physical speed since the distance per step changed.\n\n' +
+          'Continue with this change?'
+        );
+        if (!ok) {
+          microstepsSelect.value = originalValue;
+        } else {
+          originalValue = microstepsSelect.value;
+        }
+      });
+    });
+
     function handleFormSubmit(event, url) {
       event.preventDefault();
       var formData = new FormData(event.target);

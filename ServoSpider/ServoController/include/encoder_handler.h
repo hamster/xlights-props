@@ -81,6 +81,17 @@
 #define encoderPinA D0
 #define encoderPinB D9
 
+// Whether the Status page shows the Encoder Count row at all (2026-09-08).
+// The encoder itself, and everything above about it, is unchanged - it's
+// still real, bench-only ground truth (used for $ENCDIAG, the Compact
+// Motion Log's encoderCount column, and every tuning sweep's verification),
+// none of that goes away. This only controls whether a normal user looking
+// at the Status page sees a "Encoder Count" line that means nothing to them
+// and was never meant to ship long-term. Set to 1 to bring the row back if
+// bench work needs it visible in the browser again instead of only via
+// serial/API.
+#define SHOW_ENCODER_STATUS 0
+
 void initEncoder();    // Call from setup() (or a Core 0 task, per core0_task.h) - configures and starts the hardware timer poll
 
 // No-op in the current (timer-poll) implementation - counting happens

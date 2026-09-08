@@ -18,6 +18,7 @@ void handleRoot();
 void handleSaveWifi();
 void handleSaveAP();
 void handleSaveStepper();
+void handleSavePid();
 void handleSaveProtocol();
 void handleSaveLed();
 void handleSaveTmc();

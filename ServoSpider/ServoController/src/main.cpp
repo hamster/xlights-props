@@ -1096,6 +1096,23 @@ void setup() {
     stepperTrackModeConfig = TRACK_MODE_DIRECT;
   }
 
+  // Load PID tuning parameters (2026-09-08 - previously RAM-only via
+  // $SET/GET /tunable, no Settings UI or NVS persistence at all). Defaults
+  // match the compiled ones in stepper_handler.cpp - see that file's own
+  // declaration comments for the tuning history behind each value.
+  stepperPidKpConfig = preferences.getFloat("pidKp", 3.0f);
+  stepperPidKdConfig = preferences.getFloat("pidKd", 0.3f);
+  stepperPidDFilterWeightConfig = preferences.getFloat("pidDFilterWt", 0.04f);
+  stepperPidTickMsConfig = preferences.getInt("pidTickMs", 5);
+  stepperPidLogMsConfig = preferences.getInt("pidLogMs", 20);
+  stepperPidMaxSpeedConfig = preferences.getInt("pidMaxSpeed", 7000);
+  stepperPidAccelConfig = preferences.getInt("pidAccel", 50000);
+  stepperPidDeadbandConfig = preferences.getInt("pidDeadband", 30);
+  stepperPidReengageThresholdConfig = preferences.getInt("pidReengageTh", 150);
+  stepperPidFeedforwardConfig = preferences.getBool("pidFeedforward", true);
+  stepperPidFfWindowMsConfig = preferences.getInt("pidFfWindowMs", 200);
+  stepperPidLookaheadMsConfig = preferences.getInt("pidLookaheadMs", 0);
+
   // Load protocol configuration. Sanitize against stale NVS values from
   // before ArtNet was removed, when the enum was NONE=0/ARTNET=1/DDP=2 - a
   // device previously flashed with that firmware and saved as DDP(2) would
