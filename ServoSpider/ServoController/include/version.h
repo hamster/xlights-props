@@ -13,7 +13,7 @@
 
 #define VERSION_MAJOR 1
 #define VERSION_MINOR 0
-#define VERSION_SUBREV 527
+#define VERSION_SUBREV 529
 
 // Helper macros to convert version numbers to strings
 #define STRINGIFY(x) #x

@@ -813,8 +813,8 @@ void handleProtocolDebugToggle() {
   }
   const String& enableArg = server.arg("enable");
   bool enable = (enableArg.length() > 0 && enableArg[0] == 't');  // "true"
-  protocolDebugConfig = enable;
-  preferences.putBool("protocolDebug", protocolDebugConfig);
+  protocolDebugConfig = enable;  // takes effect immediately (RAM)
+  protocolDebugPendingSave = true;  // actual flash write deferred - see its declaration comment
   Serial.print("Serial debug output ");
   Serial.println(enable ? "enabled" : "disabled");
   server.send(200, "application/json", enable ? "{\"success\":true,\"protocolDebug\":true}" : "{\"success\":true,\"protocolDebug\":false}");

@@ -1246,6 +1246,10 @@ void loop() {
     flushPersistLogNow();
   }
 
+  // Same idle-gated deferral for the Debug tab's Serial Debug toggle - see
+  // protocolDebugPendingSave's declaration comment (protocol_common.h).
+  persistProtocolDebugIfPending();
+
   // Periodic compact-log sample, so any significant move (a single large
   // DDP jump, or a diagnostic moveTo() like $CHECKSTEPS's that bypasses
   // this DDP dispatch entirely) gets a full speed-over-time trace instead

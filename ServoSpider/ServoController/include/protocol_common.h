@@ -14,13 +14,30 @@ extern protocolType protocolConfig;
 extern bool stepperControlEnabled;  // Enable stepper control (stepper uses channel 1, or 1-2 for 16-bit)
 extern bool control16BitConfig;     // 16-bit stepper control (only used if stepperControlEnabled)
 extern bool protocolDebugConfig;
+// Deferred flash write for protocolDebugConfig, same reasoning as
+// stepperSettingsPendingSave (stepper_handler.h) - GET /protocol-debug
+// (the Debug tab's instant-apply checkbox) updates protocolDebugConfig in
+// RAM immediately so it takes effect right away, but must not call
+// preferences.putBool() synchronously from that handler: a real flash
+// write briefly disables the flash cache, and doing so while the stepper
+// is actively stepping (e.g. mid-homing, exactly when this tab tends to
+// get used) risks crashing if any interrupt that isn't fully IRAM-resident
+// fires during that window - see CLAUDE.md's homing-switch-ISR note and
+// persist_log.cpp's top comment for the same underlying hazard hitting
+// this project twice already. persistProtocolDebugIfPending() actually
+// writes it, gated on the stepper being idle, same pattern as
+// persistStepperSettingsIfPending().
+extern bool protocolDebugPendingSave;
+void persistProtocolDebugIfPending();  // Call every loop() iteration - no-op unless a save is pending
 // Temporary tuning aid: one compact CSV line per processed DDP position
 // command (ms,ddpVal,cmdPos,curPos,delta,lag,profile,curSpeedHz,
 // targetSpeedHz,encoderCount,sgResult,switchTripped), independent of
 // protocolDebugConfig's verbose per-packet dump - for capturing motion
 // data to diagnose tracking-profile tuning issues. Runtime-only, not
 // persisted. See the position-handling block in main.cpp's loop().
-// Candidate for removal/replacement once the planned Live Log tab exists.
+// Surfaced live in the browser via the Debug tab (built 2026-09-08,
+// GET /compact-log) - no longer a removal candidate, it's the tab's
+// primary content now.
 extern bool compactLogEnabled;
 // Retrieval for the buffer above (2026-09-06) - mirrors ddp_handler.h's
 // getDdpRxLog()/clearDdpRxLog() exactly, and for the same reason: reading

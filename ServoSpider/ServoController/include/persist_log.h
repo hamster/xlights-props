@@ -42,13 +42,24 @@ void initPersistLog();  // Call early in setup(), before anything else might wan
 // actually commit pending entries to flash, only when nothing is stepping.
 void persistLog(const char* fmt, ...);
 
-bool hasPendingPersistLog();  // True if there are entries buffered in RAM not yet written to flash
-// Writes any RAM-buffered entries to flash. Callers MUST only call this
-// when the stepper is confirmed idle (main.cpp's loop() gates this on
+bool hasPendingPersistLog();  // True if there are RAM-buffered entries not yet written to flash, OR a clearPersistLog() is still waiting for a safe moment to actually hit flash
+// Writes any RAM-buffered entries to flash (and performs a deferred
+// clearPersistLog(), if one is pending). Callers MUST only call this when
+// the stepper is confirmed idle (main.cpp's loop() gates this on
 // stepper->isRunning() == false) - see persist_log.cpp's top comment.
 void flushPersistLogNow();
 
-String readPersistLog();  // Full current log content, flash + any not-yet-flushed RAM entries (bounded - see PERSIST_LOG_MAX_BYTES in persist_log.cpp)
-void clearPersistLog();   // Wipes it (flash and any pending RAM entries) - for starting a fresh diagnostic session deliberately
+// Full current log content - a RAM mirror of the flash file plus any
+// not-yet-flushed entries (bounded - see PERSIST_LOG_MAX_BYTES in
+// persist_log.cpp). Deliberately never touches SPIFFS directly, so it's
+// always safe to call from an HTTP handler regardless of what the stepper
+// is doing - see persist_log.cpp's flushedMirror comment for why that
+// matters (a live flash read here once crashed the board mid-homing).
+String readPersistLog();
+// Wipes it (RAM state immediately; the actual flash file removal is
+// deferred to the next safe flushPersistLogNow(), same as a normal write -
+// so this is also safe to call at any time, including mid-homing) - for
+// starting a fresh diagnostic session deliberately.
+void clearPersistLog();
 
 #endif

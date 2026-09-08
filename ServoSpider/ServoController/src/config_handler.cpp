@@ -205,7 +205,11 @@ static bool setFieldValue(const char* key, const String& value, bool& isStepperF
   if (!strcmp(key, "protocol")) { protocolConfig = (protocolType)i; preferences.putInt("protocol", (int)protocolConfig); return true; }
   if (!strcmp(key, "stepperControl")) { stepperControlEnabled = b; preferences.putBool("stepperControl", stepperControlEnabled); return true; }
   if (!strcmp(key, "control16Bit")) { control16BitConfig = b; preferences.putBool("control16Bit", control16BitConfig); return true; }
-  if (!strcmp(key, "protocolDebug")) { protocolDebugConfig = b; preferences.putBool("protocolDebug", protocolDebugConfig); return true; }
+  // Deferred write, not a direct preferences.putBool() - see
+  // protocolDebugPendingSave's declaration comment (protocol_common.h) for
+  // why a synchronous flash write here is a real crash risk if this lands
+  // mid-homing (e.g. a tuning script's $SET/`/config` call).
+  if (!strcmp(key, "protocolDebug")) { protocolDebugConfig = b; protocolDebugPendingSave = true; return true; }
   if (!strcmp(key, "ledBlankTime")) { ledBlankTimeConfig = i; preferences.putInt("ledBlankTime", ledBlankTimeConfig); return true; }
   if (!strcmp(key, "stepBlankTime")) { stepperBlankTimeConfig = i; preferences.putInt("stepBlankTime", stepperBlankTimeConfig); return true; }
 

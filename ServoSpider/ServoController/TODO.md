@@ -63,6 +63,44 @@ individual entries below for what each one was.
   restoring its original smoothing window helps further. New compiled
   default: 0.04 (was, unknowingly, 0.15 at the wrong tick rate).
 
+- [x] **Debug tab could crash the board mid-homing - found live by the user
+  2026-09-08, fixed same day.** Opening the new Debug tab (built earlier
+  this same session) while the trolley was actively moving crashed the
+  ESP32. Root cause: `GET /persist-log` (`readPersistLog()`,
+  `persist_log.cpp`) did a live `SPIFFS.open(..., FILE_READ)` on every
+  request, and the Debug tab's auto-refresh hits that endpoint immediately
+  on open, and every 3s after - the exact same flash-cache-disable hazard
+  CLAUDE.md already documents for the homing-switch ISR (FastAccelStepper's
+  step-generation ISR isn't IRAM-safe; any real flash access while it's
+  live risks a crash), just never previously hit because nothing polled
+  this endpoint automatically before the Debug tab existed. Fixed by
+  giving `persist_log.cpp` a RAM mirror of the flash file's content
+  (`flushedMirror`), loaded once at boot and kept in sync only from
+  already-safe contexts (`initPersistLog()`, `flushPersistLogNow()`) -
+  `readPersistLog()` now reads the mirror only and never touches SPIFFS
+  live. `clearPersistLog()` got the same treatment: clears RAM state
+  instantly, defers the actual `SPIFFS.remove()` to the next safe
+  (stepper-idle) flush via a new `pendingClear` flag.
+  **While fixing this, found and closed a second instance of the same bug
+  class introduced by the same Debug tab work**: the new
+  `GET /protocol-debug` toggle (Serial Debug checkbox) called
+  `preferences.putBool()` synchronously on every click, with no idle
+  gating - same hazard, different flash API. Given the same deferred-write
+  treatment as `stepperSettingsPendingSave` (`stepper_handler.h`): new
+  `protocolDebugPendingSave` flag/`persistProtocolDebugIfPending()`
+  (`protocol_common.h`/`.cpp`), applied in RAM immediately, actually
+  written to flash only once the stepper is confirmed idle. Also routed
+  the pre-existing `/config POST protocolDebug=...` write path
+  (`config_handler.cpp`) through the same deferred flag while in there -
+  it had the identical unguarded-write hazard already, just less likely to
+  get hit by accident than a tab full of auto-refreshing controls.
+  **Left alone, deliberately**: the broader "audit every other
+  `Preferences.putX()` call site for the same unguarded-during-stepping
+  hazard" item is still open (see the historical Bring-up findings section
+  further down) - this entry closes the two paths this session's own new
+  Debug tab work actually introduced/exposed, not a general sweep of
+  every existing Settings-save handler.
+
 ### Wave 2 - cheap, mechanical, no design risk
 
 - [x] **Audited, 2026-09-07 - no other instances in a real hot path.**
