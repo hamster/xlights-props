@@ -128,11 +128,11 @@ individual entries below for what each one was.
 
 ### Wave 3 - real decisions needed before more code
 
-- [ ] **Decide whether to persist `trackMode=4` (PID) to NVS**, making it
-  the real production default instead of a live-only override on the
-  bench. Flash fallback currently stays Direct. Given the user's own
-  read tonight ("current tuning is pretty OK") this may be ready to
-  decide now rather than defer again.
+- [x] **Decided and done, 2026-09-07 - PID is now the real production
+  default.** User confirmed via explicit choice. Persisted via
+  `POST /config` (`stepTrackMode=4`, the existing NVS key), verified
+  surviving a genuine reboot (not just a RAM check) - `GET /tunable?name=trackMode`
+  read back `4` immediately after a real power-cycle-equivalent reboot.
 - [ ] **Full travel measurement symmetry - open correctness question, not
   yet investigated.** The homing bounce (rope paid all the way out, wound
   back on from the other side until the switch trips a second time) may
