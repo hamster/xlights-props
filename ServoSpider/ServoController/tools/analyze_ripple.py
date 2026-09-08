@@ -35,6 +35,25 @@ def load(path):
 
 def analyze(path):
     rows = load(path)
+    # Drop a leading malformed/truncated row if present - seen twice testing
+    # pidTickMs below 20 (2026-09-07: once as "0,0", once as "08,663,0,0" -
+    # different shapes, so this checks for an implausible timestamp rather
+    # than matching either exact pattern). A genuine first row's ms is
+    # millis() since boot at whatever point /compact-log?clear=1 landed,
+    # comfortably into 4+ digits by the time a run starts - not the sub-1000
+    # value parse_row()'s trailing-field padding produces from a short,
+    # truncated line. Confirmed tick-rate-correlated, not yet root-caused:
+    # 0 occurrences across ~25 runs at the original 20ms tick tonight, 2 of 3
+    # runs at 10/5ms. Harmless to the main analyze() tool's aggregate metrics
+    # (one row in ~1900 barely moves an average) but broke this file's
+    # dead-start detection, which anchors t0 to rows[0] - with t0 wrongly
+    # pinned near 0, dead_start_ms came out as the real first row's raw
+    # device-uptime millis() (hundreds of thousands of ms), large enough to
+    # trip the >700ms contamination flag on an otherwise-clean run. See
+    # TODO.md's stepperPidTickMsConfig section for the open item.
+    while len(rows) > 1 and rows[0]["ms"] < 1000 and rows[1]["ms"] - rows[0]["ms"] > 5000:
+        print(f"  NOTE: dropped a leading malformed row (ms={rows[0]['ms']}) from {path}")
+        rows = rows[1:]
     if len(rows) < 20:
         return None
     t0 = rows[0]["ms"]

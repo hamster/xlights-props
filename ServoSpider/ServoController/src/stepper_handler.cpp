@@ -159,6 +159,38 @@ int stepperLookaheadSettleMsConfig = 150;
 //      tracking test, not a step-response one).
 float stepperPidKpConfig = 3.0f;
 float stepperPidKdConfig = 0.3f;
+// 5ms - swept 20/10/5/2 at Kp=3 against the real DDPDebugger-fidelity
+// continuous wave (tools/ddp_continuous_test.py, p8, 16-bit), each verified
+// clean (encoder ground truth, zero real stalls, DDP reception health
+// checked before/after). Unlike every other smoothness lever tried this
+// session (Kd, Kp, the lookahead buffer, pidAccel, pidFfWindowMs), this one
+// bought real improvement with NO measured accuracy cost: rms_error stayed
+// flat (386->392-395Hz across every setting tested) while jerk fell
+// 199->132->110 and ripple_rms fell 210->117->94Hz, 20ms->10ms->5ms. The
+// ripple's own period shrank faster than proportionally with the tick
+// (141->71->22ms) - strong evidence the loop's own sample delay was the
+// actual mechanism behind the ripple all along, not something any output
+// filter could ever remove (which is exactly why none of the filtering
+// levers tried earlier this session moved it much).
+//
+// 2ms was tested and rejected: jerk/ripple kept improving (62Hz/21ms) but
+// real cost appeared for the first time all session - protocolPacketsRejec-
+// tedOutOfOrder went 0->6 during that one run (zero at every setting at or
+// above 5ms), and the log-corruption artifact below got measurably worse
+// (a negative parsed timestamp, vs. an implausibly-small one at 10ms/5ms).
+// Both point at Core 1's loop() (DDP parsing, web server, WiFi housekeeping,
+// TMC UART, and now a 500Hz PID tick) genuinely running out of headroom,
+// not the control law running out of benefit. Faster than 5ms would need
+// moving PID off Core 1 (see TODO.md) - explicitly not attempted this
+// session; 5ms is the floor on the current single-core architecture.
+//
+// Open, not-yet-root-caused item: a malformed leading row in the Compact
+// Motion Log appeared on some runs at 10ms/5ms/2ms (never at the original
+// 20ms, across ~25 runs) - a single corrupted row at the very start of a
+// fetch, parsed as an implausible timestamp. Confirmed harmless to every
+// metric in tools/ddp_continuous_test.py's analyze() and worked around in
+// analyze_ripple.py (drops it), but not explained. See TODO.md.
+int stepperPidTickMsConfig = 5;
 // 7000 Hz per the 2026-09-06 speed/current characterization sweeps and
 // live listening on the bench: the measured stall boundary was ~8500 Hz
 // (up)/~9000 Hz (down) at 1200-1400mA and 50,000 steps/s^2 accel, but that
@@ -190,13 +222,6 @@ int stepperPidReengageThresholdConfig = 150;
 // TODO.md's "Time-budget feedforward" section for the full comparison
 // against both the pre-feedforward PID baseline and Direct mode.
 bool stepperPidFeedforwardConfig = true;
-// 10,000 Hz/s - starting point, to be swept (2026-09-07). Chosen to match
-// the pidAccel value that measured best against Direct mode in the
-// whole-output sweep this replaces (pidAccel=10000: jerk 190 vs Direct's
-// 153, and better than Direct on both rms_error and corner tightness) -
-// the same amount of rate-limiting, now applied only to the half of the
-// output that actually needs it. See its declaration comment
-// (stepper_handler.h).
 // 200ms - swept against the real DDPDebugger-fidelity continuous wave at
 // period=8s (tools/ddp_continuous_test.py, 16-bit source). Ten 20ms ticks.
 // The sweep (jerk / rms_error / corner mean):
@@ -208,6 +233,9 @@ bool stepperPidFeedforwardConfig = true;
 // within 1.4x of Direct's jerk (153) - where the old config was 3.1x.
 // Longer windows keep trading accuracy for very little further jerk.
 int stepperPidFfWindowMsConfig = 200;
+// 0 (off) - starting point, to be swept (2026-09-07 evening). See its
+// declaration comment (stepper_handler.h) for the design.
+int stepperPidLookaheadMsConfig = 0;
 
 bool stepperSettingsPendingSave = false;
 

@@ -6,6 +6,48 @@ Turn this into a standalone stepper-mover **+** pixel controller: one ESP32-S3 d
 
 Note: checked `git branch -a` / `git stash list` / `git log --all` — there is no leftover branch, stash, or commit anywhere in this repo with prior dual-core work. If there was earlier progress on splitting stepper/LED work across cores, it never made it into git, so treat this as a fresh design rather than something to dig up.
 
+## PID tick rate found to be the real ripple lever - locked in at 5ms; a lookahead buffer tried and not adopted; Core 0 for PID explicitly declined for now (2026-09-07, late)
+
+Continuing the "smooth out the actual speed" investigation after Kp=3 was locked in: the ~120-150ms-period speed ripple survived every filtering-based lever tried (Kd, Kp, pidAccel, pidFfWindowMs) because none of them touched its actual cause. Two new ideas were tried, at the user's suggestion.
+
+### Lookahead / reference-smoothing buffer - built, works, not adopted
+
+Added `pidLookaheadMsConfig` (0=off): a plain moving average of the target over the configured window, reusing the feedforward estimator's own ring buffer of real `(target, timestamp)` samples rather than new state. Only feeds the P-term (`pTermError`) - `error`/`target` stay raw for the deadband/hysteresis/settle/safety-net logic, which need the true current commanded value. Deliberately just an average of real received samples, not a synthetic forward integration - unlike the shelved `pidSmoothTarget` layer, there is no persistent velocity/position state that can drift while a `pidStopSettling` wait blocks the function.
+
+Worked exactly as designed - jerk and ripple fell monotonically with window size (jerk 199->163->139->129, ripple 210->178->141->113Hz at 50/100/150ms) - but lined up against the earlier Kp sweep at matched ripple, it's the same trade curve, not a better one (Kp=2 alone: rms=513/jerk=160; lookahead=100 at Kp=3: rms=538/jerk=139). Makes sense in hindsight: both changes reduce the P-term's own output amplitude by roughly proportional means (attenuate the gain vs. attenuate the signal before the gain), so they cost accuracy similarly. `lookahead=100` also pushed frame lag to a 23.5-frame max at p8, over the 20-frame hard cap. Kept in the firmware (tunable, off by default) since it's a legitimate lever if ever wanted, but not part of the recommended config.
+
+### PID tick rate - the real lever, locked in at 5ms
+
+`updatePidMode()`'s rate-limit was a hardcoded 20, matching `TRACK_MODE_STREAMING`'s cadence since both were first built. Made configurable (`pidTickMsConfig`) and swept 20/10/5/2ms at Kp=3, p8, 16-bit, each verified via the full protocol (encoder ground truth, zero real stalls, DDP reception checked before/after):
+
+| tick | rms_error | jerk | ripple_rms | ripple_period | DDP rejected |
+|---|---|---|---|---|---|
+| 20 (was default) | 386.5 | 199.1 | 210.3Hz | 140.7ms | 0 |
+| 10 | 392-395 | 131-132 | 117-121Hz | 71-72ms | 0 |
+| **5 (new default)** | **394.0** | **109.8** | **94.1Hz** | **21.9ms** | **0** |
+| 2 (rejected) | 394.5 | 62.2 | 51.8Hz | 21.0ms | **6** |
+
+Unlike every other lever tried this session, tick rate bought real smoothness with **no measured accuracy cost** - rms_error stayed flat across all four settings while jerk and ripple fell substantially. The ripple period shrinking faster than proportionally with the tick (141->71->22ms) is strong evidence this is a genuine sampled-control-loop dynamic (the loop's own sample delay interacting with the stepper's accel-limited response) rather than a physical resonance or noise source - which is exactly why no output filter tried earlier this session (derivative filtering, a correction slew limiter, the lookahead buffer above) ever moved it much: filtering the output doesn't change the loop's own sample delay.
+
+**2ms was tested and rejected on real, not theoretical, grounds**: `protocolPacketsRejectedOutOfOrder` went 0->6 during that one run - the only nonzero reading across the entire session, at any tick rate tested. The malformed-log-row artifact (see below) also got measurably worse (a negative parsed timestamp vs. an implausibly-small one at 10/5ms). Both point at Core 1's `loop()` (DDP parsing, web server, WiFi housekeeping, TMC UART, now a 500Hz PID tick) genuinely running out of headroom - the control law was still improving right up to 2ms, so this is a CPU ceiling, not a diminishing-returns one.
+
+**Applied**: `stepperPidTickMsConfig` compiled default 20->5ms. Verified live from a genuine fresh boot.
+
+### Core 0 for PID - explicitly declined for now, not forgotten
+
+The 2ms result is the concrete case for moving PID off Core 1: this project's own stated reason for the ESP32-S3 move is "explicit core allocation so nothing on Core 1 contends with anything else" (see CLAUDE.md), and the encoder already moved to Core 0 for exactly this kind of contention. PID hitting the same wall at 2ms is the same problem showing up again.
+
+**Explicit decision: not attempted this session.** This is a real re-architecture, not a tunable - everything currently runs cooperatively single-threaded inside `loop()`, with no locking anywhere. Moving PID to Core 0 introduces genuine cross-core sharing of state that is currently unprotected: `positionRequest` (written by DDP parsing on Core 1, would be read by PID on Core 0), and PID's own internal state (`pidCurrentDirection`, `pidStopSettling`, `pidDirectionSwitchPending`, the feedforward ring buffer). Every hard-won bug fix from this and prior sessions (the direction-switch race, the overshoot-latch fix, the stale-tick watchdog flagged above) was found and fixed under a single-threaded mental model - cross-core reintroduces a bug class that model has no answer for.
+
+There is also a real, unanswered question that has to be resolved BEFORE writing any of this, not discovered after: FastAccelStepper's own engine is explicitly pinned to Core 1 (`engine.init(1)`). Whether calling `stepper->moveTo()`/`runForward()`/`getCurrentPosition()` from a Core 0 task is safe against that library's internals, or needs a queue/mutex boundary instead of direct calls, is not currently known.
+
+- [ ] If tick rates below ~5ms are wanted later, moving PID (or the whole stepper track-mode dispatch) to Core 0 is the way to get there - but scope it as real design work, not a quick follow-up: resolve FastAccelStepper's cross-core call safety first, then design synchronization for the shared state listed above.
+- [ ] The malformed-leading-log-row artifact (seen at 10ms/5ms/2ms tick, never at the original 20ms across ~25 runs) is real and tick-rate-correlated but not root-caused. Confirmed harmless to every metric `ddp_continuous_test.py`'s `analyze()` computes (one row, dropped), and worked around in `analyze_ripple.py`. Worth understanding if tick rate is ever revisited - possibly a race in the Compact Motion Log's ring buffer read (`getCompactLog()`) vs. write (`appendCompactLog()`) path becoming likelier at a higher write rate, but not investigated.
+- [ ] `pidFilteredRate`'s 0.85/0.15 derivative-filter EMA weight is per-SAMPLE, not per unit time - at tick=5ms (4x the original rate) its effective time constant is roughly 4x shorter than when it was tuned, weakening the filter's intended smoothing. Not yet re-tuned or re-validated against the new tick rate; flagged in stepperPidTickMsConfig's own declaration comment but not addressed.
+- [ ] `pidLookaheadMsConfig` exists as a tested, working, off-by-default tunable if the lookahead approach is ever wanted for a different reason (e.g. a show with more headroom in its frame-lag budget than the bench tests here).
+
+## Needed: a stale-tick watchdog in updatePidMode() for continuous-run modes (found 2026-09-07, not yet fixed)
+
 ## Needed: a stale-tick watchdog in updatePidMode() for continuous-run modes (found 2026-09-07, not yet fixed)
 
 Found while re-diagnosing why the trolley kept ending up past the bottom of travel and up the back of the pulley. Root-caused via the compact log itself: a ~1.0s gap in logged rows, with position and encoder agreeing the trolley travelled +3,660 steps during that gap alone (confirmed independently by the encoder, so this is real physical motion, not a counter artifact).

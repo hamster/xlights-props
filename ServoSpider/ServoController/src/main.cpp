@@ -98,10 +98,18 @@ struct PidFfSample {
   float target;
   unsigned long ms;
 };
-// 320ms of history at the 20ms tick - comfortably longer than any window
-// worth configuring, so stepperPidFfWindowMsConfig is never silently
-// truncated by the buffer at usable settings.
-static const int PID_FF_HIST_LEN = 16;
+// Sized for time coverage, not sample count, since both scale with
+// stepperPidTickMsConfig (2026-09-07 evening - grown from 16 alongside
+// that becoming configurable). At 128 entries: 2560ms of history at the
+// original 20ms tick, still 640ms at a 5x-faster 4ms tick - comfortably
+// longer than any pidFfWindowMs/pidLookaheadMs worth configuring at any
+// tick rate this project would plausibly test, so neither window is ever
+// silently truncated by hitting the buffer's own edge. Also now shared by
+// the lookahead/reference-smoothing average (see pTermTarget below), which
+// didn't exist when this was first sized at 16. Costs ~2KB total RAM for
+// both this and pidFfWork below - checked against a build (63.2% used
+// before this change), trivial at this size.
+static const int PID_FF_HIST_LEN = 128;
 PidFfSample pidFfHist[PID_FF_HIST_LEN];
 // Scratch for the regression below - a file-scope array rather than a
 // stack one purely to keep updatePidMode()'s frame small; it holds no
@@ -573,8 +581,16 @@ void updatePidMode() {
   }
 
   unsigned long now = millis();
-  if (now - lastPidUpdateMs < 20) return;  // rate-limit, matches Streaming's own cadence
-  float dt = (lastPidUpdateMs == 0) ? 0.02f : (now - lastPidUpdateMs) / 1000.0f;
+  // Configurable (2026-09-07 evening, see stepperPidTickMsConfig's
+  // declaration comment) - was a hardcoded 20 matching Streaming's own
+  // cadence. dt is still computed from real elapsed time regardless, so a
+  // faster configured tick just means updatePidMode() gets more chances to
+  // run per second; an occasional overrun (a slow loop() elsewhere) still
+  // reads out correctly instead of assuming exactly stepperPidTickMsConfig
+  // passed.
+  if (now - lastPidUpdateMs < (unsigned long)stepperPidTickMsConfig) return;
+  float dt = (lastPidUpdateMs == 0) ? (stepperPidTickMsConfig / 1000.0f)
+                                     : (now - lastPidUpdateMs) / 1000.0f;
   lastPidUpdateMs = now;
 
   long currentPos = stepper->getCurrentPosition();
@@ -656,6 +672,54 @@ void updatePidMode() {
       pidFeedforwardVelocity = (den > 1e-9f) ? (num / den) : 0;
     }
   }
+
+  // Lookahead / reference-smoothing for the P-term only (2026-09-07
+  // evening). The Kp sweep that picked Kp=3 (see stepperPidKpConfig's
+  // declaration comment) proved the P-term's reaction to the raw,
+  // jumpy target is the dominant driver of the ~120-150ms speed ripple -
+  // lowering Kp reduced ripple because it reduces how hard the loop reacts
+  // to that jumpiness, not because the jumpiness itself went away. This
+  // attacks the jumpiness at its source instead: pTerm reacts to a plain
+  // moving average of the target over the last stepperPidLookaheadMsConfig
+  // ms, rather than the single newest sample. `error`/`target` above stay
+  // completely untouched - the deadband/hysteresis/settle logic and the
+  // overshoot safety net all need the TRUE current commanded value, not a
+  // lagged one, to know when the trolley has actually arrived.
+  //
+  // Reuses pidFfHist (the feedforward estimator's own ring buffer of real
+  // (target, timestamp) samples, populated unconditionally every tick just
+  // above) rather than keeping separate state - no new buffer needed.
+  // Deliberately just an average, not a synthetic forward integration: this
+  // is what makes it safe in a way the shelved pidSmoothTarget layer wasn't.
+  // That one integrated a velocity/position forward from feedforward, which
+  // could drift arbitrarily far from reality while a pidStopSettling wait
+  // blocked this whole function - the longer the wait, the bigger the
+  // eventual catch-up, and the catch-up itself could provoke another stall.
+  // Averaging real, already-received samples has no such state: if the loop
+  // pauses and resumes, the very next tick's average simply reflects
+  // whatever real history is on hand - nothing to have drifted while away.
+  //
+  // The added latency is real (roughly half the window, the standard cost
+  // of a moving-average/FIR filter) and is spent deliberately, not
+  // accidentally: the user's own stated priority is "a handful of frames
+  // behind is fine, but always be smooth" - this trades a bounded, small
+  // amount of exactly that currency for a smoother reference. Off by
+  // default (0ms) for a clean A/B against pure Kp=3.
+  float pTermTarget = target;
+  if (stepperPidLookaheadMsConfig > 0) {
+    unsigned long lookMs = (unsigned long)stepperPidLookaheadMsConfig;
+    int newestIdx = (pidFfHistIdx - 1 + PID_FF_HIST_LEN) % PID_FF_HIST_LEN;
+    float sum = 0;
+    int n = 0;
+    for (int back = 0; back < pidFfHistCount; back++) {
+      int idx = (newestIdx - back + PID_FF_HIST_LEN) % PID_FF_HIST_LEN;
+      if (back > 0 && (now - pidFfHist[idx].ms) > lookMs) break;
+      sum += pidFfHist[idx].target;
+      n++;
+    }
+    if (n > 0) pTermTarget = sum / n;
+  }
+  float pTermError = pTermTarget - (float)currentPos;
 
   if (fabs(error) <= (float)stepperPidDeadbandConfig) {
     if (!pidSettled) {
@@ -823,7 +887,7 @@ void updatePidMode() {
   // resonance characterized earlier this session. 0.85/0.15 instead.
   pidFilteredRate = 0.85f * pidFilteredRate + 0.15f * measuredRate;
 
-  float pTerm = stepperPidKpConfig * error;
+  float pTerm = stepperPidKpConfig * pTermError;
   float dTerm = -stepperPidKdConfig * pidFilteredRate;
   // Feedforward carries the "known" bulk of the motion (see the
   // measurement block above); toggleable so it stays A/B-testable against

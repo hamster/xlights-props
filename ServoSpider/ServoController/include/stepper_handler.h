@@ -265,6 +265,21 @@ extern int stepperTrackModeConfig;
 // speculatively.
 extern float stepperPidKpConfig;      // Hz per step of error (proportional gain)
 extern float stepperPidKdConfig;      // Hz per (step/second) of measured-position rate (derivative gain, applied to -d(measured)/dt)
+// ms - minimum interval between updatePidMode() ticks (main.cpp gates on
+// this instead of a hardcoded 20). A sampled control loop's phase margin
+// generally improves at a faster sample rate for the same continuous-time
+// gains, which is a real, untried lever against the ~120-150ms speed
+// ripple characterized in stepperPidKpConfig's declaration comment - unlike
+// Kp, it doesn't ask for less gain, it asks the loop to react sooner.
+// dt is still computed from real elapsed time each call (self-correcting
+// if a tick occasionally overruns), so this is purely a floor, not a fixed
+// period. Two real, disclosed interactions to watch when lowering this:
+// pidFilteredRate's 0.85/0.15 EMA weight is per-SAMPLE, not per unit time,
+// so a faster tick shortens its effective time constant (weaker filtering
+// per wall-clock second) unless retuned; and the Compact Motion Log's row
+// rate rises proportionally, shrinking how much wall-clock time the 96KB
+// ring buffer can hold before wrapping.
+extern int stepperPidTickMsConfig;
 extern int stepperPidMaxSpeedConfig;  // Hz - hard clamp on PID output magnitude
 extern int stepperPidAccelConfig;     // Hz/s - ramp rate FastAccelStepper uses when the PID output speed changes; the value the planned acceleration-characterization sweep is meant to inform
 extern int stepperPidDeadbandConfig;  // steps - |error| at or below this snaps to an exact moveTo() and stops driving via PID, instead of continuing to output a tiny, chattery nonzero speed forever
@@ -298,6 +313,18 @@ extern bool stepperPidFeedforwardConfig;
 // updatePidMode()'s feedforward block (main.cpp) for why a window beats
 // the EMA-over-consecutive-changes approach it replaced.
 extern int stepperPidFfWindowMsConfig;
+
+// ms - width of a plain moving-average window smoothing the target the
+// P-term reacts to (NOT the same thing as TRACK_MODE_LOOKAHEAD below,
+// which is a different mode entirely - this is PID-specific, hence the
+// name). 0 = off (react to the raw, instantaneous target, original
+// behavior). See updatePidMode()'s pTermTarget block (main.cpp) for the
+// full design and why this is safe in a way the shelved pidSmoothTarget
+// layer wasn't (no synthetic forward integration, so nothing to drift
+// while paused - only ever averages real, already-received samples).
+// Trades roughly half this value in added latency for a smoother
+// reference; spend deliberately against the frame-lag budget.
+extern int stepperPidLookaheadMsConfig;
 
 // TRACK_MODE_LOOKAHEAD parameters
 extern int stepperLookaheadStepsConfig;     // steps - how far beyond the commanded position to aim, in the
