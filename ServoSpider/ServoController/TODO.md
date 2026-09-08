@@ -393,6 +393,77 @@ individual entries below for what each one was.
     every failure - never stranded in a broken dual-mode state. Worth a
     follow-up bench check once the real network is reliably reachable
     again, to watch the success/AP-teardown path fire for real.
+  - [x] **Follow-up debugging session, 2026-09-08 - three more real bugs
+    found and fixed, all through live user-in-the-loop troubleshooting
+    (the user directly on the AP with a phone, reporting symptoms in real
+    time):**
+    1. **Root cause of "the real network suddenly became unreachable for
+       8+ minutes" above, finally found**: not external at all. An earlier
+       `/save-wifi` test POST (verifying the new retry-interval field)
+       included `password=` (empty) - `handleSaveWifi()` unconditionally
+       overwrote and persisted whatever was submitted, silently wiping the
+       real saved password. Real, separate bug beyond the test mistake:
+       the web UI's own password field is deliberately never pre-filled
+       (so it's never echoed into page source), meaning *any* real
+       Settings-page WiFi save that didn't involve retyping the password
+       had this exact silent-wipe bug for a real user too. Fixed: only
+       overwrite if a non-empty value was actually submitted.
+    2. **"Page loads blank over the AP, background color right, body
+       empty"** - genuinely the hardest bug this project has hit. Ruled
+       out, in order: the retry's own radio disruption (confirmed skipped
+       via its log line while it still happened), heap exhaustion (103KB
+       free, comfortably above the ~74KB page), a captive-portal
+       mini-browser (reproduced in a real browser app too). Root cause
+       via targeted checkpoint logging bisecting `handleRoot()`'s ~68
+       sequential `page.replace()` calls: the first *growing* replacement
+       (`{{WIFI_MODE}}` -> `"Access Point Mode"`) needs Arduino's
+       `String::replace()` to `realloc()` the ~70KB buffer, which needs
+       the old and a new, larger buffer alive simultaneously if the
+       allocator can't extend in place - reliably too much for the
+       contiguous free heap available once the SoftAP + captive-portal
+       DNS + (during a retry) a concurrent `WiFi.begin()` are all also
+       holding memory. A failed reallocation there silently truncates the
+       String rather than erroring. First fix attempt (`page.reserve()`
+       called *after* the initial copy) didn't help - same problem, one
+       line earlier, confirmed via the checkpoints regressing from 69902
+       to failing at the very first checkpoint. Real fix: reserve capacity
+       on the **empty** String first (a single clean `malloc()`, nothing
+       old to keep alive), *then* copy `htmlPage`'s content in - every
+       later `replace()`, including growing ones, reuses that one buffer
+       and never reallocates again. User-confirmed fixed: full page loads
+       over the AP now.
+    3. **Watchdog crash right after a large send** (`task_wdt` abort,
+       reboot) - hit once the page could finally be served at full size,
+       apparently while a client was actively disconnecting from the AP
+       mid-transfer. Likely cause: the underlying socket write can stall
+       for multiple `HTTP_MAX_SEND_WAIT` (5s each) cycles waiting for ACKs
+       from a client that's leaving, with nothing in that call path
+       resetting the watchdog in between. Added `esp_task_wdt_reset()`
+       immediately before `server.send()` in `handleRoot()` - guarantees a
+       full fresh 10s budget going into the one call site now known to be
+       slow. Doesn't bound how long `send()` itself can take, so not a
+       complete guarantee, but a real, low-risk improvement over no reset
+       at all there.
+    4. **Not a bug, a real design correction from the user**: "Connect
+       Now" (`handleConnect()`) had also been switched to
+       `connectToWifi(true)` (`preserveAp`) as part of fixing the original
+       stranding bug - but the user pointed out that's backwards for an
+       *explicit* click: disrupting the clicker's own AP connection is the
+       expected, intended outcome of "connect now," not something to
+       protect them from (unlike the unattended automatic retry, which
+       correctly *should* stay hands-off). There's a real hardware reason
+       too: the AP and a new STA connection share one radio, and the chip
+       generally won't shift the AP's channel while stations are actively
+       associated (that would silently disconnect them) - so `preserveAp`
+       could leave the connection attempt unable to complete at all while
+       the very phone that clicked the button stays connected. Reverted to
+       plain `connectToWifi()` (forces `WIFI_STA` immediately, drops the
+       AP and any clients up front) but kept the real fix from the first
+       pass: on failure, explicitly calls `startAccessPoint()` again
+       rather than leaving the device stranded.
+    All bench-verified on real hardware through the whole saga - multiple
+    flash cycles, the user directly on the AP reporting each symptom live,
+    each root cause confirmed via targeted logging rather than guessed at.
 - [x] **Stepper Configuration**: remove the help-text paragraph above
   Homing Acceleration.
 - [x] **Settings tab**: fold Channel Configuration and LED Configuration
