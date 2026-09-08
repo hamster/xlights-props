@@ -74,9 +74,8 @@
 // this list has drifted stale before - ALL_TUNABLE_NAMES in
 // tuning_handler.cpp is the actual source of truth):
 //   normalSpeed, normalAccel, trackEnabled, trackThreshold,
-//   trackSpeed, trackAccel, trackMaxLag, trackMode, coalesceMs,
-//   coalesceSteps, streamRateWindow, streamSettle, compactLog, protocolDebug,
-//   homeSpeed, homeAccel, lookaheadSteps, lookaheadSettle, pidKp,
+//   trackSpeed, trackAccel, trackMaxLag, trackMode, compactLog, protocolDebug,
+//   homeSpeed, homeAccel, pidKp,
 //   pidKd, pidDFilterWeight, pidMaxSpeed, pidAccel, pidDeadband,
 //   pidReengageThreshold, pidFeedforward, pidFfWindowMs, pidLookaheadMs,
 //   pidTickMs, pidLogMs, tmcRunCurrent, tmcStallEnabled, positionRequest,

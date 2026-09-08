@@ -96,8 +96,8 @@ extern FastAccelStepper *stepper;
 // Which way a continuous-run (runForward()/runBackward(), NOT moveTo())
 // tracking mode currently intends to be moving: 0 = no continuous run in
 // flight (moveTo()-based motion, or genuinely idle), 1 = forward commanded,
-// -1 = backward commanded. Set by TRACK_MODE_STREAMING and TRACK_MODE_PID
-// (main.cpp) immediately alongside every runForward()/runBackward() call,
+// -1 = backward commanded. Set by TRACK_MODE_PID (main.cpp) immediately
+// alongside every runForward()/runBackward() call,
 // and cleared back to 0 whenever that continuous run ends (forceStop(),
 // settling into moveTo() at the deadband, or leaving the mode).
 //
@@ -200,56 +200,42 @@ extern int stepperTrackAccelConfig;      // steps/s^2 - keep well below stepperA
 // profile is used regardless, to resync rather than drift indefinitely.
 extern int stepperTrackMaxLagConfig;     // steps
 
-// Which motion strategy handles DDP position updates. All three still
-// respect stepperTrackThresholdConfig/stepperTrackMaxLagConfig to pick
-// tracking vs. normal speed/accel; they differ in *how* new targets get
-// committed to the stepper. Added after bench data showed the jerkiness
-// wasn't really an accel/speed tuning problem: moveTo() always plans to
-// decelerate to a full stop at whatever target it's given, and since a
-// tracking-mode target is only ~60-120 steps further than the last one,
-// the motor is almost always within its own stopping distance of the
-// current target - so it's constantly "in the process of stopping,"
-// never truly cruising, regardless of how gentle the accel is tuned.
+// Which motion strategy handles DDP position updates. Both still respect
+// stepperTrackThresholdConfig/stepperTrackMaxLagConfig to pick tracking vs.
+// normal speed/accel (Direct only - PID has its own closed-loop control
+// instead). Three intermediate strategies - Coalesce (batch small updates
+// into fewer, larger moves), Streaming (continuous runForward()/
+// runBackward() at an estimated rate instead of aiming to stop at each tiny
+// target), and Lookahead (aim moveTo() past the target so it never plans to
+// stop) - were built and bench-compared against Direct after log analysis
+// showed the jerkiness wasn't really an accel/speed tuning problem:
+// moveTo() always plans to decelerate to a full stop at whatever target
+// it's given, and since a tracking-mode target is only ~60-120 steps
+// further than the last one, the motor is almost always within its own
+// stopping distance of the current target - so it's constantly "in the
+// process of stopping," never truly cruising, regardless of how gentle the
+// accel is tuned. Streaming was shelved (2026-08-30) after repeatedly
+// stalling/freezing the trolley on the bench across two confirmed-and-fixed
+// bugs plus a third, unresolved instability; Coalesce performed nearly
+// identically to Direct in the one bench comparison it got; Lookahead was
+// never bench-tested at all. All three were removed entirely 2026-09-07
+// once PID proved out as the real answer to the jerkiness question - see
+// TODO.md for the full history if this reasoning ever needs revisiting.
 enum StepperTrackMode {
   TRACK_MODE_DIRECT = 0,     // Current/original behavior: moveTo(new target) on every DDP packet.
-  TRACK_MODE_COALESCE = 1,   // Batch several close updates into one less-frequent, larger moveTo(),
-                              // so each move has real distance to accelerate through before planning a stop.
-  TRACK_MODE_STREAMING = 2,  // While updates keep arriving, run continuously (runForward/runBackward) at a
-                              // speed estimated from the recent rate of DDP change, instead of aiming to
-                              // stop at each tiny target; snaps to an exact moveTo() once updates go quiet.
-                              // Clamped to [0, bottomPosition] every step as a hard safety net - a rate-
-                              // based estimate has no built-in "never overshoot" guarantee the way
-                              // moveTo() does, confirmed by simulation showing exactly this failure mode.
-                              // SHELVED (2026-08-30): repeatedly stalled/froze the trolley on the bench
-                              // across two separate confirmed-and-fixed bugs, plus a third unresolved
-                              // instability (the stepper command queue appearing to wedge for 15+ seconds
-                              // at a time) that survived both fixes. Not recommended - see TODO.md.
-  TRACK_MODE_LOOKAHEAD = 3,  // Like Direct - still dispatches via moveTo(), the same well-tested path
-                              // Direct/Coalesce use, not Streaming's separate runForward()/runBackward()
-                              // path - but instead of aiming at the literal commanded position, aims at
-                              // that position plus stepperLookaheadStepsConfig further in the current
-                              // direction of travel (clamped to [0, bottomPosition], so moveTo() itself
-                              // never overshoots - no external clamp-and-forceStop() safety net needed,
-                              // unlike Streaming). Because the target is always artificially far ahead,
-                              // the ramp generator has no reason to plan a decelerate-to-stop while
-                              // updates keep arriving - it just keeps accelerating/cruising. Snaps to an
-                              // exact moveTo() at the true commanded position once updates go quiet
-                              // (stepperLookaheadSettleMsConfig), same idea as Streaming's settle, without
-                              // Streaming's separate code path or its unresolved instability.
   TRACK_MODE_PID = 4         // Added 2026-09-06, replacing the discrete normal/tracking-profile switch
                               // with real closed-loop control: error = commanded position (read fresh
                               // every tick from positionRequest, not cached) minus getCurrentPosition()
                               // drives a PID loop whose output is the stepper's target speed
-                              // (magnitude+direction), applied via the same continuous
-                              // runForward()/runBackward()/applySpeedAcceleration() plumbing
-                              // TRACK_MODE_STREAMING already uses (including its hard-won fixes: wait
-                              // for forceStop() to actually finish before restarting; re-apply
-                              // speed/accel every tick since FastAccelStepper only picks up new values
-                              // on the next move/moveTo/runForward/runBackward/applySpeedAcceleration()
-                              // call). Snaps to an exact moveTo() once |error| <= stepperPidDeadbandConfig,
-                              // rather than needing a "gone quiet" timer the way Streaming/Lookahead do -
-                              // PID's own error naturally shrinks to that point as it converges, it
-                              // doesn't need to infer "probably done" from elapsed time.
+                              // (magnitude+direction), applied via continuous
+                              // runForward()/runBackward()/applySpeedAcceleration() plumbing (with its own
+                              // hard-won fixes: wait for forceStop() to actually finish before restarting;
+                              // re-apply speed/accel every tick since FastAccelStepper only picks up new
+                              // values on the next move/moveTo/runForward/runBackward/
+                              // applySpeedAcceleration() call). Snaps to an exact moveTo() once
+                              // |error| <= stepperPidDeadbandConfig, rather than needing a "gone quiet"
+                              // timer - PID's own error naturally shrinks to that point as it converges,
+                              // it doesn't need to infer "probably done" from elapsed time.
                               //
                               // Because it reads positionRequest directly every tick instead of only
                               // reacting to a *new* DDP value, this mode is structurally immune to the
@@ -369,8 +355,8 @@ extern bool stepperPidFeedforwardConfig;
 extern int stepperPidFfWindowMsConfig;
 
 // ms - width of a plain moving-average window smoothing the target the
-// P-term reacts to (NOT the same thing as TRACK_MODE_LOOKAHEAD below,
-// which is a different mode entirely - this is PID-specific, hence the
+// P-term reacts to (NOT the same thing as the old TRACK_MODE_LOOKAHEAD
+// tracking mode, removed 2026-09-07 - this is PID-specific, hence the
 // name). 0 = off (react to the raw, instantaneous target, original
 // behavior). See updatePidMode()'s pTermTarget block (main.cpp) for the
 // full design and why this is safe in a way the shelved pidSmoothTarget
@@ -379,23 +365,6 @@ extern int stepperPidFfWindowMsConfig;
 // Trades roughly half this value in added latency for a smoother
 // reference; spend deliberately against the frame-lag budget.
 extern int stepperPidLookaheadMsConfig;
-
-// TRACK_MODE_LOOKAHEAD parameters
-extern int stepperLookaheadStepsConfig;     // steps - how far beyond the commanded position to aim, in the
-                                              // current direction of travel. Must exceed the worst-case
-                                              // stopping distance at the tracking profile's speed/accel
-                                              // (speed^2 / (2*accel)) or the ramp generator can still catch
-                                              // up to the extended target and plan a decel anyway.
-extern int stepperLookaheadSettleMsConfig;  // ms - quiet period (no new DDP command) before snapping to
-                                              // the exact final commanded position
-
-// TRACK_MODE_COALESCE parameters
-extern int stepperCoalesceMsConfig;     // ms - minimum time between committed moves
-extern int stepperCoalesceStepsConfig;  // steps - accumulated delta that forces an early commit
-
-// TRACK_MODE_STREAMING parameters
-extern int stepperStreamRateWindowMsConfig;  // ms - window for estimating rate of DDP position change
-extern int stepperStreamSettleMsConfig;      // ms - quiet period (no new DDP command) before snapping to the exact final position
 
 // Set by handleSaveStepper() instead of writing to flash immediately, since
 // a Preferences write briefly disables the flash cache and FastAccelStepper's

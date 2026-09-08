@@ -16,10 +16,13 @@ gain tuning, and validating against a real DDP stream).
 
 ## Compact Motion Log columns
 
-One CSV line per processed DDP command (Direct/Coalesce/Lookahead) or
-~every 50ms while moving (the periodic tick - all modes except Streaming,
-which self-logs on its own schedule): `ms,ddpVal,cmdPos,curPos,delta,lag,
+One CSV line per processed DDP command (Direct mode) or ~every 50ms while
+moving (the periodic tick - PID self-logs on its own schedule instead, see
+`pidLogMsConfig`): `ms,ddpVal,cmdPos,curPos,delta,lag,
 profile,curSpeedHz,targetSpeedHz,encoderCount,sgResult,switchTripped`.
+(Coalesce/Streaming/Lookahead modes existed earlier in this project and are
+mentioned in some of the dated session logs in this directory, but were
+removed entirely 2026-09-07 - Direct and PID are the only modes left.)
 
 - `ddpVal` - the raw DDP-decoded value (0-255, or 0-65535 in 16-bit mode)
   as received - added to confirm/rule out network-layer causes for a

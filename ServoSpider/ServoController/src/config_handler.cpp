@@ -51,12 +51,6 @@ static const ConfigField CONFIG_FIELDS[] = {
     {"stepTrackAccel", CF_INT, false},
     {"stepTrackMaxLag", CF_INT, false},
     {"stepTrackMode", CF_INT, false},
-    {"stepCoalesceMs", CF_INT, false},
-    {"stepCoalesceSt", CF_INT, false},
-    {"stepStreamRateW", CF_INT, false},
-    {"stepStreamSettl", CF_INT, false},
-    {"stepLookaheadSt", CF_INT, false},
-    {"stepLookaheadMs", CF_INT, false},
 
     {"protocol", CF_INT, false},
     {"stepperControl", CF_BOOL, false},
@@ -108,12 +102,6 @@ static String getFieldValue(const char* key) {
   if (!strcmp(key, "stepTrackAccel")) return String(stepperTrackAccelConfig);
   if (!strcmp(key, "stepTrackMaxLag")) return String(stepperTrackMaxLagConfig);
   if (!strcmp(key, "stepTrackMode")) return String(stepperTrackModeConfig);
-  if (!strcmp(key, "stepCoalesceMs")) return String(stepperCoalesceMsConfig);
-  if (!strcmp(key, "stepCoalesceSt")) return String(stepperCoalesceStepsConfig);
-  if (!strcmp(key, "stepStreamRateW")) return String(stepperStreamRateWindowMsConfig);
-  if (!strcmp(key, "stepStreamSettl")) return String(stepperStreamSettleMsConfig);
-  if (!strcmp(key, "stepLookaheadSt")) return String(stepperLookaheadStepsConfig);
-  if (!strcmp(key, "stepLookaheadMs")) return String(stepperLookaheadSettleMsConfig);
 
   if (!strcmp(key, "protocol")) return String((int)protocolConfig);
   if (!strcmp(key, "stepperControl")) return stepperControlEnabled ? "1" : "0";
@@ -171,12 +159,6 @@ static bool setFieldValue(const char* key, const String& value, bool& isStepperF
   if (!strcmp(key, "stepTrackAccel")) { stepperTrackAccelConfig = i; isStepperField = true; return true; }
   if (!strcmp(key, "stepTrackMaxLag")) { stepperTrackMaxLagConfig = i; isStepperField = true; return true; }
   if (!strcmp(key, "stepTrackMode")) { stepperTrackModeConfig = i; isStepperField = true; return true; }
-  if (!strcmp(key, "stepCoalesceMs")) { stepperCoalesceMsConfig = i; isStepperField = true; return true; }
-  if (!strcmp(key, "stepCoalesceSt")) { stepperCoalesceStepsConfig = i; isStepperField = true; return true; }
-  if (!strcmp(key, "stepStreamRateW")) { stepperStreamRateWindowMsConfig = i; isStepperField = true; return true; }
-  if (!strcmp(key, "stepStreamSettl")) { stepperStreamSettleMsConfig = i; isStepperField = true; return true; }
-  if (!strcmp(key, "stepLookaheadSt")) { stepperLookaheadStepsConfig = i; isStepperField = true; return true; }
-  if (!strcmp(key, "stepLookaheadMs")) { stepperLookaheadSettleMsConfig = i; isStepperField = true; return true; }
 
   if (!strcmp(key, "protocol")) { protocolConfig = (protocolType)i; preferences.putInt("protocol", (int)protocolConfig); return true; }
   if (!strcmp(key, "stepperControl")) { stepperControlEnabled = b; preferences.putBool("stepperControl", stepperControlEnabled); return true; }

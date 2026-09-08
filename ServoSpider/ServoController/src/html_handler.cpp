@@ -90,12 +90,9 @@ void handleRoot() {
   page.replace("{{STEPPER_TRACK_MAX_LAG}}", String(stepperTrackMaxLagConfig));
   page.replace("{{TRACK_MODE_DIRECT_SEL}}", stepperTrackModeConfig == TRACK_MODE_DIRECT ? "selected" : "");
   page.replace("{{TRACK_MODE_PID_SEL}}", stepperTrackModeConfig == TRACK_MODE_PID ? "selected" : "");
-  // Coalesce/Streaming/Lookahead are no longer offered in the web UI (Wave 4,
-  // 2026-09-07 - "we just have Direct mode and PID") but remain implemented
-  // and reachable via $SET/GET /tunable trackMode=1/2/3 for bench work - see
-  // TODO.md. Their own config values (coalesceMs, streamRateWindow,
-  // lookaheadSteps, etc.) still load/save via NVS same as always, just have
-  // no Settings-page fields to edit them with anymore.
+  // Coalesce/Streaming/Lookahead removed entirely 2026-09-07 ("we just have
+  // Direct mode and PID") - see TODO.md and StepperTrackMode's declaration
+  // comment (stepper_handler.h) for the full history.
 
   // Protocol configuration values
   page.replace("{{STEPPER_CONTROL_CHECKED}}", stepperControlEnabled ? "checked" : "");
@@ -242,24 +239,6 @@ void handleSaveStepper() {
     }
     if (server.hasArg("stepperTrackMode")) {
       stepperTrackModeConfig = server.arg("stepperTrackMode").toInt();
-    }
-    if (server.hasArg("stepperCoalesceMs")) {
-      stepperCoalesceMsConfig = server.arg("stepperCoalesceMs").toInt();
-    }
-    if (server.hasArg("stepperCoalesceSteps")) {
-      stepperCoalesceStepsConfig = server.arg("stepperCoalesceSteps").toInt();
-    }
-    if (server.hasArg("stepperStreamRateWindow")) {
-      stepperStreamRateWindowMsConfig = server.arg("stepperStreamRateWindow").toInt();
-    }
-    if (server.hasArg("stepperStreamSettle")) {
-      stepperStreamSettleMsConfig = server.arg("stepperStreamSettle").toInt();
-    }
-    if (server.hasArg("stepperLookaheadSteps")) {
-      stepperLookaheadStepsConfig = server.arg("stepperLookaheadSteps").toInt();
-    }
-    if (server.hasArg("stepperLookaheadSettle")) {
-      stepperLookaheadSettleMsConfig = server.arg("stepperLookaheadSettle").toInt();
     }
 
     // Config variables are live immediately - the DDP position-handling

@@ -69,21 +69,21 @@ individual entries below for what each one was.
   20-50ms hot-path rate that actually caused the crash. `stepper_handler.cpp`
   and `led_handler.cpp` (the two files that run every `loop()` iteration
   during real motion/LED updates) have zero matches at all.
-- [ ] **Consolidate the three near-identical throttled-retry
+- [ ] **Consolidate the two remaining near-identical throttled-retry
   implementations** - homing's `retryMoveIfDied()` (`stepper_handler.cpp`,
-  `static`/file-local), PID's hand-rolled equivalent
-  (`lastPidRunRetryMs`/`lastPidHystRetryMs` in `main.cpp`), and Streaming's
-  own (less-hardened - never got the `genuinelyRunning`-based fix the other
-  two did). Real duplication, and worth re-examining together given how
+  `static`/file-local) and PID's hand-rolled equivalent
+  (`lastPidRunRetryMs`/`lastPidHystRetryMs` in `main.cpp`). (A third,
+  Streaming's own less-hardened version, was removed along with the rest of
+  Streaming mode, 2026-09-07 - see the Coalesce/Streaming/Lookahead removal
+  entry below.) Real duplication, and worth re-examining together given how
   much was learned this project about `isRunning()`/
   `isRampGeneratorActive()` both being unreliable trust signals.
   **Reclassified out of "cheap and mechanical," 2026-09-07**: on closer
-  look this touches battle-tested, delicately-fixed code in three
-  different call patterns (homing's search-continuation, PID's
-  direction-aware continuous-run retry, Streaming's rate-based retry) -
-  the TODO history below is full of "found the hard way" bugs in exactly
-  this logic. Real risk of a silent regression, not a quick refactor -
-  treat as Wave 3/design-level work, not Wave 2.
+  look this touches battle-tested, delicately-fixed code in two different
+  call patterns (homing's search-continuation, PID's direction-aware
+  continuous-run retry) - the TODO history below is full of "found the hard
+  way" bugs in exactly this logic. Real risk of a silent regression, not a
+  quick refactor - treat as Wave 3/design-level work, not Wave 2.
 - [ ] `pidReengageThreshold`/`RAMMED_STEP_TOLERANCE` (both 150) were chosen
   by feel (matched to each other, and to the DDP-quantization math) rather
   than an independent sweep. Partial progress, 2026-09-07: `pidReengageThreshold=150`
@@ -224,13 +224,31 @@ individual entries below for what each one was.
   - [x] **Tracking Motion Strategy dropdown simplified to Direct/PID only**
     ("we just have Direct mode and PID," the user's words) - Coalesce/
     Streaming/Lookahead options and their fields-groups/paragraphs removed
-    from `web/index.html`. Backend untouched: `TRACK_MODE_COALESCE/
-    STREAMING/LOOKAHEAD` remain fully implemented and reachable via
-    `$SET`/`GET /tunable trackMode=1/2/3` for bench work - only the
-    Settings-page dropdown lost them. PID (`trackMode=4`) added to the
-    dropdown for the first time (`{{TRACK_MODE_PID_SEL}}`) - it was
-    previously missing from the UI entirely despite being the production
-    default since earlier in Wave 3.
+    from `web/index.html`. At this point (first pass, same day) the backend
+    was left untouched - `TRACK_MODE_COALESCE/STREAMING/LOOKAHEAD` still
+    fully implemented, still reachable via `$SET`/`GET /tunable
+    trackMode=1/2/3`. **Superseded a few messages later the same session**:
+    asked directly "is Coalesce/Streaming/Lookahead bench tested?", which
+    surfaced that Lookahead never was (only Coalesce and Streaming had real
+    bench evidence, one good, one bad) - given that, and now that Direct/PID
+    cover the real use cases, the user asked to remove all three **from the
+    code entirely**, not just the UI. Done: `updateCoalesceMode()`,
+    `updateStreamingMode()`, `handleLookaheadModeCommand()`,
+    `updateLookaheadMode()`, all their state variables, NVS keys
+    (`stepCoalesceMs/St`, `stepStreamRateW/Settl`, `stepLookaheadSt/Ms`),
+    `/config` GET/POST entries, and `$SET`/`GET /tunable` names all removed.
+    The `StepperTrackMode` enum now only has `TRACK_MODE_DIRECT=0` and
+    `TRACK_MODE_PID=4` (gap between them left alone on purpose - no
+    renumbering, so an already-persisted `trackMode=4` on the bench device
+    keeps meaning PID). A device with an old saved `trackMode=1/2/3` now
+    gets an explicit boot-time fallback to Direct with a logged warning,
+    instead of silently falling through the dispatch switch's default case
+    with no explanation. Verified: full rebuild clean (no errors/warnings),
+    see the bench re-verification note below for the on-hardware test.
+    PID (`trackMode=4`) added to the dropdown for the first time
+    (`{{TRACK_MODE_PID_SEL}}`) as part of the same pass - it was previously
+    missing from the UI entirely despite being the production default since
+    earlier in Wave 3.
   - Still open, not done this pass: a real **PID tuning parameters**
     section - selecting PID from the dropdown and saving persists the mode
     choice, but none of the ~13 `pid*` tunables (see

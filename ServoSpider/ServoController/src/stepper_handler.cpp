@@ -89,17 +89,6 @@ int stepperTrackMaxLagConfig = 3000;
 // stays DIRECT (the original/current behavior) so flashing this firmware
 // doesn't change anything until a mode is explicitly picked in Settings.
 int stepperTrackModeConfig = TRACK_MODE_DIRECT;
-int stepperCoalesceMsConfig = 250;
-int stepperCoalesceStepsConfig = 400;
-int stepperStreamRateWindowMsConfig = 250;
-int stepperStreamSettleMsConfig = 150;
-
-// TRACK_MODE_LOOKAHEAD defaults. 5000 steps comfortably exceeds the worst-case
-// stopping distance (speed^2/(2*accel)) at the default tracking profile
-// (6500 Hz / 5000 steps/s^2 -> 4225 steps) - re-check this margin if either
-// is tuned to a lower accel or higher speed than the defaults.
-int stepperLookaheadStepsConfig = 5000;
-int stepperLookaheadSettleMsConfig = 150;
 
 // TRACK_MODE_PID defaults - superseded twice since first tuned; see
 // TODO.md's "PID gain tuning", "PID damping sweep", and "Time-budget
@@ -270,12 +259,6 @@ void persistStepperSettingsIfPending() {
   preferences.putInt("stepTrackAccel", stepperTrackAccelConfig);
   preferences.putInt("stepTrackMaxLag", stepperTrackMaxLagConfig);
   preferences.putInt("stepTrackMode", stepperTrackModeConfig);
-  preferences.putInt("stepCoalesceMs", stepperCoalesceMsConfig);
-  preferences.putInt("stepCoalesceSt", stepperCoalesceStepsConfig);
-  preferences.putInt("stepStreamRateW", stepperStreamRateWindowMsConfig);
-  preferences.putInt("stepStreamSettl", stepperStreamSettleMsConfig);
-  preferences.putInt("stepLookaheadSt", stepperLookaheadStepsConfig);
-  preferences.putInt("stepLookaheadMs", stepperLookaheadSettleMsConfig);
 
   stepperSettingsPendingSave = false;
   Serial.println("Stepper settings persisted to flash (motor now idle)");
@@ -690,9 +673,9 @@ void updateHoming() {
     //  - getCurrentSpeedInMilliHz() > 0: kept as a secondary check for the
     //    (probably rare) case where target isn't meaningful for some other
     //    reason but real motion is already measurably underway.
-    //  - continuousRunDirection > 0: required for TRACK_MODE_STREAMING and
-    //    TRACK_MODE_PID, which drive via runForward()/runBackward() rather
-    //    than moveTo() - targetPos() isn't kept meaningful during a
+    //  - continuousRunDirection > 0: required for TRACK_MODE_PID, which
+    //    drives via runForward()/runBackward() rather than moveTo() -
+    //    targetPos() isn't kept meaningful during a
     //    continuous "keep running" move (see the note below), and speed can
     //    still legitimately read 0 for the first tick or two while the ramp
     //    is just starting, so neither of the first two checks can be

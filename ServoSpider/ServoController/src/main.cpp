@@ -33,30 +33,6 @@ float lastCommandedTargetPosition = 0;  // Previous DDP-commanded target, steps 
 // Blank time tracking
 bool stepperBlanked = false;  // Track if stepper has been blanked
 
-// --- TRACK_MODE_COALESCE state ---
-unsigned long coalesceLastCommitMs = 0;
-float coalescePendingTarget = 0;
-bool coalesceHasPending = false;
-
-// --- TRACK_MODE_STREAMING state ---
-struct StreamHistoryPoint { unsigned long ms; float pos; };
-const int STREAM_HISTORY_SIZE = 6;
-StreamHistoryPoint streamHistory[STREAM_HISTORY_SIZE];
-int streamHistoryCount = 0;
-unsigned long lastDdpCommandMs = 0;
-float streamRawTarget = 0;
-bool streamSettled = true;
-int streamCurrentDirection = 0;  // -1, 0, 1
-unsigned long lastStreamUpdateMs = 0;
-
-// --- TRACK_MODE_LOOKAHEAD state ---
-float lookaheadRawTarget = 0;       // true commanded position (calcPosition() output) - NOT the
-                                     // artificially-extended moveTo() target actually sent to the
-                                     // stepper; this is what logging/metrics should show as "commanded"
-int lookaheadDirection = 0;         // -1, 0, 1 - direction implied by the most recent real change in target
-bool lookaheadSettled = true;
-unsigned long lastLookaheadCommandMs = 0;
-
 // --- TRACK_MODE_PID state --- (see that enum value's declaration comment, stepper_handler.h)
 bool pidSettled = true;
 unsigned long lastPidUpdateMs = 0;
@@ -327,32 +303,23 @@ void logCompactMotionPidThrottled(uint16_t ddpVal, int cmdPos, int curPos, int d
 }
 
 // Periodic compact-log tick, independent of the DDP/tracking-mode dispatch
-// below - Direct and Coalesce only log once at the moment a move is
-// committed, so a single large move (a big DDP jump, or a diagnostic
-// moveTo() like $CHECKSTEPS's that never goes through this dispatch at
-// all) previously produced only one data point instead of a full
-// speed-over-time trace. Streaming and PID modes already log every ~20ms
-// on their own (updateStreamingMode()/updatePidMode()), so this is skipped
-// for both to avoid duplicate/conflicting rows. Call every loop()
+// below - Direct mode only logs once at the moment a move is committed, so
+// a single large move (a big DDP jump, or a diagnostic moveTo() like
+// $CHECKSTEPS's that never goes through this dispatch at all) previously
+// produced only one data point instead of a full speed-over-time trace.
+// PID mode already logs every ~20ms on its own (updatePidMode()), so this
+// is skipped for it to avoid duplicate/conflicting rows. Call every loop()
 // iteration; rate-limited internally.
 unsigned long lastPeriodicLogMs = 0;
 void logCompactMotionPeriodic() {
-  if (!compactLogEnabled || stepperTrackModeConfig == TRACK_MODE_STREAMING ||
-      stepperTrackModeConfig == TRACK_MODE_PID) return;
+  if (!compactLogEnabled || stepperTrackModeConfig == TRACK_MODE_PID) return;
   if (stepper == NULL || !stepper->isRunning()) return;
   unsigned long now = millis();
   if (now - lastPeriodicLogMs < 50) return;
   lastPeriodicLogMs = now;
 
   int curPos = stepper->getCurrentPosition();
-  // TRACK_MODE_LOOKAHEAD's actual stepper target is artificially extended
-  // past the true commanded position (see StepperTrackMode's declaration
-  // comment) - show the real commanded position here instead, or every
-  // plot/metric derived from this log would show a commanded curve that
-  // jumps ahead of and disagrees with what was actually asked for.
-  int cmdPos = (stepperTrackModeConfig == TRACK_MODE_LOOKAHEAD)
-                   ? (int)lookaheadRawTarget
-                   : (int)stepper->targetPos();
+  int cmdPos = (int)stepper->targetPos();
   // Heuristic, display-only: tracking and normal accel are expected to
   // differ (that's the whole point of the tracking profile), so use
   // acceleration rather than speed to tell them apart - trackSpeed and
@@ -389,169 +356,6 @@ void handleDirectModeCommand(uint16_t ddpVal, float newTarget) {
 
   stepper->moveTo((int)newTarget);
   stepperBlanked = false;
-}
-
-// TRACK_MODE_COALESCE: called every loop() iteration. Batches consecutive
-// small DDP updates into one less-frequent, larger moveTo(), so each move
-// has real distance to accelerate through before it needs to plan a stop -
-// see stepperCoalesceMsConfig/stepperCoalesceStepsConfig's declaration.
-void updateCoalesceMode() {
-  if (!coalesceHasPending) return;
-
-  unsigned long now = millis();
-  bool timeElapsed = (now - coalesceLastCommitMs) >= (unsigned long)stepperCoalesceMsConfig;
-  bool bigEnough = fabs(coalescePendingTarget - lastCommandedTargetPosition) >= stepperCoalesceStepsConfig;
-  if (!timeElapsed && !bigEnough) return;
-
-  int curPosBeforeMove = stepper->getCurrentPosition();
-  int32_t curSpeedBeforeMove = stepper->getCurrentSpeedInMilliHz();
-  float commandDeltaForLog = fabs(coalescePendingTarget - lastCommandedTargetPosition);
-  float lagForLog = fabs(coalescePendingTarget - (float)curPosBeforeMove);
-
-  int targetSpeedHz;
-  bool useTracking = applyTrackingProfileDecision(coalescePendingTarget, lastCommandedTargetPosition, targetSpeedHz);
-  lastCommandedTargetPosition = coalescePendingTarget;
-
-  logCompactMotion(oldPositionRequest, (int)coalescePendingTarget, curPosBeforeMove,
-                    (int)commandDeltaForLog, (int)lagForLog, useTracking, curSpeedBeforeMove, targetSpeedHz);
-
-  stepper->moveTo((int)coalescePendingTarget);
-  stepperBlanked = false;
-  coalesceLastCommitMs = now;
-  coalesceHasPending = false;
-}
-
-// TRACK_MODE_STREAMING: called every loop() iteration. While DDP updates
-// keep arriving, runs continuously (runForward/runBackward) at a speed
-// estimated from the recent rate of DDP position change, instead of
-// aiming to stop at each tiny target; snaps to an exact moveTo() once
-// updates go quiet for stepperStreamSettleMsConfig. The position clamp
-// below is a hard safety net: a rate-based estimate has no built-in
-// "never overshoot" guarantee the way moveTo() does - confirmed by
-// simulation against real logged DDP data showing exactly this failure
-// mode before this clamp was added.
-// Set whenever this function calls forceStop() itself, so the restart logic
-// below waits for that stop to genuinely finish before issuing a fresh
-// runForward()/runBackward() - see the full explanation at the restart site.
-static bool streamStopSettling = false;
-
-void updateStreamingMode() {
-  if (stepper->isRunning()) {
-    int curPos = stepper->getCurrentPosition();
-    // Strictly past the boundary, not at-or-past: sitting exactly at 0 or
-    // bottomPosition is the normal resting position at either extreme (every
-    // run starts there), not an overshoot. Using <=/>= here was confirmed on
-    // the bench (2026-08-30) to force-stop the instant a move starts from
-    // position 0. Only genuinely overshooting past either boundary should
-    // trip the clamp.
-    if (curPos < 0 || curPos > bottomPosition) {
-      stepper->forceStop();
-      streamStopSettling = true;
-      continuousRunDirection = 0;
-    }
-  }
-
-  unsigned long now = millis();
-  if (now - lastStreamUpdateMs < 20) return;  // rate-limit this control loop
-  lastStreamUpdateMs = now;
-
-  unsigned long quietMs = now - lastDdpCommandMs;
-  if (!streamSettled && quietMs >= (unsigned long)stepperStreamSettleMsConfig) {
-    // Gone quiet - land exactly on the final commanded position.
-    int curPosBeforeMove = stepper->getCurrentPosition();
-    int32_t curSpeedBeforeMove = stepper->getCurrentSpeedInMilliHz();
-    float commandDeltaForLog = fabs(streamRawTarget - lastCommandedTargetPosition);
-    float lagForLog = fabs(streamRawTarget - (float)curPosBeforeMove);
-
-    int targetSpeedHz;
-    bool useTracking = applyTrackingProfileDecision(streamRawTarget, lastCommandedTargetPosition, targetSpeedHz);
-    lastCommandedTargetPosition = streamRawTarget;
-
-    logCompactMotion(oldPositionRequest, (int)streamRawTarget, curPosBeforeMove,
-                      (int)commandDeltaForLog, (int)lagForLog, useTracking, curSpeedBeforeMove, targetSpeedHz);
-
-    // Restore the hardcoded jumpStart for this moveTo()-based settle - see
-    // the runForward()/runBackward() call site below for why it's disabled
-    // while actually streaming (same fix as TRACK_MODE_PID, same root cause).
-    stepper->setJumpStart(JUMP_START_STEPS);
-    stepper->moveTo((int)streamRawTarget);
-    stepperBlanked = false;
-    streamSettled = true;
-    streamCurrentDirection = 0;
-    continuousRunDirection = 0;  // settling into moveTo() - not a continuous run anymore
-    return;
-  }
-
-  if (streamSettled || streamHistoryCount < 2) return;  // nothing to stream yet
-
-  StreamHistoryPoint &oldest = streamHistory[0];
-  StreamHistoryPoint &newest = streamHistory[streamHistoryCount - 1];
-  long dtMs = (long)(newest.ms - oldest.ms);
-  float estRateHzSigned = (dtMs > 0) ? (newest.pos - oldest.pos) / (dtMs / 1000.0f) : 0;
-
-  float maxTrackSpeed = (float)stepperTrackSpeedConfig;
-  if (estRateHzSigned > maxTrackSpeed) estRateHzSigned = maxTrackSpeed;
-  if (estRateHzSigned < -maxTrackSpeed) estRateHzSigned = -maxTrackSpeed;
-
-  int newDirection = (estRateHzSigned > 5) ? 1 : (estRateHzSigned < -5 ? -1 : 0);
-  uint32_t speedHz = (uint32_t)fabs(estRateHzSigned);
-  if (speedHz < 50) speedHz = 50;  // floor so runForward/runBackward always gets a sane nonzero speed
-
-  stepper->setAcceleration(stepperTrackAccelConfig);
-  stepper->setSpeedInHz(speedHz);
-
-  if (streamStopSettling) {
-    // A forceStop() was issued (above, or below on a prior tick) and hasn't
-    // been confirmed finished yet. FastAccelStepper's forceStop() is not
-    // guaranteed complete within a single tick (the library tracks this
-    // internally as an "incomplete immediate stop"), and re-issuing
-    // runForward()/runBackward() before the ramp generator has actually
-    // settled back to idle skips the ramp-up entirely - the new command
-    // just continues whatever speed the generator's internal state still
-    // reflects, commanding full target speed with no built-up momentum.
-    // Confirmed on the bench (2026-08-30): this is what actually stalled
-    // the motor ("moving too fast to get it started... no momentum built
-    // up yet so it could not actually move"), not just a log/UI artifact.
-    // So: once we've asked for a stop, wait for isRunning() to actually go
-    // false before allowing any restart below.
-    if (stepper->isRunning()) return;
-    streamStopSettling = false;
-  }
-
-  if (newDirection != streamCurrentDirection || !stepper->isRunning()) {
-    if (newDirection != 0) {
-      // Root-caused on the bench (2026-09-06, via TRACK_MODE_PID): setJumpStart()'s
-      // configured burst applies in the *wrong* direction when issued through
-      // runForward()/runBackward() instead of moveTo() - disabled here, restored
-      // for the moveTo()-based settle above.
-      stepper->setJumpStart(0);
-    }
-    if (newDirection > 0) {
-      stepper->runForward();
-    } else if (newDirection < 0) {
-      stepper->runBackward();
-    } else {
-      stepper->forceStop();
-      streamStopSettling = true;
-    }
-    streamCurrentDirection = newDirection;
-    continuousRunDirection = newDirection;  // see stepper_handler.h's declaration comment
-  } else {
-    // Already running in the same direction - per FastAccelStepper's own
-    // docs, setSpeedInHz()/setAcceleration() above only take effect after
-    // move/moveTo/runForward/runBackward/applySpeedAcceleration(), NOT on
-    // their own. Without this, only the very first speed estimate (the one
-    // in effect when runForward()/runBackward() was actually called) ever
-    // reached the motor - confirmed on the bench (2026-08-30): actual speed
-    // rode the ramp up to the configured max once and then never changed
-    // again for the rest of a 12s run, ignoring every subsequent (lower)
-    // rate estimate, producing a huge, growing position error.
-    stepper->applySpeedAcceleration();
-  }
-
-  logCompactMotion(oldPositionRequest, (int)streamRawTarget, stepper->getCurrentPosition(), 0,
-                    (int)fabs(streamRawTarget - stepper->getCurrentPosition()), true,
-                    stepper->getCurrentSpeedInMilliHz(), (int)speedHz);
 }
 
 // TRACK_MODE_PID: called every loop() iteration - see that enum value's
@@ -603,9 +407,8 @@ void updatePidMode() {
 
   if (stepper->isRunning()) {
     int curPos = stepper->getCurrentPosition();
-    // Same hard safety net TRACK_MODE_STREAMING uses - a continuously-
-    // driven PID output has no built-in "never overshoot" guarantee the
-    // way moveTo() does.
+    // A continuously-driven PID output has no built-in "never overshoot"
+    // guarantee the way moveTo() does, hence this hard clamp.
     //
     // Small tolerance, and doesn't re-trigger while already settling
     // (2026-09-07, found live testing feedforward against real
@@ -652,8 +455,9 @@ void updatePidMode() {
 
   unsigned long now = millis();
   // Configurable (2026-09-07 evening, see stepperPidTickMsConfig's
-  // declaration comment) - was a hardcoded 20 matching Streaming's own
-  // cadence. dt is still computed from real elapsed time regardless, so a
+  // declaration comment) - was a hardcoded 20, matching the now-removed
+  // Streaming mode's cadence (both were first built at the same time). dt
+  // is still computed from real elapsed time regardless, so a
   // faster configured tick just means updatePidMode() gets more chances to
   // run per second; an occasional overrun (a slow loop() elsewhere) still
   // reads out correctly instead of assuming exactly stepperPidTickMsConfig
@@ -952,9 +756,9 @@ void updatePidMode() {
   pidSettled = false;
 
   if (pidStopSettling) {
-    // See TRACK_MODE_STREAMING's identical wait - FastAccelStepper's
-    // forceStop() isn't guaranteed complete within one tick; restarting
-    // before it's actually settled skips the ramp-up entirely.
+    // FastAccelStepper's forceStop() isn't guaranteed complete within one
+    // tick; restarting before it's actually settled skips the ramp-up
+    // entirely.
     //
     // Checks genuinely-still-running (speed != 0), not plain isRunning()
     // (2026-09-07, found live testing feedforward against real
@@ -1053,7 +857,7 @@ void updatePidMode() {
 
   int newDirection = (speed > 0) ? 1 : (speed < 0 ? -1 : 0);
   uint32_t speedHz = (uint32_t)fabs(speed);
-  if (speedHz < 50) speedHz = 50;  // floor so runForward/runBackward always gets a sane nonzero speed, matches Streaming
+  if (speedHz < 50) speedHz = 50;  // floor so runForward/runBackward always gets a sane nonzero speed
 
   // A guard above zeroed the command: stop rather than fall through to the
   // run/applySpeedAcceleration() path below, which has no way to express
@@ -1182,8 +986,7 @@ void updatePidMode() {
     // Already running the right way - per FastAccelStepper's own docs,
     // setSpeedInHz()/setAcceleration() only take effect after a following
     // move/moveTo/runForward/runBackward/applySpeedAcceleration() call,
-    // not on their own - see TRACK_MODE_STREAMING's identical, hard-won
-    // fix for the real bug this caused there.
+    // not on their own.
     stepper->applySpeedAcceleration();
   }
 
@@ -1195,80 +998,6 @@ void updatePidMode() {
   // 96KB ring buffer in ~11s of continuous motion before this fix.
   logCompactMotionPidThrottled(positionRequest, (int)target, (int)currentPos, 0, (int)error,
                     true, stepper->getCurrentSpeedInMilliHz(), (int)speed);
-}
-
-// TRACK_MODE_LOOKAHEAD: called on every DDP command that changes the
-// commanded position - see StepperTrackMode's declaration comment for the
-// full rationale. Aims moveTo() at the true commanded position plus a
-// lookahead buffer further in the current direction of travel, instead of
-// the literal commanded position, so the ramp generator has no reason to
-// plan a decelerate-to-stop while updates keep arriving - unlike Direct
-// mode, which aims at the literal (nearby) target every time and is
-// therefore almost always within its own stopping distance of it.
-void handleLookaheadModeCommand(uint16_t ddpVal, float newTarget) {
-  if (newTarget > lookaheadRawTarget + 0.5f) {
-    lookaheadDirection = 1;
-  } else if (newTarget < lookaheadRawTarget - 0.5f) {
-    lookaheadDirection = -1;
-  }
-  // else: no real change in commanded position (or a sub-step rounding
-  // wobble) - keep whatever direction was already in effect.
-
-  float previousRawTarget = lookaheadRawTarget;
-  lookaheadRawTarget = newTarget;
-  lastLookaheadCommandMs = millis();
-  lookaheadSettled = false;
-
-  int curPosBeforeMove = stepper->getCurrentPosition();
-  int32_t curSpeedBeforeMove = stepper->getCurrentSpeedInMilliHz();
-  float commandDeltaForLog = fabs(newTarget - previousRawTarget);
-  float lagForLog = fabs(newTarget - (float)curPosBeforeMove);
-
-  int targetSpeedHz;
-  bool useTracking = applyTrackingProfileDecision(newTarget, previousRawTarget, targetSpeedHz);
-  lastCommandedTargetPosition = newTarget;
-
-  logCompactMotion(ddpVal, (int)newTarget, curPosBeforeMove, (int)commandDeltaForLog,
-                    (int)lagForLog, useTracking, curSpeedBeforeMove, targetSpeedHz);
-
-  float extendedTarget = newTarget + (float)(lookaheadDirection * stepperLookaheadStepsConfig);
-  if (extendedTarget < 0) extendedTarget = 0;
-  if (extendedTarget > bottomPosition) extendedTarget = (float)bottomPosition;
-
-  // moveTo() is authoritative about its own target - it will never drive
-  // the stepper past whatever position it's given, so clamping the target
-  // itself here is sufficient. No external clamp-and-forceStop() safety net
-  // needed the way Streaming's runForward()/runBackward() approach required
-  // (that clamp's own bug is what stalled the motor earlier this session).
-  stepper->moveTo((int32_t)extendedTarget);
-  stepperBlanked = false;
-}
-
-// TRACK_MODE_LOOKAHEAD: called every loop() iteration. handleLookaheadModeCommand()
-// above already keeps the stepper aimed at an extended target while updates
-// are arriving; this just watches for a quiet period (no new DDP command)
-// and then snaps to an exact moveTo() at the true final commanded position,
-// same idea as Streaming's settle logic.
-void updateLookaheadMode() {
-  if (lookaheadSettled) return;
-  unsigned long quietMs = millis() - lastLookaheadCommandMs;
-  if (quietMs < (unsigned long)stepperLookaheadSettleMsConfig) return;
-
-  int curPosBeforeMove = stepper->getCurrentPosition();
-  int32_t curSpeedBeforeMove = stepper->getCurrentSpeedInMilliHz();
-  float lagForLog = fabs(lookaheadRawTarget - (float)curPosBeforeMove);
-
-  int targetSpeedHz;
-  bool useTracking = applyTrackingProfileDecision(lookaheadRawTarget, lastCommandedTargetPosition, targetSpeedHz);
-  lastCommandedTargetPosition = lookaheadRawTarget;
-
-  logCompactMotion(oldPositionRequest, (int)lookaheadRawTarget, curPosBeforeMove, 0,
-                    (int)lagForLog, useTracking, curSpeedBeforeMove, targetSpeedHz);
-
-  stepper->moveTo((int32_t)lookaheadRawTarget);
-  stepperBlanked = false;
-  lookaheadSettled = true;
-  lookaheadDirection = 0;
 }
 
 // Uptime tracking
@@ -1350,12 +1079,18 @@ void setup() {
   stepperTrackAccelConfig = preferences.getInt("stepTrackAccel", stepperAccel / 4);
   stepperTrackMaxLagConfig = preferences.getInt("stepTrackMaxLag", 3000);
   stepperTrackModeConfig = preferences.getInt("stepTrackMode", TRACK_MODE_DIRECT);
-  stepperCoalesceMsConfig = preferences.getInt("stepCoalesceMs", 250);
-  stepperCoalesceStepsConfig = preferences.getInt("stepCoalesceSt", 400);
-  stepperStreamRateWindowMsConfig = preferences.getInt("stepStreamRateW", 250);
-  stepperStreamSettleMsConfig = preferences.getInt("stepStreamSettl", 150);
-  stepperLookaheadStepsConfig = preferences.getInt("stepLookaheadSt", 5000);
-  stepperLookaheadSettleMsConfig = preferences.getInt("stepLookaheadMs", 150);
+  // Coalesce/Streaming/Lookahead (trackMode 1/2/3) were removed entirely
+  // 2026-09-07 - a device that saved one of those values before this change
+  // would otherwise silently fall through the dispatch switch's default
+  // case and just behave as Direct with no indication why. Made explicit
+  // instead: warn once at boot and correct the in-RAM value (does not
+  // itself rewrite flash - the next real Stepper Settings save will).
+  if (stepperTrackModeConfig != TRACK_MODE_DIRECT && stepperTrackModeConfig != TRACK_MODE_PID) {
+    Serial.print("Saved trackMode=");
+    Serial.print(stepperTrackModeConfig);
+    Serial.println(" no longer exists (Coalesce/Streaming/Lookahead were removed) - falling back to Direct.");
+    stepperTrackModeConfig = TRACK_MODE_DIRECT;
+  }
 
   // Load protocol configuration. Sanitize against stale NVS values from
   // before ArtNet was removed, when the enum was NONE=0/ARTNET=1/DDP=2 - a
@@ -1538,27 +1273,6 @@ void loop() {
       // Which motion strategy handles this - see StepperTrackMode's
       // declaration comment for why there's more than one.
       switch (stepperTrackModeConfig) {
-        case TRACK_MODE_COALESCE:
-          coalescePendingTarget = position;
-          coalesceHasPending = true;
-          break;
-        case TRACK_MODE_STREAMING:
-          streamRawTarget = position;
-          lastDdpCommandMs = millis();
-          streamSettled = false;
-          if (streamHistoryCount < STREAM_HISTORY_SIZE) {
-            streamHistory[streamHistoryCount].ms = lastDdpCommandMs;
-            streamHistory[streamHistoryCount].pos = position;
-            streamHistoryCount++;
-          } else {
-            for (int i = 1; i < STREAM_HISTORY_SIZE; i++) streamHistory[i - 1] = streamHistory[i];
-            streamHistory[STREAM_HISTORY_SIZE - 1].ms = lastDdpCommandMs;
-            streamHistory[STREAM_HISTORY_SIZE - 1].pos = position;
-          }
-          break;
-        case TRACK_MODE_LOOKAHEAD:
-          handleLookaheadModeCommand(currentPositionRequest, position);
-          break;
         case TRACK_MODE_PID:
           // Deliberately no per-command handler - updatePidMode() (called
           // every loop() iteration below) reads positionRequest directly
@@ -1573,16 +1287,10 @@ void loop() {
     }
   }
 
-  // Per-loop-iteration processing for the batching/streaming/lookahead modes
-  // (no-op unless that mode is active and homed/not-homing) - see StepperTrackMode.
+  // Per-loop-iteration processing for PID (no-op unless it's active and
+  // homed/not-homing) - see StepperTrackMode.
   if (homed && !isHoming()) {
-    if (stepperTrackModeConfig == TRACK_MODE_COALESCE) {
-      updateCoalesceMode();
-    } else if (stepperTrackModeConfig == TRACK_MODE_STREAMING) {
-      updateStreamingMode();
-    } else if (stepperTrackModeConfig == TRACK_MODE_LOOKAHEAD) {
-      updateLookaheadMode();
-    } else if (stepperTrackModeConfig == TRACK_MODE_PID) {
+    if (stepperTrackModeConfig == TRACK_MODE_PID) {
       updatePidMode();
     }
   }

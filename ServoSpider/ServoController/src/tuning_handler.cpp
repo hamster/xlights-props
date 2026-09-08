@@ -37,16 +37,10 @@ static bool getTunable(const String& name, String& valueOut) {
   if (name == "trackAccel") { valueOut = String(stepperTrackAccelConfig); return true; }
   if (name == "trackMaxLag") { valueOut = String(stepperTrackMaxLagConfig); return true; }
   if (name == "trackMode") { valueOut = String(stepperTrackModeConfig); return true; }
-  if (name == "coalesceMs") { valueOut = String(stepperCoalesceMsConfig); return true; }
-  if (name == "coalesceSteps") { valueOut = String(stepperCoalesceStepsConfig); return true; }
-  if (name == "streamRateWindow") { valueOut = String(stepperStreamRateWindowMsConfig); return true; }
-  if (name == "streamSettle") { valueOut = String(stepperStreamSettleMsConfig); return true; }
   if (name == "compactLog") { valueOut = String(compactLogEnabled ? 1 : 0); return true; }
   if (name == "protocolDebug") { valueOut = String(protocolDebugConfig ? 1 : 0); return true; }
   if (name == "homeSpeed") { valueOut = String(stepperSpeedHomingConfig); return true; }
   if (name == "homeAccel") { valueOut = String(stepperAccelHomingConfig); return true; }
-  if (name == "lookaheadSteps") { valueOut = String(stepperLookaheadStepsConfig); return true; }
-  if (name == "lookaheadSettle") { valueOut = String(stepperLookaheadSettleMsConfig); return true; }
   // TRACK_MODE_PID - Kp/Kd are floats, unlike every other tunable here
   // (4 decimal places - these are small per-step/per-second gains where
   // integer precision would be far too coarse to tune usefully).
@@ -92,9 +86,8 @@ static bool getTunable(const String& name, String& valueOut) {
 
 static const char* ALL_TUNABLE_NAMES[] = {
   "normalSpeed", "normalAccel", "trackEnabled", "trackThreshold",
-  "trackSpeed", "trackAccel", "trackMaxLag", "trackMode", "coalesceMs",
-  "coalesceSteps", "streamRateWindow", "streamSettle", "compactLog", "protocolDebug",
-  "homeSpeed", "homeAccel", "lookaheadSteps", "lookaheadSettle",
+  "trackSpeed", "trackAccel", "trackMaxLag", "trackMode", "compactLog", "protocolDebug",
+  "homeSpeed", "homeAccel",
   "pidKp", "pidKd", "pidDFilterWeight", "pidMaxSpeed", "pidAccel", "pidDeadband", "pidReengageThreshold", "pidFeedforward", "pidFfWindowMs", "pidLookaheadMs", "pidTickMs", "pidLogMs",
   "tmcRunCurrent", "tmcStallEnabled", "positionRequest", "ddpRxLog", "ddpAck"
 };
@@ -114,14 +107,11 @@ static bool setTunable(const String& name, const String& valueStr) {
   if (name == "trackAccel") { stepperTrackAccelConfig = v; return true; }
   if (name == "trackMaxLag") { stepperTrackMaxLagConfig = v; return true; }
   // Reset regardless of which mode we're leaving/entering - a stale
-  // nonzero value left over from Streaming/PID would make updateHoming()'s
-  // switch-trip bounce filter (see continuousRunDirection's declaration
-  // comment) wrongly excuse a real trip in whatever mode comes next.
+  // nonzero value left over from a PID engagement would make
+  // updateHoming()'s switch-trip bounce filter (see continuousRunDirection's
+  // declaration comment) wrongly excuse a real trip in whatever mode comes
+  // next.
   if (name == "trackMode") { stepperTrackModeConfig = v; continuousRunDirection = 0; return true; }
-  if (name == "coalesceMs") { stepperCoalesceMsConfig = v; return true; }
-  if (name == "coalesceSteps") { stepperCoalesceStepsConfig = v; return true; }
-  if (name == "streamRateWindow") { stepperStreamRateWindowMsConfig = v; return true; }
-  if (name == "streamSettle") { stepperStreamSettleMsConfig = v; return true; }
   if (name == "compactLog") { compactLogEnabled = (v != 0); return true; }
   if (name == "protocolDebug") { protocolDebugConfig = (v != 0); return true; }
   // Applied fresh by startHoming()/HOMING_SETTLE each time a search
@@ -129,8 +119,6 @@ static bool setTunable(const String& name, const String& valueStr) {
   // immediate stepper call needed (matches every other tunable above).
   if (name == "homeSpeed") { stepperSpeedHomingConfig = v; return true; }
   if (name == "homeAccel") { stepperAccelHomingConfig = v; return true; }
-  if (name == "lookaheadSteps") { stepperLookaheadStepsConfig = v; return true; }
-  if (name == "lookaheadSettle") { stepperLookaheadSettleMsConfig = v; return true; }
   // TRACK_MODE_PID - Kp/Kd parsed as floats (toInt()'s `v` above would
   // truncate a gain like 1.5 to 1), everything else uses the shared int `v`.
   if (name == "pidKp") { stepperPidKpConfig = valueStr.toFloat(); return true; }
