@@ -130,7 +130,7 @@ individual entries below for what each one was.
   always, or only when configured; what target for the far-end check).
   Wave 3-shaped, not Wave 2.
 
-### Wave 3 - real decisions needed before more code
+### Wave 3 - real decisions needed before more code (closed out 2026-09-08)
 
 - [x] **Decided and done, 2026-09-07 - PID is now the real production
   default.** User confirmed via explicit choice. Persisted via
@@ -165,11 +165,20 @@ individual entries below for what each one was.
   both extremes tested (p8 and p16). A genuinely optimal answer would need
   a per-period tunable, which doesn't exist and isn't worth building for
   this. Not changing the default.
-- [ ] `control16Bit` is persisted to NVS on the bench device (real
-  accuracy win) - standing operational caveat, not a task: the DDP source
-  must match, or position will be wrong after a reboot. Revert with
-  `POST /config` body `control16Bit=0` if the source isn't switching too.
-- [ ] **New, 2026-09-07 - intermittent WiFi/HTTP unresponsiveness
+- [x] `control16Bit` is persisted to NVS on the bench device (real
+  accuracy win) - standing operational caveat, not a task, closing it out
+  as such rather than a to-do: the DDP source must match, or position will
+  be wrong after a reboot. Revert with `POST /config` body
+  `control16Bit=0` if the source isn't switching too.
+- [x] **Closing out Wave 3 with this one honestly unresolved, 2026-09-08 -
+  not blocking, watching for recurrence rather than actively chasing
+  further.** The severe recurrence (below) got a full, confirmed root
+  cause (a real bug, fixed), but that doesn't explain *this* original,
+  milder observation - it happened before any of this session's WiFi
+  config changes existed, so it can't be the same mechanism. Genuinely
+  still unexplained. Hasn't recurred in this original mild form since;
+  revisit only if it does.
+  **Original note, 2026-09-07 - intermittent WiFi/HTTP unresponsiveness
   observed, independent of any flash cycle.** During Wave 3 bench work
   (no upload had just happened), the device went unreachable to both HTTP
   and ICMP ping for roughly 20-30s, then recovered on its own - `uptimeMins`
