@@ -58,25 +58,31 @@ void handleRoot() {
   Serial.print(", free heap ");
   Serial.println(ESP.getFreeHeap());
 
-  String page = String(htmlPage);
   // Root cause, found 2026-09-08 via the checkpoint logging below (kept for
   // now, harmless): the very first *growing* replacement (one where the
   // replacement text is longer than the {{PLACEHOLDER}} it replaces - the
   // WiFi section's {{WIFI_MODE}} -> "Access Point Mode" is the first one)
-  // needs String::replace() to allocate an entirely new ~70KB buffer while
-  // the old one is still alive, transiently needing roughly double the
-  // page's size in *contiguous* free heap. That's fine over a normal STA
-  // connection, but with the SoftAP + captive-portal DNS server + (during
-  // a retry) a concurrent WiFi.begin() all also holding heap, free
-  // contiguous space in AP mode was consistently too fragmented for that -
-  // and a failed reallocation here doesn't throw or leave the string
-  // unchanged, it silently truncates it, which is what "background color
-  // right, blank body" actually was the whole time. Reserving real headroom
-  // once, up front, means every later replace() (including growing ones)
-  // reuses this same already-large-enough buffer instead of ever
-  // reallocating again - eliminates the failure case entirely rather than
-  // just making it less likely.
-  page.reserve(page.length() + 8192);
+  // needs String::replace() to grow the buffer (WString.cpp's changeBuffer()
+  // calls realloc() on the *existing* buffer) - fine if the allocator can
+  // extend in place, but if it can't (heap fragmentation), realloc() has to
+  // allocate an entirely new block and copy, needing the old ~70KB buffer
+  // and a new, larger one alive simultaneously. That's fine over a normal
+  // STA connection, but with the SoftAP + captive-portal DNS server +
+  // (during a retry) a concurrent WiFi.begin() all also holding heap, free
+  // contiguous space in AP mode was consistently too fragmented for that.
+  // First attempt at fixing this (page.reserve() called *after*
+  // `String page = String(htmlPage)` had already copied the full ~70KB in)
+  // didn't help - it hit the exact same problem one line earlier, growing
+  // an already-full buffer. The actual fix has to reserve capacity while
+  // `page` is still empty (nothing allocated yet, so reserve() is a single
+  // clean malloc() for the full target size - see WString.cpp's reserve(),
+  // which short-circuits to a no-op once capacity() is already big enough),
+  // *then* copy htmlPage's content in - String::copy()'s own internal
+  // reserve() call becomes a no-op too, so the whole build never needs more
+  // than one buffer alive at a time, at any point in this function.
+  String page;
+  page.reserve(strlen(htmlPage) + 8192);
+  page = htmlPage;
   Serial.print("  [checkpoint] after initial copy: ");
   Serial.println(page.length());
 
