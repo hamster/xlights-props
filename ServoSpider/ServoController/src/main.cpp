@@ -818,8 +818,32 @@ void updatePidMode() {
       pidDirectionSwitchPending = false;
       continuousRunDirection = 0;  // settling into moveTo() - not a continuous run anymore
     } else {
-      // Already settled, nothing to do motion-wise - but still log every
-      // tick a real DDP value change occurs (2026-09-06), so the Compact
+      // Already settled - but the settle moveTo() above can go dead the
+      // same way runForward()/runBackward() and the hysteresis band's own
+      // moveTo() can (see lastPidHystRetryMs's declaration comment below):
+      // a nonempty queue alone satisfies isRunning() without the ramp
+      // generator ever actually producing a step. Genuinely low
+      // consequence in this specific branch - the target was already
+      // within deadband of the current position when this was entered, so
+      // a dead move just means "stayed exactly where it already was,
+      // which is still within deadband" - but added 2026-09-07 for
+      // consistency with the hysteresis band's own retry rather than
+      // leaving this one path unguarded. Retrying on an already-arrived,
+      // perfectly fine stepper (genuinelyRunning reads false there too,
+      // since it's just sitting still) is harmless: moveTo() to the
+      // position it's already at is a trivial no-op, same accepted
+      // tradeoff the hysteresis band already makes.
+      static unsigned long lastPidDeadbandRetryMs = 0;
+      bool deadbandGenuinelyRunning = stepper->isRunning() && stepper->getCurrentSpeedInMilliHz() != 0;
+      if (!deadbandGenuinelyRunning && (now - lastPidDeadbandRetryMs >= 100)) {
+        lastPidDeadbandRetryMs = now;
+        stepper->setAcceleration(stepperPidAccelConfig);
+        stepper->setJumpStart(jumpStartConfig);
+        stepper->moveTo((int32_t)target);
+        stepperBlanked = false;
+        lastCommandedTargetPosition = target;
+      }
+      // Still log every tick a real DDP value change occurs (2026-09-06), so the Compact
       // Motion Log's ddpVal trace stays a complete, gap-free record of
       // positionRequest, not just a sparse sample only taken when
       // something actually moves. Without this, a real DDP stream could

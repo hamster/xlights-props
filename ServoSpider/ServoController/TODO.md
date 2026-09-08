@@ -61,10 +61,14 @@ individual entries below for what each one was.
 
 ### Wave 2 - cheap, mechanical, no design risk
 
-- [ ] Audit other hot-path code for the chained-String-concatenation
-  pattern that caused a real crash in `logCompactMotion()`/
-  `appendDdpRxLog()` (2026-09-07 early) - found reactively, not via a
-  systematic review, so other instances may exist.
+- [x] **Audited, 2026-09-07 - no other instances in a real hot path.**
+  Every remaining `String + String`/`+=` chain in `src/` is boot-time
+  (`initDDP()`, `WiFi` AP-name setup), page-load-time (`handleRoot()`'s
+  full settings-page render), or explicit human/script-triggered
+  (`POST /config`, `$GET ALL`, OTA error messages) - all far below the
+  20-50ms hot-path rate that actually caused the crash. `stepper_handler.cpp`
+  and `led_handler.cpp` (the two files that run every `loop()` iteration
+  during real motion/LED updates) have zero matches at all.
 - [ ] **Consolidate the three near-identical throttled-retry
   implementations** - homing's `retryMoveIfDied()` (`stepper_handler.cpp`,
   `static`/file-local), PID's hand-rolled equivalent
@@ -76,10 +80,12 @@ individual entries below for what each one was.
 - [ ] `pidReengageThreshold`/`RAMMED_STEP_TOLERANCE` (both 150) were chosen
   by feel (matched to each other, and to the DDP-quantization math) rather
   than an independent sweep - reasonable, but not verified optimal.
-- [ ] The deadband-settled branch's own first `moveTo()` (the initial snap
-  into `pidSettled`) doesn't have the same dead-move retry the hysteresis
-  band has - lower risk (only fires once error is already inside the tight
-  deadband) but not verified clean the same rigorous way.
+- [x] **Fixed, 2026-09-07.** Added the same throttled `genuinelyRunning`
+  retry the hysteresis band already had, for consistency (the practical
+  risk was always low here - a dead move just leaves the trolley exactly
+  where it already was, still within deadband - but the asymmetry is now
+  closed). Bench-verified no regression (p8: rms_error 381.2, jerk 196.8,
+  zero stalls, matching the derivative-filter baseline within noise).
 - [ ] The malformed-leading-log-row artifact (seen at `pidTickMs` below
   20ms, three different corrupted shapes, never at the original 20ms
   across ~25+ runs) is real and tick-rate-correlated but not root-caused.
