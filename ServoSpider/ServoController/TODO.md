@@ -175,6 +175,26 @@ individual entries below for what each one was.
   then recovered). Not investigated further tonight - worth watching for
   recurrence, and worth checking WiFi signal strength/interference on the
   bench if it keeps happening.
+  - **Recurred much more severely, same session, later that night** while
+    bench-testing the new AP-fallback retry feature (below): the real
+    network (`ssid="se"`) became completely unconnectable to this device
+    for 8+ minutes straight - not just a brief blip. Confirmed via serial
+    (not just HTTP, which was expectedly down since the device had fallen
+    to AP mode) that this wasn't a code problem: a genuinely fresh,
+    from-boot `connectToWifi()` attempt (no retry logic involved at all,
+    triggered by a real power-on-equivalent reset) failed identically to
+    every subsequent retry, and the real router (`192.168.10.254`) still
+    answered ICMP pings fine from a different machine on the same network
+    the whole time - so the LAN/router itself was up, only this specific
+    device's ability to associate with `se` was affected. Never resolved
+    within the session; device was left mid-retry, presumably self-healed
+    once whatever caused it cleared (that's exactly what the new retry
+    feature is for). Given how many reboot/reconnect cycles this device
+    was put through in immediately preceding testing, a router-side
+    flood/flap-protection mechanism throttling this MAC is a real
+    candidate cause, on top of the plain-signal-interference theory above
+    - if this recurs, checking router logs for that specific MAC address
+    (or just spacing out reboots more) would help distinguish the two.
 - [x] **Tested, 2026-09-07 - jumpStart does not appear necessary at
   `homeAccel=20,000`.** Disabled it (`jumpStart=0`) and ran 3 back-to-back
   homing cycles: all clean, no stalls, no errors, identical ~11s timing to
@@ -325,6 +345,37 @@ individual entries below for what each one was.
     a device stuck in AP fallback after a failed boot-time connect (which
     is exactly what the mode-selector/explicit-retry-while-AP behavior
     above would address).
+  - [x] **The retry-while-AP piece itself, done right after** - the user
+    confirmed this was in fact what they wanted (not just the
+    already-connected case above). `connectToWifi()` gained a `preserveAp`
+    parameter (default `false`, every existing call site unaffected):
+    `true` uses `WIFI_AP_STA` instead of plain `WIFI_STA`, and explicitly
+    re-asserts `WiFi.softAP()` (observed unreliable across a bare mode
+    change on this ESP32 Arduino core version) so the fallback AP survives
+    the whole attempt. `checkWifiConnection()`'s `WiFi.getMode() ==
+    WIFI_AP` case, previously an unconditional skip, now calls
+    `connectToWifi(true)` on the same `wifiRetryIntervalConfig` cadence,
+    deliberately with **no** debounce (unlike the already-connected
+    branch) - there's no "was working" state to protect against a false
+    trip while genuinely AP-only, every check is a real "still not on the
+    real network" reading. On failure, explicitly drops back to plain
+    `WIFI_AP` (not left in a half-connected `AP_STA` limbo); on success,
+    explicitly tears the AP back down (`softAPdisconnect`, `WiFi.mode(WIFI_STA)`)
+    rather than staying dual-mode forever, matching what a normal
+    successful boot connect looks like.
+    **Bench-verified the failure/stability path extensively, not the
+    success path** - a real, currently-unexplained WiFi outage (see the
+    intermittent-unresponsiveness item above, recurred much more severely
+    this same session) meant the real network was never reachable during
+    testing, so the "retry succeeds, AP drops cleanly" branch is
+    code-reviewed but not yet observed live. What *was* directly confirmed
+    via serial across multiple long, uninterrupted capture windows: clean,
+    correctly-timed retry cycles (~20s apart, each properly timing out
+    around 10s) for 8+ minutes straight, zero crashes, zero watchdog
+    resets, free heap staying healthy, and correct fallback to plain AP on
+    every failure - never stranded in a broken dual-mode state. Worth a
+    follow-up bench check once the real network is reliably reachable
+    again, to watch the success/AP-teardown path fire for real.
 - [x] **Stepper Configuration**: remove the help-text paragraph above
   Homing Acceleration.
 - [x] **Settings tab**: fold Channel Configuration and LED Configuration

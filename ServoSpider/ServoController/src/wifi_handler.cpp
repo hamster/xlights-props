@@ -39,9 +39,33 @@ const unsigned long WIFI_TIMEOUT = 10000; // 10 seconds
 // this config felt like the wrong moment to also loosen that guard.
 int wifiRetryIntervalConfig = 20;
 
-// connect to wifi - returns true if successful or false if not
-boolean connectToWifi() {
-  WiFi.mode(WIFI_STA);
+// connect to wifi - returns true if successful or false if not.
+//
+// preserveAp (2026-09-07): if true, uses WIFI_AP_STA instead of plain
+// WIFI_STA, so an already-running AP (softAP + captive-portal DNS) stays
+// reachable for the whole connection attempt instead of dropping the
+// instant this function is called - the ESP32 genuinely supports
+// concurrent AP+STA on one radio, this isn't a hack. Used by
+// checkWifiConnection()'s AP-fallback retry (see there): the entire point
+// of that retry is *added* recovery safety, so a failed attempt must never
+// leave the device with neither the real network nor its local AP
+// reachable, which is exactly what would happen if this just force-set
+// WIFI_STA like the plain boot-time call does. On success in this mode,
+// the AP is explicitly torn back down and the radio dropped to plain STA
+// once we're actually back on the real network - this doesn't stay in
+// dual mode indefinitely once it no longer needs to.
+boolean connectToWifi(bool preserveAp) {
+  WiFi.mode(preserveAp ? WIFI_AP_STA : WIFI_STA);
+
+  if (preserveAp) {
+    // WiFi.mode() switching AP_STA<->AP has been unreliable in some
+    // ESP32 Arduino core versions about keeping a previously-announced
+    // softAP actually broadcasting - re-assert it explicitly rather than
+    // assume it survived the mode change, since silently losing the
+    // fallback AP here would defeat the entire point of preserveAp.
+    String fullAPName = getAPName();
+    WiFi.softAP(fullAPName.c_str(), ap_password.c_str());
+  }
 
   // Set hostname
   if (hostname.length() > 0) {
@@ -76,6 +100,14 @@ boolean connectToWifi() {
 
     if (millis() - startTime > WIFI_TIMEOUT) {
       Serial.println("WiFi connection timeout!");
+      if (preserveAp) {
+        // Drop the failed STA association attempt cleanly and fall back to
+        // plain AP - don't leave the radio sitting in AP_STA with a dead
+        // STA half, and don't leave statusLedBlinkInterval changed since
+        // AP mode already uses this same 100ms rapid blink.
+        WiFi.disconnect();
+        WiFi.mode(WIFI_AP);
+      }
       return false;
     }
     delay(500);
@@ -85,6 +117,17 @@ boolean connectToWifi() {
   Serial.println("");
   Serial.print("Connected! IP address: ");
   Serial.println(WiFi.localIP());
+
+  if (preserveAp) {
+    // Genuinely back on the real network now - drop the fallback AP rather
+    // than staying in AP_STA indefinitely, matching what a normal
+    // successful boot-time connect looks like. The captive-portal DNS
+    // server only makes sense while the AP is up.
+    dnsServer.stop();
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_STA);
+    Serial.println("AP-fallback retry succeeded - dropped the fallback AP, now client-only.");
+  }
 
   // Disable WiFi modem sleep (power-save) - the ESP32 Arduino core's default
   // for station mode. Never touched before 2026-09-06, when a dedicated DDP
@@ -164,8 +207,29 @@ void checkWifiConnection() {
 
   lastCheckTime = currentTime;
 
-  // Only monitor if we're supposed to be in station mode with saved credentials
-  if (ssid.length() == 0 || WiFi.getMode() == WIFI_AP) {
+  // Nothing to retry with in any mode.
+  if (ssid.length() == 0) {
+    return;
+  }
+
+  // AP fallback (2026-09-07): a device that failed to connect at boot (or
+  // lost its connection and, via some other path, ended up AP-only) sat
+  // here forever before this - nothing ever tried the client connection
+  // again short of a manual "Connect Now" or a reboot. Selective on purpose:
+  // only fires with real saved credentials (the ssid check above), on the
+  // same configurable interval as the already-connected case below, and via
+  // connectToWifi(true) - see its declaration comment for why that keeps
+  // the fallback AP reachable through a failed attempt rather than
+  // trading "stuck in AP forever" for "occasionally unreachable in both
+  // modes at once." No debounce here, unlike the already-connected branch
+  // below - there's no "currently working" state to protect against a
+  // false trip, every check while genuinely AP-only is a real, unambiguous
+  // "still not on the real network" reading.
+  if (WiFi.getMode() == WIFI_AP) {
+    Serial.println("AP fallback: retrying client connection...");
+    if (connectToWifi(true)) {
+      disconnectCount = 0;  // fresh start now that we're genuinely reconnected
+    }
     return;
   }
 

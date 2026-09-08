@@ -1384,7 +1384,7 @@ function showNotification(message, isSuccess) {
           <div class="form-group">
             <label for="wifiRetryInterval">Reconnect Retry Interval (seconds, 0=disabled):</label>
             <input type="number" id="wifiRetryInterval" name="wifiRetryInterval" value="{{WIFI_RETRY_INTERVAL}}" min="0" max="3600" required>
-            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">How often the device checks its WiFi connection and retries as a client if it's down, while it's already in client mode with saved credentials (has no effect while running as an Access Point). 0 disables the periodic check - a dropped connection then only recovers via "Connect Now" above or a reboot.</p>
+            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">How often the device retries connecting as a client with saved credentials: if already connected and the link drops, or if it's currently fallen back to broadcasting its own Access Point after a failed boot-time connect - either way, without ever dropping the Access Point until a client connection genuinely succeeds. 0 disables the periodic check - a dropped/failed connection then only recovers via "Connect Now" above or a reboot.</p>
           </div>
 
           <button type="submit" class="btn-primary">Save WiFi Settings</button>

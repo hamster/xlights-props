@@ -41,7 +41,10 @@ extern DNSServer dnsServer;
 extern const byte DNS_PORT;
 
 // WiFi functions
-boolean connectToWifi();
+// preserveAp: see connectToWifi()'s declaration comment (wifi_handler.cpp) -
+// defaults false so every existing no-arg call site (boot, manual
+// "Connect Now", the already-STA-then-dropped reconnect path) is unchanged.
+boolean connectToWifi(bool preserveAp = false);
 String getAPName();
 void startAccessPoint();
 void checkWifiConnection();
