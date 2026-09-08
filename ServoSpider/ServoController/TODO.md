@@ -299,13 +299,17 @@ individual entries below for what each one was.
     (`{{TRACK_MODE_PID_SEL}}`) as part of the same pass - it was previously
     missing from the UI entirely despite being the production default since
     earlier in Wave 3.
-  - Still open, not done this pass: a real **PID tuning parameters**
-    section - selecting PID from the dropdown and saving persists the mode
-    choice, but none of the ~13 `pid*` tunables (see
-    `include/tuning_handler.h`'s doc comment) have a Settings UI or NVS
-    persistence yet; they're still `$SET`/`GET /tunable` RAM-only. Real
-    feature work: needs new Preferences keys (≤15 chars each) and a
-    `/save-pid` endpoint, not just HTML.
+  - [x] **PID tuning parameters section, built 2026-09-08.** All 12 `pid*`
+    tunables (Kp, Kd, D-filter weight, tick ms, log ms, max speed, accel,
+    deadband, reengage threshold, feedforward on/off, feedforward window
+    ms, lookahead ms) now have a real Settings UI - a "PID Tuning"
+    collapsible under Stepper Configuration - and NVS persistence via the
+    existing deferred-write mechanism (`stepperSettingsPendingSave`), a new
+    `/save-pid` endpoint, and `/config` GET/POST entries, all following the
+    exact same pattern as every other stepper setting. All 12 new NVS keys
+    verified ≤15 chars. Bench-verified round-trip through both `/save-pid`
+    and generic `/config`, and confirmed surviving a real reboot via
+    `$GET ALL`.
 - [x] **TMC2209 UART enable, sense resistor, driver address, and SpreadCycle
   hysteresis (hstrt/hend) all hardcoded, 2026-09-07 (second pass) - "we
   never used them" / "this project has only ever run one board." No
@@ -335,13 +339,15 @@ individual entries below for what each one was.
   decision coming back "remove," and it didn't: decided 2026-09-08 to keep
   it as a user-selectable option, default off (see Wave 1). Settings stay
   in the UI, unchanged.
-- [ ] Be ready to `#define` off the encoder status/count display
-  (`id="encoder-count"`) once tracking-mode tuning is done and the encoder
-  is no longer needed for bench verification. **Not yet** - tuning is
-  still actively using the encoder as ground truth (see the memory note:
-  tuning requires it as a second source of truth). Revisit only once PID
-  tuning is genuinely finished, and discuss with the user first (removing
-  vs. gating is still an open choice).
+- [x] **`#define`d off the encoder status/count display, 2026-09-08**
+  (`SHOW_ENCODER_STATUS 0` in `encoder_handler.h`, gates the Status page's
+  `#encoder-count-row` to `display:none`). Discussed with the user first,
+  per the earlier note - PID tuning judged far enough along now. This only
+  gates the Status-page row; the encoder subsystem itself
+  (`encoder_handler.h`/`.cpp`, `updateEncoder()`) is completely untouched
+  and still counts - the standing note that tuning needs it as ground
+  truth still holds, it's just no longer surfaced in the normal UI. Flip
+  the `#define` back to `1` if bench access to it is needed again.
 - [ ] Remove the **Serial Debug** checkbox from channel config and the
   redundant **Stepper Control** duplicate mention - both fold into a new
   **Live Log / Debug tab**: shows the Compact Motion Log and/or the
@@ -353,14 +359,41 @@ individual entries below for what each one was.
   simplest fit) and a buffering design (how much history, RAM is limited
   at 327KB total). **Not started** - real design work, not mechanical
   cleanup; deliberately not rushed alongside the rest of this wave.
-- [ ] **WiFi settings**: add an explicit mode selector (Client only / AP
+- [x] **WiFi settings**: add an explicit mode selector (Client only / AP
   fallback / AP only) instead of today's implicit behavior (traced in
   `wifi_handler.cpp`/`main.cpp`: today it always tries client first, then
   falls back to AP on failure/no-saved-SSID - there's no way to force
-  "AP only" or "client, no fallback"). **Not started** - this is a boot-time
-  network bring-up change on hardware that's normally managed remotely;
-  wanted a deliberate pass with on-bench verification of each mode rather
-  than folding it into a larger mechanical cleanup commit.
+  "AP only" or "client, no fallback"). **Built and bench-verified,
+  2026-09-08.** New `wifiModeConfig` (`WIFI_MODE_AP_FALLBACK=0` (default,
+  matches the previous implicit behavior byte-for-byte),
+  `WIFI_MODE_CLIENT_ONLY=1`, `WIFI_MODE_AP_ONLY=2`), NVS key
+  `wifiModeCfg` - deliberately *not* `wifiMode`, which collides with
+  `/status-data`'s existing JSON field of that name (caught before it
+  shipped). `setup()`'s boot logic and `checkWifiConnection()`'s AP-retry
+  branch both gate on it (AP_ONLY skips ever trying a client connection at
+  all, at boot or on retry; CLIENT_ONLY skips ever starting a fallback AP,
+  logging instead). New Settings-page dropdown in WiFi Client Settings,
+  with a warning paragraph on Client Only about there being no recovery AP
+  if it can't connect (mentions the serial `'a'` command as the way back).
+  **AP_FALLBACK and AP_ONLY confirmed working live on the bench**
+  (multiple flash cycles, real client connections, real disconnect/retry
+  cycles). **CLIENT_ONLY was deliberately not live-tested** - by this
+  point in the session real time had already gone into the WiFi
+  debugging saga below, and CLIENT_ONLY's code path is structurally
+  identical to the other two modes (same `connectToWifi()`/boot-sequence
+  machinery, just skipping the `startAccessPoint()` call), so it's high
+  confidence by code review and analogy rather than direct observation.
+  Worth a real bench pass before relying on it for a device that might
+  need physical/serial recovery. This whole feature's implementation and
+  bench pass ran straight into a confusing, unrelated testing-methodology
+  artifact: closing (not just opening) a serial connection also resets
+  this board, so a test script that opens serial, sends a command, and
+  closes again silently undoes whatever that command just set before it
+  could be verified over HTTP. Cost real debugging time before being
+  correctly diagnosed as not a firmware bug (now saved as its own memory
+  note for future sessions) - worth remembering why some of the
+  live-testing narrative above took far longer than the actual bug fixes
+  did.
   - [x] **Adjacent, smaller piece done separately, 2026-09-07**: the
     existing (already-implemented) "was connected as client, then dropped,
     retry" monitor (`checkWifiConnection()`) had its 30-second poll interval
@@ -488,11 +521,15 @@ individual entries below for what each one was.
   per-move somewhere in the UI - currently only visible via serial with
   Debug enabled (`[tracking]`/`[normal]`). Natural fit for the planned
   Debug tab above.
-- [ ] Changing Microsteps per Full Step requires a re-home afterward (the
+- [x] Changing Microsteps per Full Step requires a re-home afterward (the
   UI warns on save, but it's easy to miss) - the previously-tuned Stepper
   Speed (Hz) will feel like a different physical speed since distance per
-  step changed. Standing note, not actionable without a real design for
-  how to make the warning harder to miss.
+  step changed. **Improved 2026-09-08**: the microsteps dropdown now
+  fires a real `confirm()` dialog on actual change (`web/script.js`,
+  captures the field's initial value on page load, only prompts if the
+  new value differs), reverting the selection if the user cancels -
+  harder to miss than the old passive save-time warning text alone
+  (which is still shown too).
 - [x] Web UI: hint/warning in the LED settings section about practical WiFi
   pixel-count limits (pixel count input still allows up to `MAX_LEDS`=1000,
   no code change needed - added the hint text next to the field).

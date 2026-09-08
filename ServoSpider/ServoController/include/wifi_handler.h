@@ -36,6 +36,28 @@ extern const unsigned long WIFI_TIMEOUT;
 // disabled" convention (stepperBlankTimeConfig, ledBlankTimeConfig).
 extern int wifiRetryIntervalConfig;
 
+// WiFi mode selector (2026-09-08) - makes explicit what used to be
+// implicit boot-time behavior. Default (0) is byte-for-byte the same as
+// every device already running: try client if credentials exist, fall
+// back to AP on failure (and, as of today's AP-fallback retry work, keep
+// periodically retrying as a client while in that fallback). The other
+// two are real, named alternatives:
+//   1 (Client Only) - never starts an AP, on boot or on a failed retry.
+//     A device with wrong/missing credentials in this mode has *no*
+//     network access at all (not even a recovery AP) until either the
+//     credentials are fixed some other way or the mode is changed back -
+//     the serial 'a' command ("Switch to AP mode") is the deliberate,
+//     documented recovery path for that case. Choosing this mode is an
+//     explicit acceptance of that tradeoff, not a bug.
+//   2 (AP Only) - never attempts a client connection at all, regardless
+//     of saved credentials; always boots straight into AP mode. Useful
+//     for setup/bench work or a device that's deliberately not meant to
+//     join a network.
+#define WIFI_MODE_AP_FALLBACK 0
+#define WIFI_MODE_CLIENT_ONLY 1
+#define WIFI_MODE_AP_ONLY 2
+extern int wifiModeConfig;
+
 // DNS server for captive portal
 extern DNSServer dnsServer;
 extern const byte DNS_PORT;

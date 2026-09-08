@@ -140,6 +140,9 @@ void handleRoot() {
   page.replace("{{STATIC_GATEWAY}}", staticGateway);
   page.replace("{{STATIC_SUBNET}}", staticSubnet);
   page.replace("{{WIFI_RETRY_INTERVAL}}", String(wifiRetryIntervalConfig));
+  page.replace("{{WIFI_MODE_AP_FALLBACK_SEL}}", wifiModeConfig == WIFI_MODE_AP_FALLBACK ? "selected" : "");
+  page.replace("{{WIFI_MODE_CLIENT_ONLY_SEL}}", wifiModeConfig == WIFI_MODE_CLIENT_ONLY ? "selected" : "");
+  page.replace("{{WIFI_MODE_AP_ONLY_SEL}}", wifiModeConfig == WIFI_MODE_AP_ONLY ? "selected" : "");
   page.replace("{{AP_SSID}}", ap_ssid);
   page.replace("{{AP_PASSWORD}}", ap_password);
   page.replace("{{AP_APPEND_MAC_CHECKED}}", ap_append_mac ? "checked" : "");
@@ -287,6 +290,14 @@ void handleSaveWifi() {
     if (server.hasArg("wifiRetryInterval")) {
       wifiRetryIntervalConfig = server.arg("wifiRetryInterval").toInt();
       preferences.putInt("wifiRetryInt", wifiRetryIntervalConfig);
+    }
+
+    if (server.hasArg("wifiMode")) {
+      wifiModeConfig = server.arg("wifiMode").toInt();
+      // NVS key "wifiModeCfg", not "wifiMode" - see main.cpp's load-side
+      // comment for why (collides with /status-data's unrelated
+      // current-AP/Client-state field of the same name otherwise).
+      preferences.putInt("wifiModeCfg", wifiModeConfig);
     }
 
     // Save to preferences

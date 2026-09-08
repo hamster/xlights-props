@@ -1380,6 +1380,16 @@ function showNotification(message, isSuccess) {
           </div>
 
           <div class="form-group">
+            <label for="wifiMode">WiFi Mode:</label>
+            <select id="wifiMode" name="wifiMode" style="width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box; border: 2px solid #ddd; border-radius: 4px;">
+              <option value="0" {{WIFI_MODE_AP_FALLBACK_SEL}}>AP Fallback (default) - try to connect, fall back to broadcasting its own Access Point if that fails</option>
+              <option value="1" {{WIFI_MODE_CLIENT_ONLY_SEL}}>Client Only - never starts an Access Point, on boot or on a failed retry</option>
+              <option value="2" {{WIFI_MODE_AP_ONLY_SEL}}>AP Only - always broadcasts its own Access Point, never attempts a client connection</option>
+            </select>
+            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Takes effect on the next boot (or the next retry check, for a mode change made while already in AP fallback). <strong>Client Only has no local recovery Access Point</strong> - if the saved credentials ever stop working in that mode, the device has no network access at all until fixed over a serial connection (the 'a' command forces AP mode) or by changing this back.</p>
+          </div>
+
+          <div class="form-group">
             <label style="display: block; margin-bottom: 8px;">
               <input type="radio" id="useDhcp" name="ipMode" value="dhcp" {{DHCP_CHECKED}} onchange="toggleStaticIpFields()">
               Use DHCP (Automatic)

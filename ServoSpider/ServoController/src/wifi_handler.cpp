@@ -41,6 +41,12 @@ const unsigned long WIFI_TIMEOUT = 10000; // 10 seconds
 // this config felt like the wrong moment to also loosen that guard.
 int wifiRetryIntervalConfig = 20;
 
+// See declaration comment (wifi_handler.h). Default 0 (WIFI_MODE_AP_FALLBACK)
+// is deliberately identical to every device's existing, pre-this-feature
+// behavior - this must never change what an already-provisioned device
+// does unless the setting is explicitly changed.
+int wifiModeConfig = WIFI_MODE_AP_FALLBACK;
+
 // connect to wifi - returns true if successful or false if not.
 //
 // preserveAp (2026-09-07): if true, uses WIFI_AP_STA instead of plain
@@ -248,6 +254,14 @@ void checkWifiConnection() {
   // false trip, every check while genuinely AP-only is a real, unambiguous
   // "still not on the real network" reading.
   if (WiFi.getMode() == WIFI_AP) {
+    // WIFI_MODE_AP_ONLY means never try to leave AP mode, ever - this
+    // retry existing at all is specifically for AP_FALLBACK (the default).
+    // A device can only reach this branch while in AP_ONLY mode via a
+    // mode change made *after* it was already sitting in AP - defensive,
+    // not dead code.
+    if (wifiModeConfig == WIFI_MODE_AP_ONLY) {
+      return;
+    }
     // Skip this cycle entirely if someone's actually connected to the AP
     // right now (2026-09-08, found on the bench) - a client connection
     // attempt needs the radio to briefly sync the AP's channel to whatever

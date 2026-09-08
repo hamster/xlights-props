@@ -1064,6 +1064,14 @@ void setup() {
   // wifiRetryIntervalConfig's declaration comment (wifi_handler.h).
   wifiRetryIntervalConfig = preferences.getInt("wifiRetryInt", 20);
 
+  // WiFi mode selector - see wifiModeConfig's declaration comment
+  // (wifi_handler.h). Default (0) matches every device's pre-existing
+  // behavior. NVS key deliberately "wifiModeCfg", not "wifiMode" - that
+  // name is already /status-data's own JSON field for the *current*
+  // AP/Client state (0=AP, 1=Client), a different concept from this
+  // configured *policy* - kept distinct to avoid the two being confused.
+  wifiModeConfig = preferences.getInt("wifiModeCfg", WIFI_MODE_AP_FALLBACK);
+
   // Load saved AP configuration
   ap_ssid = preferences.getString("apSsid", DEFAULT_AP_SSID);
   ap_password = preferences.getString("apPassword", DEFAULT_AP_PASSWORD);
@@ -1164,8 +1172,15 @@ void setup() {
   // Initialize pixel LEDs (loads config from preferences)
   initPixelLeds();
 
-  // Determine if we should connect to wifi or start a host access point
-  if(ssid.length() > 0) {
+  // Determine if we should connect to wifi or start a host access point -
+  // see wifiModeConfig's declaration comment (wifi_handler.h) for the three
+  // modes. AP_FALLBACK's own branches below are unchanged from before this
+  // selector existed, on purpose - default behavior for every device that
+  // never explicitly picked a mode must not change.
+  if (wifiModeConfig == WIFI_MODE_AP_ONLY) {
+    Serial.println("WiFi mode is AP Only - starting Access Point mode...");
+    startAccessPoint();
+  } else if (ssid.length() > 0) {
     Serial.println("Attempting to connect to saved WiFi...");
     Serial.print("SSID: ");
     Serial.println(ssid);
@@ -1182,12 +1197,20 @@ void setup() {
         Serial.println("Error starting mDNS");
       }
     }
+    else if (wifiModeConfig == WIFI_MODE_CLIENT_ONLY) {
+      Serial.print("Could not connect to WiFi network '");
+      Serial.print(ssid);
+      Serial.println("' - WiFi mode is Client Only, not starting an Access Point. Use the serial 'a' command to force AP mode if this device becomes unreachable.");
+    }
     else {
       Serial.print("Could not connect to WiFi network '");
       Serial.print(ssid);
       Serial.println("', starting Access Point mode...");
       startAccessPoint();
     }
+  }
+  else if (wifiModeConfig == WIFI_MODE_CLIENT_ONLY) {
+    Serial.println("No saved network to connect to, and WiFi mode is Client Only - not starting an Access Point. Use the serial 'a' command to force AP mode if this device becomes unreachable.");
   }
   else {
     // Failed to connect or no credentials, start AP mode
