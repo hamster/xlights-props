@@ -3,6 +3,7 @@
 #include "wifi_handler.h"
 #include "led_handler.h"
 #include "partition_utils.h"
+#include "html_handlers.h"  // for `server` - see connectToWifi()'s preserveAp wait loop
 
 // DNS server for captive portal
 DNSServer dnsServer;
@@ -110,7 +111,27 @@ boolean connectToWifi(bool preserveAp) {
       }
       return false;
     }
-    delay(500);
+
+    if (preserveAp) {
+      // Found the hard way (2026-09-08): keeping the AP *associable* during
+      // a retry isn't the same as keeping it *usable* - this whole loop
+      // blocks the caller (checkWifiConnection(), called from loop()), so
+      // without this, server.handleClient()/dnsServer.processNextRequest()
+      // never ran for the entire up-to-WIFI_TIMEOUT duration of every
+      // retry attempt, and a phone connected to the AP trying to load the
+      // captive portal page had a real chance of its request landing in
+      // that dead window and just hanging - exactly what was reported.
+      // Serviced in short bursts (every 50ms) rather than once per 500ms
+      // dot below, so a page load doesn't have to wait up to half a second
+      // for its first byte.
+      for (int i = 0; i < 10; i++) {
+        server.handleClient();
+        dnsServer.processNextRequest();
+        delay(50);
+      }
+    } else {
+      delay(500);
+    }
     Serial.print(".");
   }
 
@@ -226,6 +247,25 @@ void checkWifiConnection() {
   // false trip, every check while genuinely AP-only is a real, unambiguous
   // "still not on the real network" reading.
   if (WiFi.getMode() == WIFI_AP) {
+    // Skip this cycle entirely if someone's actually connected to the AP
+    // right now (2026-09-08, found on the bench) - a client connection
+    // attempt needs the radio to briefly sync the AP's channel to whatever
+    // it's scanning/connecting to, which degrades or drops packets for
+    // anyone using the AP at that exact moment. server.handleClient()
+    // staying serviced during the attempt (see connectToWifi()'s
+    // preserveAp wait loop) keeps small requests working, but a real
+    // person is most likely on the AP specifically to load the Settings
+    // page and fix the credentials that are presumably the reason this
+    // fallback is active in the first place - the last thing that moment
+    // needs is the retry itself corrupting a large page load out from
+    // under them. Retrying while genuinely unattended is the whole point
+    // of this feature; retrying while someone's actively there working on
+    // it is counterproductive. Just waits for the next interval instead -
+    // if they're still connected then, same story, skip again.
+    if (WiFi.softAPgetStationNum() > 0) {
+      Serial.println("AP fallback: skipping retry, a client is connected to the AP");
+      return;
+    }
     Serial.println("AP fallback: retrying client connection...");
     if (connectToWifi(true)) {
       disconnectCount = 0;  // fresh start now that we're genuinely reconnected
