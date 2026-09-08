@@ -59,6 +59,24 @@ void handleRoot() {
   Serial.println(ESP.getFreeHeap());
 
   String page = String(htmlPage);
+  // Root cause, found 2026-09-08 via the checkpoint logging below (kept for
+  // now, harmless): the very first *growing* replacement (one where the
+  // replacement text is longer than the {{PLACEHOLDER}} it replaces - the
+  // WiFi section's {{WIFI_MODE}} -> "Access Point Mode" is the first one)
+  // needs String::replace() to allocate an entirely new ~70KB buffer while
+  // the old one is still alive, transiently needing roughly double the
+  // page's size in *contiguous* free heap. That's fine over a normal STA
+  // connection, but with the SoftAP + captive-portal DNS server + (during
+  // a retry) a concurrent WiFi.begin() all also holding heap, free
+  // contiguous space in AP mode was consistently too fragmented for that -
+  // and a failed reallocation here doesn't throw or leave the string
+  // unchanged, it silently truncates it, which is what "background color
+  // right, blank body" actually was the whole time. Reserving real headroom
+  // once, up front, means every later replace() (including growing ones)
+  // reuses this same already-large-enough buffer instead of ever
+  // reallocating again - eliminates the failure case entirely rather than
+  // just making it less likely.
+  page.reserve(page.length() + 8192);
   Serial.print("  [checkpoint] after initial copy: ");
   Serial.println(page.length());
 
