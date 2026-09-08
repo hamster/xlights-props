@@ -133,30 +133,71 @@ individual entries below for what each one was.
   `POST /config` (`stepTrackMode=4`, the existing NVS key), verified
   surviving a genuine reboot (not just a RAM check) - `GET /tunable?name=trackMode`
   read back `4` immediately after a real power-cycle-equivalent reboot.
-- [ ] **Full travel measurement symmetry - open correctness question, not
-  yet investigated.** The homing bounce (rope paid all the way out, wound
-  back on from the other side until the switch trips a second time) may
-  not measure `bottomPosition` symmetrically if the return leg's speed
-  profile differs from the outbound leg's (already-cruising vs.
-  accelerating from rest, or gravity assisting one direction and resisting
-  the other). Needs a real look at `updateHoming()`'s speed/accel setup
-  for each leg.
-- [ ] `pidFfWindowMs` (200ms) was swept only at p8. p6/p12 were validated
-  at that value and look right (jerk scales the way the wave does), but
-  the *optimum* window may differ by period - a longer window may suit
-  slower shows better.
+- [x] **Investigated via code review, 2026-09-07 - two of three suspected
+  asymmetries ruled out, one remains genuinely open.** Traced both search
+  legs in `updateHoming()` (`stepper_handler.cpp`): (1) **configured
+  profile** - `startHoming()` sets `stepperAccelHomingConfig`/
+  `stepperSpeedHomingConfig` exactly once; neither `HOMING_FIND_INITIAL`
+  nor `HOMING_FIND_OTHER_END` calls `setSpeedInHz()`/`setAcceleration()`
+  again before their search - both legs run at the identical commanded
+  values. (2) **starting velocity state** - leg 1 starts from confirmed
+  rest (nothing has run since boot); leg 2 passes through `HOMING_SETTLE`,
+  which explicitly waits for `!stepper->isRunning()` (a genuine complete
+  stop, built 2026-08-30 for an unrelated pause bug) before reversing - so
+  leg 2 *also* accelerates from true rest, not mid-cruise. Both suspected
+  code-level asymmetries are ruled out. (3) **gravity assisting one
+  direction, resisting the other** - NOT resolved by this review; even
+  with identical commanded parameters and starting conditions, the
+  *achieved* motion profile can still differ physically. Would need a real
+  bench comparison (encoder-timed ramp profile, each direction) to close
+  out fully - not attempted.
+- [x] **Tested at p16, 2026-09-07 - real trade confirmed, default kept at
+  200ms.** Swept 200/300/400ms: jerk improves substantially at a slower
+  period with a longer window (131 -> 88 -> 84) but corner tightness gets
+  markedly worse (231 -> 312 -> 387, a 68% increase at 400ms) and frame
+  lag starts creeping toward the hard cap (max 6.8 -> 25.0 -> 48.0). Given
+  the user's own explicit priority (corner tracking matters), not worth
+  trading away for the jerk gain - 200ms is already a good compromise at
+  both extremes tested (p8 and p16). A genuinely optimal answer would need
+  a per-period tunable, which doesn't exist and isn't worth building for
+  this. Not changing the default.
 - [ ] `control16Bit` is persisted to NVS on the bench device (real
   accuracy win) - standing operational caveat, not a task: the DDP source
   must match, or position will be wrong after a reboot. Revert with
   `POST /config` body `control16Bit=0` if the source isn't switching too.
-- [ ] Whether `jumpStart` matters at `homeAccel=20,000` (homing's own,
-  much lower accel) hasn't been re-verified - the original A/B test was
-  only done at `normalAccel=200,000`.
-- [ ] The starting-torque stall fix (`jumpStartConfig`) could in principle
-  also help any *other* cold-start move, not just homing - e.g. the very
-  first DDP-commanded move after a period of rest. Should already help
-  there too (it's a global FastAccelStepper setting) but hasn't been
-  specifically tested for that case.
+- [ ] **New, 2026-09-07 - intermittent WiFi/HTTP unresponsiveness
+  observed, independent of any flash cycle.** During Wave 3 bench work
+  (no upload had just happened), the device went unreachable to both HTTP
+  and ICMP ping for roughly 20-30s, then recovered on its own - `uptimeMins`
+  confirmed no reboot occurred, ruling out a crash. Consistent with the
+  documented 30s WiFi reconnect-monitoring cadence, but not confirmed as
+  the cause. Recurred a second time moments later (a few failed attempts,
+  then recovered). Not investigated further tonight - worth watching for
+  recurrence, and worth checking WiFi signal strength/interference on the
+  bench if it keeps happening.
+- [x] **Tested, 2026-09-07 - jumpStart does not appear necessary at
+  `homeAccel=20,000`.** Disabled it (`jumpStart=0`) and ran 3 back-to-back
+  homing cycles: all clean, no stalls, no errors, identical ~11s timing to
+  with-jumpStart, `bottomPosition` consistent (15502-15504). Makes sense
+  given the history - `homeAccel` was already lowered from a much higher
+  original value (1,000,000, "functionally instant") as part of the same
+  original stall fix; jumpStart's own individual contribution may only
+  have mattered at that old, steeper ramp. Re-enabled (`jumpStart=20`,
+  safe default, no reason to leave off given the small sample size here -
+  3 trials, not an exhaustive stress test).
+- [x] **Investigated, 2026-09-07 - question's practical relevance has
+  shifted now that PID is the production default.** Checked: PID's own
+  continuous-run engagement (`main.cpp`, the `runForward()`/`runBackward()`
+  call site) deliberately calls `setJumpStart(0)` before every engagement,
+  by design - the documented 2026-09-06 fix for `setJumpStart()`'s burst
+  firing in the wrong direction through the continuous-run API. So the
+  mode actually running in production does *not* apply jumpStart to its
+  own "first move after rest" path at all, on purpose - this was never an
+  oversight to test, it's an intentional tradeoff already made. The
+  original question (does jumpStart help a cold-start `moveTo()`) remains
+  genuinely relevant only for Direct/Coalesce/Lookahead, which are no
+  longer the default mode - lower priority than when this was written, not
+  tested tonight.
 
 ### Wave 4 - web UI modernization (its own epic; merges ~15 scattered items)
 
