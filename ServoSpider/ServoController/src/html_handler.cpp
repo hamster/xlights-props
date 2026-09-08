@@ -58,8 +58,9 @@ void handleRoot() {
   Serial.print(", free heap ");
   Serial.println(ESP.getFreeHeap());
 
-  // Root cause, found 2026-09-08 via the checkpoint logging below (kept for
-  // now, harmless): the very first *growing* replacement (one where the
+  // Root cause, found 2026-09-08 via temporary length-checkpoint logging
+  // (removed once confirmed fixed): the very first *growing* replacement
+  // (one where the
   // replacement text is longer than the {{PLACEHOLDER}} it replaces - the
   // WiFi section's {{WIFI_MODE}} -> "Access Point Mode" is the first one)
   // needs String::replace() to grow the buffer (WString.cpp's changeBuffer()
@@ -83,8 +84,6 @@ void handleRoot() {
   String page;
   page.reserve(strlen(htmlPage) + 8192);
   page = htmlPage;
-  Serial.print("  [checkpoint] after initial copy: ");
-  Serial.println(page.length());
 
   // WiFi status information
   if (WiFi.status() == WL_CONNECTED) {
@@ -100,8 +99,6 @@ void handleRoot() {
     page.replace("{{WIFI_NETWORK}}", getAPName());
     page.replace("{{WIFI_IP}}", WiFi.softAPIP().toString());
   }
-  Serial.print("  [checkpoint] after WiFi section: ");
-  Serial.println(page.length());
 
   // Stepper status information
   if (homed) {
@@ -128,8 +125,6 @@ void handleRoot() {
   page.replace("{{AUTO_HOME_STATUS}}", autoHomeOnBootConfig ? "Enabled" : "Disabled");
   page.replace("{{ENCODER_COUNT}}", isEncoderInitialized() ?
     String(getEncoderCount()) + " (" + String(getMissedTransitionCount()) + " missed)" : "N/A");
-  Serial.print("  [checkpoint] after stepper/position section: ");
-  Serial.println(page.length());
 
   // Configuration values
   page.replace("{{HOSTNAME}}", hostname);
@@ -158,8 +153,6 @@ void handleRoot() {
   // Coalesce/Streaming/Lookahead removed entirely 2026-09-07 ("we just have
   // Direct mode and PID") - see TODO.md and StepperTrackMode's declaration
   // comment (stepper_handler.h) for the full history.
-  Serial.print("  [checkpoint] after configuration values section: ");
-  Serial.println(page.length());
 
   // Protocol configuration values
   page.replace("{{STEPPER_CONTROL_CHECKED}}", stepperControlEnabled ? "checked" : "");
@@ -167,8 +160,6 @@ void handleRoot() {
   page.replace("{{PROTOCOL_DEBUG_CHECKED}}", protocolDebugConfig ? "checked" : "");
   page.replace("{{LED_BLANK_TIME}}", String(ledBlankTimeConfig));
   page.replace("{{STEPPER_BLANK_TIME}}", String(stepperBlankTimeConfig));
-  Serial.print("  [checkpoint] after protocol section: ");
-  Serial.println(page.length());
 
   // TMC2209 configuration values. UART driver control, sense resistor,
   // address, and SpreadCycle hysteresis (hstrt/hend) are hardcoded as of
@@ -182,8 +173,6 @@ void handleRoot() {
   for (uint16_t opt : tmcMicrostepOptions) {
     page.replace("{{TMC_USTEP_" + String(opt) + "}}", (opt == tmcMicrostepsConfig) ? "selected" : "");
   }
-  Serial.print("  [checkpoint] after TMC section: ");
-  Serial.println(page.length());
 
   // LED configuration values
   page.replace("{{LED_PIXEL_COUNT}}", String(ledPixelCount));
@@ -197,8 +186,6 @@ void handleRoot() {
   page.replace("{{LED_BRIGHTNESS}}", String(ledBrightness));
   page.replace("{{LED_START_NULL}}", String(ledStartNullPixels));
   page.replace("{{LED_END_NULL}}", String(ledEndNullPixels));
-  Serial.print("  [checkpoint] after LED section: ");
-  Serial.println(page.length());
 
   // Version information
   page.replace("{{VERSION}}", VERSION_STRING);
@@ -209,6 +196,20 @@ void handleRoot() {
   server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   server.sendHeader("Pragma", "no-cache");
   server.sendHeader("Expires", "0");
+  // Watchdog reset right before the actual network write (2026-09-08,
+  // found via a real bench crash): a large page to a client that's
+  // actively disconnecting can stall inside server.send()'s underlying
+  // socket write for multiple WebServer HTTP_MAX_SEND_WAIT (5s each)
+  // cycles waiting for ACKs that never come, with nothing in this call
+  // path resetting the watchdog in between - loop()'s own reset happens
+  // once per iteration, so if this one send() call alone eats close to or
+  // past the 10s watchdog window, the device panics and reboots (observed
+  // on the bench exactly this way, immediately after a large send, right
+  // as a client disconnected from the AP mid-transfer). This alone doesn't
+  // bound how long send() can actually take, but it does guarantee a full,
+  // fresh 10s budget going into the one call site now known to be slow,
+  // rather than whatever was left over from whenever loop() last reset it.
+  esp_task_wdt_reset();
   Serial.print("handleRoot() sending ");
   Serial.print(page.length());
   Serial.print(" bytes, built in ");
