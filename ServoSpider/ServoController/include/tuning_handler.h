@@ -73,7 +73,7 @@
 // Tunable names (see tools/README.md for the matching Python-side names;
 // this list has drifted stale before - ALL_TUNABLE_NAMES in
 // tuning_handler.cpp is the actual source of truth):
-//   normalSpeed, normalAccel, jumpStart, trackEnabled, trackThreshold,
+//   normalSpeed, normalAccel, trackEnabled, trackThreshold,
 //   trackSpeed, trackAccel, trackMaxLag, trackMode, coalesceMs,
 //   coalesceSteps, streamRateWindow, streamSettle, compactLog, protocolDebug,
 //   homeSpeed, homeAccel, lookaheadSteps, lookaheadSettle, pidKp,

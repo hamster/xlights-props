@@ -15,18 +15,6 @@ function showNotification(message, isSuccess) {
       document.getElementById('stepperBlankTimeGroup').style.display = stepperControlChecked ? 'block' : 'none';
     }
 
-    function toggleTmcOptions() {
-      var tmcEnabled = document.getElementById('tmcEnabled').checked;
-      document.getElementById('tmcOptionsGroup').style.display = tmcEnabled ? 'block' : 'none';
-    }
-
-    function toggleTrackModeFields() {
-      var mode = document.getElementById('stepperTrackMode').value;
-      document.getElementById('coalesceFieldsGroup').style.display = (mode === '1') ? 'block' : 'none';
-      document.getElementById('streamFieldsGroup').style.display = (mode === '2') ? 'block' : 'none';
-      document.getElementById('lookaheadFieldsGroup').style.display = (mode === '3') ? 'block' : 'none';
-    }
-
     function clearTmcStall() {
       fetch('/clear-tmc-stall')
         .then(response => response.json())
@@ -90,8 +78,6 @@ function showNotification(message, isSuccess) {
     // Initialize stepper options visibility on page load
     document.addEventListener('DOMContentLoaded', function() {
       toggleStepperOptions();
-      toggleTmcOptions();
-      toggleTrackModeFields();
     });
 
     function handleFormSubmit(event, url) {

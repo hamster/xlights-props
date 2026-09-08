@@ -18,13 +18,32 @@
 // a moment, sometimes self-recovers, sometimes needs a manual nudge or grinds
 // indefinitely (the step counter keeps incrementing fictitiously while the
 // motor isn't actually turning, since it has no way to detect a stall).
-// 20000 (matching normalAccel) plus a nonzero jumpStartConfig (see
-// stepper_handler.cpp) tested clean across multiple homing cycles, including
-// back-to-back immediate re-homes, which is exactly the scenario that
-// reliably reproduced the stall at the old value.
+// 20000 (matching normalAccel) plus a nonzero JUMP_START_STEPS (see below)
+// tested clean across multiple homing cycles, including back-to-back
+// immediate re-homes, which is exactly the scenario that reliably
+// reproduced the stall at the old value.
 #define stepperAccelHoming 20000
 #define stepperSpeed 6500
 #define stepperSpeedHoming 6000
+
+// Ramp step to jump to from standstill (FastAccelStepper's setJumpStart()):
+// one deliberately larger first step (speed = sqrt(2*accel*jump_step), so 20
+// steps at stepperAccelHoming=20000 gives roughly an 894Hz starting kick)
+// instead of ramping from true zero - added 2026-08-30 after bench testing
+// found the motor could intermittently stall right at the very first step of
+// a move (buzzes in place briefly, then self-recovers or needs a nudge), a
+// classic stepper starting-torque symptom a lower cruise acceleration alone
+// didn't fully fix.
+//
+// Was a Settings-UI/NVS-configurable "Jump Start" field until 2026-09-07,
+// when a Wave 4 UI-cleanup pass hardcoded it: disabling it (0) at
+// homeAccel=20000 showed no observed difference across 3 back-to-back
+// homing cycles (see TODO.md), and it was never independently tested for
+// Direct-mode's ordinary DDP moveTo() calls either - not worth a Settings
+// field for a value nobody has shown changes behavior. Kept non-zero rather
+// than dropped to 0 purely because that's what's been running without
+// incident; revisit in code, not the UI, if it's ever worth re-testing.
+#define JUMP_START_STEPS 20
 
 // Homing states. Simplified 2026-08-30 from an earlier 14-state version that
 // inserted a fixed-distance "move off the switch, wait, re-verify clear"
@@ -150,7 +169,6 @@ extern unsigned long homingTravelMs;   // one-way (0-100%) wall-clock elapsed ti
 // Stepper configuration variables
 extern int stepperSpeedConfig;
 extern int stepperAccelConfig;
-extern int jumpStartConfig;
 extern bool autoHomeOnBootConfig;
 extern int stepperSpeedHomingConfig;   // Homing speed, Hz - tune per microstep setting (6000 tuned for 16 microsteps)
 extern int stepperAccelHomingConfig;   // Homing acceleration, steps/s^2

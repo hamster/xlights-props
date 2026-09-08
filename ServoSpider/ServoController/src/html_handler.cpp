@@ -80,7 +80,6 @@ void handleRoot() {
   page.replace("{{AP_APPEND_MAC_CHECKED}}", ap_append_mac ? "checked" : "");
   page.replace("{{STEPPER_SPEED}}", String(stepperSpeedConfig));
   page.replace("{{STEPPER_ACCEL}}", String(stepperAccelConfig));
-  page.replace("{{JUMP_START}}", String(jumpStartConfig));
   page.replace("{{AUTO_HOME_ON_BOOT_CHECKED}}", autoHomeOnBootConfig ? "checked" : "");
   page.replace("{{STEPPER_SPEED_HOMING}}", String(stepperSpeedHomingConfig));
   page.replace("{{STEPPER_ACCEL_HOMING}}", String(stepperAccelHomingConfig));
@@ -90,15 +89,13 @@ void handleRoot() {
   page.replace("{{STEPPER_TRACK_ACCEL}}", String(stepperTrackAccelConfig));
   page.replace("{{STEPPER_TRACK_MAX_LAG}}", String(stepperTrackMaxLagConfig));
   page.replace("{{TRACK_MODE_DIRECT_SEL}}", stepperTrackModeConfig == TRACK_MODE_DIRECT ? "selected" : "");
-  page.replace("{{TRACK_MODE_COALESCE_SEL}}", stepperTrackModeConfig == TRACK_MODE_COALESCE ? "selected" : "");
-  page.replace("{{TRACK_MODE_STREAMING_SEL}}", stepperTrackModeConfig == TRACK_MODE_STREAMING ? "selected" : "");
-  page.replace("{{TRACK_MODE_LOOKAHEAD_SEL}}", stepperTrackModeConfig == TRACK_MODE_LOOKAHEAD ? "selected" : "");
-  page.replace("{{STEPPER_COALESCE_MS}}", String(stepperCoalesceMsConfig));
-  page.replace("{{STEPPER_COALESCE_STEPS}}", String(stepperCoalesceStepsConfig));
-  page.replace("{{STEPPER_STREAM_RATE_WINDOW}}", String(stepperStreamRateWindowMsConfig));
-  page.replace("{{STEPPER_STREAM_SETTLE}}", String(stepperStreamSettleMsConfig));
-  page.replace("{{STEPPER_LOOKAHEAD_STEPS}}", String(stepperLookaheadStepsConfig));
-  page.replace("{{STEPPER_LOOKAHEAD_SETTLE}}", String(stepperLookaheadSettleMsConfig));
+  page.replace("{{TRACK_MODE_PID_SEL}}", stepperTrackModeConfig == TRACK_MODE_PID ? "selected" : "");
+  // Coalesce/Streaming/Lookahead are no longer offered in the web UI (Wave 4,
+  // 2026-09-07 - "we just have Direct mode and PID") but remain implemented
+  // and reachable via $SET/GET /tunable trackMode=1/2/3 for bench work - see
+  // TODO.md. Their own config values (coalesceMs, streamRateWindow,
+  // lookaheadSteps, etc.) still load/save via NVS same as always, just have
+  // no Settings-page fields to edit them with anymore.
 
   // Protocol configuration values
   page.replace("{{STEPPER_CONTROL_CHECKED}}", stepperControlEnabled ? "checked" : "");
@@ -107,10 +104,10 @@ void handleRoot() {
   page.replace("{{LED_BLANK_TIME}}", String(ledBlankTimeConfig));
   page.replace("{{STEPPER_BLANK_TIME}}", String(stepperBlankTimeConfig));
 
-  // TMC2209 configuration values
-  page.replace("{{TMC_ENABLED_CHECKED}}", tmcEnabledConfig ? "checked" : "");
-  page.replace("{{TMC_RSENSE}}", String(tmcRSenseConfig, 3));
-  page.replace("{{TMC_ADDRESS}}", String(tmcAddressConfig));
+  // TMC2209 configuration values. UART driver control, sense resistor,
+  // address, and SpreadCycle hysteresis (hstrt/hend) are hardcoded as of
+  // 2026-09-07 (Wave 4 UI pass) - see tmc_handler.cpp's declaration
+  // comments - so those no longer have template placeholders here.
   page.replace("{{TMC_RUN_CURRENT}}", String(tmcRunCurrentConfig));
   page.replace("{{TMC_HOLD_PERCENT}}", String(tmcHoldPercentConfig));
   page.replace("{{TMC_STALL_ENABLED_CHECKED}}", tmcStallEnabledConfig ? "checked" : "");
@@ -119,8 +116,6 @@ void handleRoot() {
   for (uint16_t opt : tmcMicrostepOptions) {
     page.replace("{{TMC_USTEP_" + String(opt) + "}}", (opt == tmcMicrostepsConfig) ? "selected" : "");
   }
-  page.replace("{{TMC_HSTRT}}", String(tmcHstrtConfig));
-  page.replace("{{TMC_HEND}}", String(tmcHendConfig));
 
   // LED configuration values
   page.replace("{{LED_PIXEL_COUNT}}", String(ledPixelCount));
@@ -222,10 +217,9 @@ void handleSaveAP() {
 }
 
 void handleSaveStepper() {
-  if (server.hasArg("stepperSpeed") && server.hasArg("stepperAccel") && server.hasArg("jumpStart")) {
+  if (server.hasArg("stepperSpeed") && server.hasArg("stepperAccel")) {
     stepperSpeedConfig = server.arg("stepperSpeed").toInt();
     stepperAccelConfig = server.arg("stepperAccel").toInt();
-    jumpStartConfig = server.arg("jumpStart").toInt();
     autoHomeOnBootConfig = server.hasArg("autoHomeOnBoot");
     if (server.hasArg("stepperSpeedHoming")) {
       stepperSpeedHomingConfig = server.arg("stepperSpeedHoming").toInt();
@@ -269,20 +263,18 @@ void handleSaveStepper() {
     }
 
     // Config variables are live immediately - the DDP position-handling
-    // loop reads them fresh on every packet, and jumpStart applies to the
-    // next move regardless. The actual flash write is deferred to
-    // persistStepperSettingsIfPending() (called from loop()) rather than
-    // done here synchronously: a Preferences write briefly disables the
-    // flash cache, and FastAccelStepper's step-generation interrupt fires
-    // continuously while the motor is moving, making a crash likely if
-    // this were written immediately mid-move (see the header comment on
-    // stepperSettingsPendingSave). Deliberately NOT calling
-    // stepper->setSpeedInHz()/setAcceleration() here either - forcing the
-    // "normal" profile onto an actively-moving stepper that might
-    // currently be cruising in tracking mode would itself be a jerk; the
-    // next DDP update (or a manual move, which sets its own profile)
+    // loop reads them fresh on every packet. The actual flash write is
+    // deferred to persistStepperSettingsIfPending() (called from loop())
+    // rather than done here synchronously: a Preferences write briefly
+    // disables the flash cache, and FastAccelStepper's step-generation
+    // interrupt fires continuously while the motor is moving, making a
+    // crash likely if this were written immediately mid-move (see the
+    // header comment on stepperSettingsPendingSave). Deliberately NOT
+    // calling stepper->setSpeedInHz()/setAcceleration() here either -
+    // forcing the "normal" profile onto an actively-moving stepper that
+    // might currently be cruising in tracking mode would itself be a jerk;
+    // the next DDP update (or a manual move, which sets its own profile)
     // picks the right one naturally.
-    stepper->setJumpStart(jumpStartConfig);
     stepperSettingsPendingSave = true;
 
     Serial.println("Stepper configuration updated (will save to flash once the motor is idle)");
@@ -290,9 +282,7 @@ void handleSaveStepper() {
     Serial.print(stepperSpeedConfig);
     Serial.print(" Hz, Acceleration: ");
     Serial.print(stepperAccelConfig);
-    Serial.print(" Hz/s, Jump Start: ");
-    Serial.print(jumpStartConfig);
-    Serial.print(" steps, Auto Home on Boot: ");
+    Serial.print(" Hz/s, Auto Home on Boot: ");
     Serial.println(autoHomeOnBootConfig ? "Enabled" : "Disabled");
     Serial.print("Homing Speed: ");
     Serial.print(stepperSpeedHomingConfig);
@@ -421,62 +411,39 @@ void handleSaveTmc() {
     return;
   }
 
-  bool newEnabled = server.hasArg("tmcEnabled");
-  float newRSense = server.hasArg("tmcRSense") ? server.arg("tmcRSense").toFloat() : tmcRSenseConfig;
-  uint8_t newAddress = server.hasArg("tmcAddress") ? (uint8_t)server.arg("tmcAddress").toInt() : tmcAddressConfig;
+  // tmcEnabled/tmcRSense/tmcAddress/tmcHstrt/tmcHend are hardcoded as of
+  // 2026-09-07 (see tmc_handler.cpp) and no longer have form fields to read
+  // here - the UART link itself is always established at boot and never
+  // needs re-initializing from this handler anymore, so this only ever
+  // re-applies registers on an already-connected driver.
   uint16_t newRunCurrent = server.hasArg("tmcRunCurrent") ? (uint16_t)server.arg("tmcRunCurrent").toInt() : tmcRunCurrentConfig;
   uint8_t newHoldPercent = server.hasArg("tmcHoldPercent") ? (uint8_t)server.arg("tmcHoldPercent").toInt() : tmcHoldPercentConfig;
   bool newStallEnabled = server.hasArg("tmcStallEnabled");
   uint16_t newStallThreshold = server.hasArg("tmcStallThreshold") ? (uint16_t)server.arg("tmcStallThreshold").toInt() : tmcStallThresholdConfig;
   uint16_t newMicrosteps = server.hasArg("tmcMicrosteps") ? (uint16_t)server.arg("tmcMicrosteps").toInt() : tmcMicrostepsConfig;
-  uint8_t newHstrt = server.hasArg("tmcHstrt") ? (uint8_t)server.arg("tmcHstrt").toInt() : tmcHstrtConfig;
-  uint8_t newHend = server.hasArg("tmcHend") ? (uint8_t)server.arg("tmcHend").toInt() : tmcHendConfig;
 
-  bool linkSettingsChanged = (newEnabled != tmcEnabledConfig) || (newRSense != tmcRSenseConfig) || (newAddress != tmcAddressConfig);
   // A fresh homing run is needed if microstepping changes, since bottomPosition
   // is measured in actual steps and the physical distance per step just changed.
   bool microstepsChanged = (newMicrosteps != tmcMicrostepsConfig);
 
-  tmcEnabledConfig = newEnabled;
-  tmcRSenseConfig = newRSense;
-  tmcAddressConfig = newAddress;
   tmcRunCurrentConfig = newRunCurrent;
   tmcHoldPercentConfig = newHoldPercent;
   tmcStallEnabledConfig = newStallEnabled;
   tmcStallThresholdConfig = newStallThreshold;
   tmcMicrostepsConfig = newMicrosteps;
-  tmcHstrtConfig = newHstrt;
-  tmcHendConfig = newHend;
 
-  preferences.putBool("tmcEnabled", tmcEnabledConfig);
-  preferences.putFloat("tmcRSense", tmcRSenseConfig);
-  preferences.putInt("tmcAddress", tmcAddressConfig);
   preferences.putInt("tmcRunCurrent", tmcRunCurrentConfig);
   preferences.putInt("tmcHoldPercent", tmcHoldPercentConfig);
   preferences.putBool("tmcStallEnabled", tmcStallEnabledConfig);
   preferences.putInt("tmcStallThresh", tmcStallThresholdConfig);
   preferences.putInt("tmcMicrosteps", tmcMicrostepsConfig);
-  preferences.putInt("tmcHstrt", tmcHstrtConfig);
-  preferences.putInt("tmcHend", tmcHendConfig);
 
   if (microstepsChanged) {
     Serial.println("TMC2209 microstepping changed - re-home to recalculate bottomPosition!");
   }
 
   Serial.println("TMC2209 configuration saved!");
-
-  if (linkSettingsChanged) {
-    // Enable/disable, RSense, or address changed - the UART link itself
-    // needs to be (re)established rather than just re-applying registers.
-    tmcConnected = false;
-    if (tmcEnabledConfig) {
-      initTmc();
-    } else {
-      Serial.println("TMC2209 UART control disabled");
-    }
-  } else {
-    applyTmcSettings();
-  }
+  applyTmcSettings();
 
   if (microstepsChanged) {
     server.send(200, "application/json", "{\"success\":true,\"message\":\"TMC2209 settings saved! Microstepping changed - re-home to recalculate travel.\"}");

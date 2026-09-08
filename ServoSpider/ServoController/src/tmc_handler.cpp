@@ -8,21 +8,29 @@ extern Preferences preferences;
 TMC2209Stepper *tmcDriver = nullptr;
 bool tmcConnected = false;
 
-// Default true (2026-09-07, Wave 4 UI pass) - UART driver control (current
-// control, StallGuard, diagnostics) is now considered standard rather than
-// opt-in. Only affects a device that has never saved "tmcEnabled" to NVS -
-// see CLAUDE.md's Preferences note. Existing provisioned devices keep
-// whatever they already saved.
-bool tmcEnabledConfig = true;
-float tmcRSenseConfig = 0.11f;
-uint8_t tmcAddressConfig = 0;
+// Hardcoded, not user-configurable (2026-09-07, Wave 4 UI pass) - UART
+// driver control is now considered standard rather than opt-in, and the
+// UI's Enable checkbox, sense-resistor field, and driver-address field were
+// removed: this project has only ever run one specific breakout board/wiring
+// (single driver, MS1/MS2 strapped for address 0), so exposing these as
+// per-device settings added a Settings-page field for a choice nobody
+// actually varies. If a genuinely different board/sense-resistor/multi-
+// driver setup is ever used, change these constants in code, not in NVS.
+const bool tmcEnabledConfig = true;
+const float tmcRSenseConfig = 0.11f;
+const uint8_t tmcAddressConfig = 0;
 uint16_t tmcRunCurrentConfig = 800;
 uint8_t tmcHoldPercentConfig = 50;
 bool tmcStallEnabledConfig = false;
 uint16_t tmcStallThresholdConfig = 50;
 uint16_t tmcMicrostepsConfig = 16;
-uint8_t tmcHstrtConfig = 0;
-uint8_t tmcHendConfig = 0;
+// SpreadCycle hysteresis start/end - hardcoded alongside the above
+// (2026-09-07): never tuned away from these defaults in this project's
+// entire TMC2209 history (see tmc_handler.h's StealthChop-removal comment
+// for the chopper-mode work that *was* real), so the Settings-page fields
+// for them were pure unused surface area.
+const uint8_t tmcHstrtConfig = 0;
+const uint8_t tmcHendConfig = 0;
 
 TmcStatus tmcStatus;
 
@@ -52,11 +60,6 @@ static bool wasRunning = false;
 static uint8_t stallDebounceCount = 0;
 
 void initTmc() {
-  if (!tmcEnabledConfig) {
-    Serial.println("TMC2209 UART control disabled (enable it in Settings to use it)");
-    return;
-  }
-
   Serial1.begin(tmcUartBaud, SERIAL_8N1, tmcUartRxPin, tmcUartTxPin);
   tmcDriver = new TMC2209Stepper(&Serial1, tmcRSenseConfig, tmcAddressConfig);
   tmcDriver->begin();
@@ -153,7 +156,7 @@ void tmcResetStallRampTimer() {
 }
 
 void updateTmc() {
-  if (!tmcEnabledConfig || !tmcConnected || tmcDriver == nullptr) return;
+  if (!tmcConnected || tmcDriver == nullptr) return;
 
   unsigned long now = millis();
 

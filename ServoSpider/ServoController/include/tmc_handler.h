@@ -16,10 +16,16 @@
 extern TMC2209Stepper *tmcDriver;
 extern bool tmcConnected;  // true once test_connection() succeeds
 
-// Configuration (loaded from / saved to Preferences)
-extern bool tmcEnabledConfig;             // master enable for the UART link
-extern float tmcRSenseConfig;             // sense resistor, ohms (module-specific)
-extern uint8_t tmcAddressConfig;          // UART address from MS1/MS2 strapping, 0-3
+// Configuration. Run current, hold current, stall detection, and
+// microsteps are loaded from / saved to Preferences via the web UI's
+// Stepper Configuration -> TMC2209 Config collapsible. tmcEnabledConfig/
+// tmcRSenseConfig/tmcAddressConfig/tmcHstrtConfig/tmcHendConfig are
+// hardcoded constants instead (see tmc_handler.cpp's declaration comment,
+// 2026-09-07) - this project has only ever run one board/wiring, so they
+// were Settings-page fields for values nobody varies.
+extern const bool tmcEnabledConfig;       // master enable for the UART link - always true
+extern const float tmcRSenseConfig;       // sense resistor, ohms (module-specific)
+extern const uint8_t tmcAddressConfig;    // UART address from MS1/MS2 strapping, 0-3
 extern uint16_t tmcRunCurrentConfig;      // RMS run current, mA
 extern uint8_t tmcHoldPercentConfig;      // hold current as % of run current
 // StealthChop removed 2026-09-07 - tried it live at this project's normal
@@ -34,8 +40,8 @@ extern uint8_t tmcHoldPercentConfig;      // hold current as % of run current
 extern bool tmcStallEnabledConfig;        // enable stall-detection safety cutoff
 extern uint16_t tmcStallThresholdConfig;  // raw SG_RESULT trip point (0-1023, lower = more loaded)
 extern uint16_t tmcMicrostepsConfig;      // microsteps per full step (1,2,4,8,16,32,64,128,256)
-extern uint8_t tmcHstrtConfig;            // SpreadCycle hysteresis start, raw register value 0-7
-extern uint8_t tmcHendConfig;             // SpreadCycle hysteresis end, raw register value 0-15
+extern const uint8_t tmcHstrtConfig;      // SpreadCycle hysteresis start, raw register value 0-7 - hardcoded, see above
+extern const uint8_t tmcHendConfig;       // SpreadCycle hysteresis end, raw register value 0-15 - hardcoded, see above
 
 // Live diagnostics snapshot, refreshed periodically by updateTmc()
 struct TmcStatus {

@@ -206,27 +206,49 @@ individual entries below for what each one was.
   (`web/index.html`) - bench/tuning-only, shouldn't be user-facing. The
   `/compact-log` HTTP endpoint itself is untouched - `tools/*.py` control it
   directly and don't go through this checkbox.
-- [~] **Reclassified, NOT done** - "Remove Jump Start, add a real PID tuning
-  parameters section... and remove the old Small-Move Tracking section
-  (superseded by PID mode)." On closer look this conflates two different
-  things: adding a real PID tuning UI (genuinely missing, worth doing) vs.
-  deleting Jump Start and Small-Move Tracking (still the live, real
-  implementation for every non-PID `trackMode`, and Direct - one of the
-  modes that depends on them - remains the flash-persisted default across
-  the fleet per CLAUDE.md; PID is still a RAM-only bench override, not yet
-  the shipped default). Deleting their UI now would strand real
-  fleet-relevant settings as RAM/serial-only. Splitting this into two real
-  items instead:
-  - [ ] Add a real **PID tuning parameters** section (trackMode option 4 is
-    missing from the dropdown entirely, and none of the ~13 `pid*`
-    tunables - see `include/tuning_handler.h`'s doc comment for the
-    current list - have a Settings UI or NVS persistence; today they're
-    `$SET`/`GET /tunable` RAM-only). Real feature work: needs new
-    Preferences keys (≤15 chars each) and a `/save-pid` endpoint, not just
-    HTML.
-  - [ ] Revisit removing Jump Start / Small-Move Tracking from the UI only
-    once PID is promoted from RAM-only bench override to the actual
-    flash-persisted default - not before.
+- [x] **Revisited and resolved, 2026-09-07 (second pass).** The previous
+  entry flagged real fleet-default risk in blindly deleting Jump Start and
+  Small-Move Tracking; the user then made the actual calls directly:
+  - [x] **Jump Start removed as a Settings/NVS field, hardcoded instead**
+    (`JUMP_START_STEPS` in `stepper_handler.h`, still 20, the value already
+    running). Nothing in this project's testing (the Wave 3 homing test, or
+    ever) showed it changing behavior - not worth a per-device setting for
+    a value nobody has shown matters. `jumpStartConfig` removed everywhere:
+    NVS load/save, `/save-stepper`, `/config` GET/POST, `$SET`/`GET /tunable`.
+  - [x] **Small-Move Tracking kept** (still real, still Direct-mode-default,
+    per the previous entry's reasoning) but decluttered: its Threshold/Max
+    Lag/Speed/Acceleration fields now live behind a "Small-Move Tracking
+    Settings" collapsible under the enable checkbox, instead of four
+    always-visible fields. Its description trimmed to one sentence plus an
+    explicit "Direct mode only" note now that PID is a real alternative.
+  - [x] **Tracking Motion Strategy dropdown simplified to Direct/PID only**
+    ("we just have Direct mode and PID," the user's words) - Coalesce/
+    Streaming/Lookahead options and their fields-groups/paragraphs removed
+    from `web/index.html`. Backend untouched: `TRACK_MODE_COALESCE/
+    STREAMING/LOOKAHEAD` remain fully implemented and reachable via
+    `$SET`/`GET /tunable trackMode=1/2/3` for bench work - only the
+    Settings-page dropdown lost them. PID (`trackMode=4`) added to the
+    dropdown for the first time (`{{TRACK_MODE_PID_SEL}}`) - it was
+    previously missing from the UI entirely despite being the production
+    default since earlier in Wave 3.
+  - Still open, not done this pass: a real **PID tuning parameters**
+    section - selecting PID from the dropdown and saving persists the mode
+    choice, but none of the ~13 `pid*` tunables (see
+    `include/tuning_handler.h`'s doc comment) have a Settings UI or NVS
+    persistence yet; they're still `$SET`/`GET /tunable` RAM-only. Real
+    feature work: needs new Preferences keys (≤15 chars each) and a
+    `/save-pid` endpoint, not just HTML.
+- [x] **TMC2209 UART enable, sense resistor, driver address, and SpreadCycle
+  hysteresis (hstrt/hend) all hardcoded, 2026-09-07 (second pass) - "we
+  never used them" / "this project has only ever run one board." No
+  Settings fields, no NVS keys, no `/config` GET/POST entries, no
+  `linkSettingsChanged`-triggered UART reinit in `/save-tmc` (no longer
+  reachable - those values can't change at runtime anymore).
+  `tmcEnabledConfig`/`tmcRSenseConfig`/`tmcAddressConfig`/`tmcHstrtConfig`/
+  `tmcHendConfig` are `const` in `tmc_handler.cpp` now (values unchanged:
+  true/0.11/0/0/0). Any of the five keys already saved in an existing
+  device's NVS is now just an orphaned, unread value - harmless, never
+  read again.
 - [x] Remove the redundant **Stepper Control** section from Settings - it
   duplicated the Status page's own "Manual Stepper Control" collapsible
   (same `setPosition`/`moveSteps`/`homeServo` actions, just a second set of
@@ -237,14 +259,12 @@ individual entries below for what each one was.
   directly).
 - [x] Fold the **TMC2209 driver settings** panel into Stepper Configuration
   under a single "TMC2209 Config" collapsible (no nested "Advanced" level -
-  flattened those fields into the main body), and enabled UART driver
-  control by default (`tmcEnabledConfig` compiled default `false`->`true`
-  in `tmc_handler.cpp` and `main.cpp`'s NVS-load fallback). Per the
-  Preferences-default note in CLAUDE.md this only changes behavior for a
-  device that has never saved `tmcEnabled` - didn't touch the bench
-  device's already-saved value. Did **not** remove the StallGuard settings
-  from the panel - Wave 1's StallGuard decision is still open, and this
-  item was explicitly conditional on that decision coming back "remove."
+  flattened those fields into the main body). First pass (same day) made
+  UART enable default-on but still a checkbox; second pass (see the
+  hardcoding entry above) removed the checkbox entirely - superseded, not a
+  separate outcome. Did **not** remove the StallGuard settings from the
+  panel - Wave 1's StallGuard decision is still open, and this item was
+  explicitly conditional on that decision coming back "remove."
 - [ ] Be ready to `#define` off the encoder status/count display
   (`id="encoder-count"`) once tracking-mode tuning is done and the encoder
   is no longer needed for bench verification. **Not yet** - tuning is

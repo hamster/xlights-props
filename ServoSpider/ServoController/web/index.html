@@ -277,11 +277,6 @@
           </div>
 
           <div class="form-group">
-            <label for="jumpStart">Jump Start (steps):</label>
-            <input type="number" id="jumpStart" name="jumpStart" value="{{JUMP_START}}" min="0" max="10000" required>
-          </div>
-
-          <div class="form-group">
             <label for="stepperSpeedHoming">Homing Speed (Hz):</label>
             <input type="number" id="stepperSpeedHoming" name="stepperSpeedHoming" value="{{STEPPER_SPEED_HOMING}}" min="100" max="50000" required>
           </div>
@@ -292,67 +287,46 @@
           </div>
 
           <div class="form-group">
+            <label for="stepperTrackMode">Tracking Motion Strategy:</label>
+            <select id="stepperTrackMode" name="stepperTrackMode" style="width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box; border: 2px solid #ddd; border-radius: 4px;">
+              <option value="0" {{TRACK_MODE_DIRECT_SEL}}>Direct (moveTo every packet)</option>
+              <option value="4" {{TRACK_MODE_PID_SEL}}>PID (closed-loop tracking with velocity feedforward)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
             <label for="stepperTrackEnabled">
               <input type="checkbox" id="stepperTrackEnabled" name="stepperTrackEnabled" {{STEPPER_TRACK_ENABLED_CHECKED}}>
               Small-Move Tracking
             </label>
-            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Uses a gentler speed/acceleration for small position updates (e.g. xLights slowly panning a value over DDP), so a stream of tiny moves blends into smooth continuous motion instead of a torque-spiking accelerate/decelerate cycle on every packet. Larger jumps still use the normal Stepper Speed/Acceleration above. Needs on-bench tuning: too aggressive and it can stall/skip steps starting from near-rest; too gentle and it visibly lags behind a fast-panning curve.</p>
+            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Direct mode only - PID has its own closed-loop control instead. Uses a gentler speed/acceleration for small position updates (e.g. xLights slowly panning a value over DDP), so a stream of tiny moves blends into smooth continuous motion instead of a torque-spiking accelerate/decelerate cycle on every packet.</p>
           </div>
 
-          <div class="form-group">
-            <label for="stepperTrackThreshold">Tracking Threshold (steps):</label>
-            <input type="number" id="stepperTrackThreshold" name="stepperTrackThreshold" value="{{STEPPER_TRACK_THRESHOLD}}" min="1" max="100000" required>
-            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Moves at or below this size (measured from the previous commanded position, not the motor's actual position) use the tracking profile; anything bigger uses the normal profile.</p>
-          </div>
+          <button type="button" class="collapsible" onclick="toggleCollapsible(this)">Small-Move Tracking Settings</button>
+          <div class="collapsible-content">
+            <div class="collapsible-content-inner">
+              <div class="form-group">
+                <label for="stepperTrackThreshold">Tracking Threshold (steps):</label>
+                <input type="number" id="stepperTrackThreshold" name="stepperTrackThreshold" value="{{STEPPER_TRACK_THRESHOLD}}" min="1" max="100000" required>
+                <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Moves at or below this size (measured from the previous commanded position, not the motor's actual position) use the tracking profile; anything bigger uses the normal profile.</p>
+              </div>
 
-          <div class="form-group">
-            <label for="stepperTrackMaxLag">Tracking Max Lag (steps):</label>
-            <input type="number" id="stepperTrackMaxLag" name="stepperTrackMaxLag" value="{{STEPPER_TRACK_MAX_LAG}}" min="1" max="1000000" required>
-            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Safety net: if the motor's actual position ever falls this far behind the commanded target, the normal profile is used regardless of the setting above, to resync rather than let it drift indefinitely.</p>
-          </div>
+              <div class="form-group">
+                <label for="stepperTrackMaxLag">Tracking Max Lag (steps):</label>
+                <input type="number" id="stepperTrackMaxLag" name="stepperTrackMaxLag" value="{{STEPPER_TRACK_MAX_LAG}}" min="1" max="1000000" required>
+                <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Safety net: if the motor's actual position ever falls this far behind the commanded target, the normal profile is used regardless of the setting above, to resync rather than let it drift indefinitely.</p>
+              </div>
 
-          <div class="form-group">
-            <label for="stepperTrackSpeed">Tracking Speed (Hz):</label>
-            <input type="number" id="stepperTrackSpeed" name="stepperTrackSpeed" value="{{STEPPER_TRACK_SPEED}}" min="10" max="50000" required>
-          </div>
+              <div class="form-group">
+                <label for="stepperTrackSpeed">Tracking Speed (Hz):</label>
+                <input type="number" id="stepperTrackSpeed" name="stepperTrackSpeed" value="{{STEPPER_TRACK_SPEED}}" min="10" max="50000" required>
+              </div>
 
-          <div class="form-group">
-            <label for="stepperTrackAccel">Tracking Acceleration (steps/s&sup2;):</label>
-            <input type="number" id="stepperTrackAccel" name="stepperTrackAccel" value="{{STEPPER_TRACK_ACCEL}}" min="1" max="1000000" required>
-          </div>
-
-          <div class="form-group">
-            <label for="stepperTrackMode">Tracking Motion Strategy:</label>
-            <select id="stepperTrackMode" name="stepperTrackMode" onchange="toggleTrackModeFields()" style="width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box; border: 2px solid #ddd; border-radius: 4px;">
-              <option value="0" {{TRACK_MODE_DIRECT_SEL}}>Direct (moveTo every packet - original behavior)</option>
-              <option value="1" {{TRACK_MODE_COALESCE_SEL}}>Coalesce (batch small updates into fewer, larger moves)</option>
-              <option value="2" {{TRACK_MODE_STREAMING_SEL}}>Streaming (continuous speed, snaps to position once quiet) - NOT RECOMMENDED, see note</option>
-              <option value="3" {{TRACK_MODE_LOOKAHEAD_SEL}}>Lookahead (aims moveTo() past the target so it never plans to stop)</option>
-            </select>
-            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Experimental - added to compare on the bench after log analysis showed Direct mode's jerkiness comes from moveTo() always planning to decelerate to a full stop at each new nearby target, not primarily from accel/speed tuning. All four still use the Tracking Speed/Acceleration/Threshold above.</p>
-            <p style="color: #b00; font-size: 12px; margin: 4px 0 0;"><strong>Streaming mode is currently shelved</strong> - bench-testing (2026-08-30) found it repeatedly stalled or froze the trolley for 15+ seconds at a time even after fixing two confirmed logic bugs, with a remaining issue that looks like a deeper stepper-library queue interaction rather than a quick fix. Direct, Coalesce, and Lookahead (which performed nearly identically to Direct/Coalesce, or better, in testing) are the validated, recommended choices - see TODO.md for the full writeup.</p>
-          </div>
-
-          <div class="form-group" id="coalesceFieldsGroup">
-            <label for="stepperCoalesceMs">Coalesce Window (ms):</label>
-            <input type="number" id="stepperCoalesceMs" name="stepperCoalesceMs" value="{{STEPPER_COALESCE_MS}}" min="0" max="5000" required>
-            <label for="stepperCoalesceSteps" style="margin-top: 8px;">Coalesce Min Steps (early commit if delta exceeds this):</label>
-            <input type="number" id="stepperCoalesceSteps" name="stepperCoalesceSteps" value="{{STEPPER_COALESCE_STEPS}}" min="1" max="100000" required>
-          </div>
-
-          <div class="form-group" id="streamFieldsGroup">
-            <label for="stepperStreamRateWindow">Streaming Rate Window (ms):</label>
-            <input type="number" id="stepperStreamRateWindow" name="stepperStreamRateWindow" value="{{STEPPER_STREAM_RATE_WINDOW}}" min="20" max="5000" required>
-            <label for="stepperStreamSettle" style="margin-top: 8px;">Streaming Settle Time (ms):</label>
-            <input type="number" id="stepperStreamSettle" name="stepperStreamSettle" value="{{STEPPER_STREAM_SETTLE}}" min="20" max="5000" required>
-          </div>
-
-          <div class="form-group" id="lookaheadFieldsGroup">
-            <label for="stepperLookaheadSteps">Lookahead Distance (steps):</label>
-            <input type="number" id="stepperLookaheadSteps" name="stepperLookaheadSteps" value="{{STEPPER_LOOKAHEAD_STEPS}}" min="1" max="1000000" required>
-            <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Must exceed the tracking profile's worst-case stopping distance (Tracking Speed&sup2; / (2 &times; Tracking Acceleration)) or the ramp generator can still catch up to the extended target and decelerate anyway.</p>
-            <label for="stepperLookaheadSettle" style="margin-top: 8px;">Lookahead Settle Time (ms):</label>
-            <input type="number" id="stepperLookaheadSettle" name="stepperLookaheadSettle" value="{{STEPPER_LOOKAHEAD_SETTLE}}" min="20" max="5000" required>
+              <div class="form-group">
+                <label for="stepperTrackAccel">Tracking Acceleration (steps/s&sup2;):</label>
+                <input type="number" id="stepperTrackAccel" name="stepperTrackAccel" value="{{STEPPER_TRACK_ACCEL}}" min="1" max="1000000" required>
+              </div>
+            </div>
           </div>
 
           <div class="form-group">
@@ -365,77 +339,48 @@
           <button type="submit" class="btn-primary">Save Stepper Settings</button>
         </form>
 
-        <button class="collapsible" onclick="toggleCollapsible(this)">TMC2209 Config</button>
+        <button type="button" class="collapsible" onclick="toggleCollapsible(this)">TMC2209 Config</button>
         <div class="collapsible-content">
           <div class="collapsible-content-inner">
-            <p style="color: #666; font-style: italic; margin-top: 0;">Optional: digital current control, StallGuard-based jam detection, and driver diagnostics over the UART link on D6/D7. Leave disabled if the driver isn't wired for UART.</p>
+            <p style="color: #666; font-style: italic; margin-top: 0;">Digital current control, StallGuard-based jam detection, and driver diagnostics over the UART link on D6/D7. Always enabled - if the driver isn't wired for UART, the link simply won't connect (see "UART Link" on the Status tab).</p>
 
             <form onsubmit="return handleFormSubmit(event, '/save-tmc')">
               <div class="form-group">
-                <label for="tmcEnabled">
-                  <input type="checkbox" id="tmcEnabled" name="tmcEnabled" {{TMC_ENABLED_CHECKED}} onchange="toggleTmcOptions()">
-                  Enable UART Driver Control
+                <label for="tmcRunCurrent">Run Current (mA):</label>
+                <input type="number" id="tmcRunCurrent" name="tmcRunCurrent" value="{{TMC_RUN_CURRENT}}" min="0" max="2000" required>
+              </div>
+
+              <div class="form-group">
+                <label for="tmcHoldPercent">Hold Current (% of run):</label>
+                <input type="number" id="tmcHoldPercent" name="tmcHoldPercent" value="{{TMC_HOLD_PERCENT}}" min="0" max="100" required>
+              </div>
+
+              <div class="form-group">
+                <label for="tmcStallEnabled">
+                  <input type="checkbox" id="tmcStallEnabled" name="tmcStallEnabled" {{TMC_STALL_ENABLED_CHECKED}}>
+                  Enable Stall Detection Safety Cutoff
                 </label>
               </div>
 
-              <div id="tmcOptionsGroup">
-                <div class="form-group">
-                  <label for="tmcRunCurrent">Run Current (mA):</label>
-                  <input type="number" id="tmcRunCurrent" name="tmcRunCurrent" value="{{TMC_RUN_CURRENT}}" min="0" max="2000" required>
-                </div>
+              <div class="form-group">
+                <label for="tmcStallThreshold">Stall Threshold (live SG_RESULT below this = stalled; tune on the bench, watch the live value on the Status tab):</label>
+                <input type="number" id="tmcStallThreshold" name="tmcStallThreshold" value="{{TMC_STALL_THRESHOLD}}" min="0" max="1023" required>
+              </div>
 
-                <div class="form-group">
-                  <label for="tmcHoldPercent">Hold Current (% of run):</label>
-                  <input type="number" id="tmcHoldPercent" name="tmcHoldPercent" value="{{TMC_HOLD_PERCENT}}" min="0" max="100" required>
-                </div>
-
-                <div class="form-group">
-                  <label for="tmcStallEnabled">
-                    <input type="checkbox" id="tmcStallEnabled" name="tmcStallEnabled" {{TMC_STALL_ENABLED_CHECKED}}>
-                    Enable Stall Detection Safety Cutoff
-                  </label>
-                </div>
-
-                <div class="form-group">
-                  <label for="tmcStallThreshold">Stall Threshold (live SG_RESULT below this = stalled; tune on the bench, watch the live value on the Status tab):</label>
-                  <input type="number" id="tmcStallThreshold" name="tmcStallThreshold" value="{{TMC_STALL_THRESHOLD}}" min="0" max="1023" required>
-                </div>
-
-                <div class="form-group">
-                  <label for="tmcMicrosteps">Microsteps per Full Step:</label>
-                  <select id="tmcMicrosteps" name="tmcMicrosteps" style="width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box; border: 2px solid #ddd; border-radius: 4px;">
-                    <option value="1" {{TMC_USTEP_1}}>1 (full step)</option>
-                    <option value="2" {{TMC_USTEP_2}}>2</option>
-                    <option value="4" {{TMC_USTEP_4}}>4</option>
-                    <option value="8" {{TMC_USTEP_8}}>8</option>
-                    <option value="16" {{TMC_USTEP_16}}>16</option>
-                    <option value="32" {{TMC_USTEP_32}}>32</option>
-                    <option value="64" {{TMC_USTEP_64}}>64</option>
-                    <option value="128" {{TMC_USTEP_128}}>128</option>
-                    <option value="256" {{TMC_USTEP_256}}>256 (finest, slowest)</option>
-                  </select>
-                  <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Changing this changes physical distance per step - re-home afterward and expect Stepper Speed (Hz) to feel different.</p>
-                </div>
-
-                <p style="margin: 20px 0 5px; font-weight: bold;">SpreadCycle Hysteresis (raw register values; datasheet suggests keeping hstrt + hend &le; 15)</p>
-                <div class="form-group">
-                  <label for="tmcHstrt">Hysteresis Start (hstrt, 0-7):</label>
-                  <input type="number" id="tmcHstrt" name="tmcHstrt" value="{{TMC_HSTRT}}" min="0" max="7" required>
-                </div>
-                <div class="form-group">
-                  <label for="tmcHend">Hysteresis End (hend, 0-15):</label>
-                  <input type="number" id="tmcHend" name="tmcHend" value="{{TMC_HEND}}" min="0" max="15" required>
-                </div>
-
-                <div class="form-group">
-                  <label for="tmcRSense">Sense Resistor (&Omega;):</label>
-                  <input type="number" id="tmcRSense" name="tmcRSense" value="{{TMC_RSENSE}}" min="0.01" max="1" step="0.001" required>
-                </div>
-
-                <div class="form-group">
-                  <label for="tmcAddress">Driver UART Address (MS1/MS2 strap):</label>
-                  <input type="number" id="tmcAddress" name="tmcAddress" value="{{TMC_ADDRESS}}" min="0" max="3" required>
-                </div>
+              <div class="form-group">
+                <label for="tmcMicrosteps">Microsteps per Full Step:</label>
+                <select id="tmcMicrosteps" name="tmcMicrosteps" style="width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box; border: 2px solid #ddd; border-radius: 4px;">
+                  <option value="1" {{TMC_USTEP_1}}>1 (full step)</option>
+                  <option value="2" {{TMC_USTEP_2}}>2</option>
+                  <option value="4" {{TMC_USTEP_4}}>4</option>
+                  <option value="8" {{TMC_USTEP_8}}>8</option>
+                  <option value="16" {{TMC_USTEP_16}}>16</option>
+                  <option value="32" {{TMC_USTEP_32}}>32</option>
+                  <option value="64" {{TMC_USTEP_64}}>64</option>
+                  <option value="128" {{TMC_USTEP_128}}>128</option>
+                  <option value="256" {{TMC_USTEP_256}}>256 (finest, slowest)</option>
+                </select>
+                <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Changing this changes physical distance per step - re-home afterward and expect Stepper Speed (Hz) to feel different.</p>
               </div>
 
               <button type="submit" class="btn-primary">Save Driver Settings</button>

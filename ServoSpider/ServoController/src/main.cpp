@@ -470,10 +470,10 @@ void updateStreamingMode() {
     logCompactMotion(oldPositionRequest, (int)streamRawTarget, curPosBeforeMove,
                       (int)commandDeltaForLog, (int)lagForLog, useTracking, curSpeedBeforeMove, targetSpeedHz);
 
-    // Restore the configured jumpStart for this moveTo()-based settle - see
+    // Restore the hardcoded jumpStart for this moveTo()-based settle - see
     // the runForward()/runBackward() call site below for why it's disabled
     // while actually streaming (same fix as TRACK_MODE_PID, same root cause).
-    stepper->setJumpStart(jumpStartConfig);
+    stepper->setJumpStart(JUMP_START_STEPS);
     stepper->moveTo((int)streamRawTarget);
     stepperBlanked = false;
     streamSettled = true;
@@ -796,10 +796,10 @@ void updatePidMode() {
       int curPosBeforeMove = (int)currentPos;
       int32_t curSpeedBeforeMove = stepper->getCurrentSpeedInMilliHz();
       stepper->setAcceleration(stepperPidAccelConfig);
-      // Restore the configured jumpStart for this moveTo()-based settle -
+      // Restore the hardcoded jumpStart for this moveTo()-based settle -
       // see the runForward()/runBackward() call site below for why it's
       // disabled while actually tracking.
-      stepper->setJumpStart(jumpStartConfig);
+      stepper->setJumpStart(JUMP_START_STEPS);
       stepper->moveTo((int32_t)target);
       stepperBlanked = false;
       lastCommandedTargetPosition = target;
@@ -838,7 +838,7 @@ void updatePidMode() {
       if (!deadbandGenuinelyRunning && (now - lastPidDeadbandRetryMs >= 100)) {
         lastPidDeadbandRetryMs = now;
         stepper->setAcceleration(stepperPidAccelConfig);
-        stepper->setJumpStart(jumpStartConfig);
+        stepper->setJumpStart(JUMP_START_STEPS);
         stepper->moveTo((int32_t)target);
         stepperBlanked = false;
         lastCommandedTargetPosition = target;
@@ -930,7 +930,7 @@ void updatePidMode() {
     if (!genuinelyRunning && (now - lastPidHystRetryMs >= 100)) {
       lastPidHystRetryMs = now;
       stepper->setAcceleration(stepperPidAccelConfig);
-      stepper->setJumpStart(jumpStartConfig);
+      stepper->setJumpStart(JUMP_START_STEPS);
       stepper->moveTo((int32_t)target);
       stepperBlanked = false;
       lastCommandedTargetPosition = target;
@@ -1339,7 +1339,6 @@ void setup() {
   // Load saved stepper configuration
   stepperSpeedConfig = preferences.getInt("stepperSpeed", stepperSpeed);
   stepperAccelConfig = preferences.getInt("stepperAccel", stepperAccel);
-  jumpStartConfig = preferences.getInt("jumpStart", 0);
   autoHomeOnBootConfig = preferences.getBool("autoHomeOnBoot", true);
   // NVS keys are capped at 15 chars - keep these short (see matching note in
   // html_handler.cpp's handleSaveStepper()).
@@ -1383,17 +1382,15 @@ void setup() {
   // exceeded NVS's 15-char limit and never actually persisted.
   stepperBlankTimeConfig = preferences.getInt("stepBlankTime", 0);
 
-  // Load TMC2209 UART configuration
-  tmcEnabledConfig = preferences.getBool("tmcEnabled", true);
-  tmcRSenseConfig = preferences.getFloat("tmcRSense", 0.11f);
-  tmcAddressConfig = (uint8_t)preferences.getInt("tmcAddress", 0);
+  // Load TMC2209 UART configuration. tmcEnabled/tmcRSense/tmcAddress/
+  // tmcHstrt/tmcHend are hardcoded (tmc_handler.cpp, 2026-09-07) and no
+  // longer read from NVS - any value a device saved for those keys before
+  // that change is now just an orphaned, unused key.
   tmcRunCurrentConfig = (uint16_t)preferences.getInt("tmcRunCurrent", 800);
   tmcHoldPercentConfig = (uint8_t)preferences.getInt("tmcHoldPercent", 50);
   tmcStallEnabledConfig = preferences.getBool("tmcStallEnabled", false);
   tmcStallThresholdConfig = (uint16_t)preferences.getInt("tmcStallThresh", 50);
   tmcMicrostepsConfig = (uint16_t)preferences.getInt("tmcMicrosteps", 16);
-  tmcHstrtConfig = (uint8_t)preferences.getInt("tmcHstrt", 0);
-  tmcHendConfig = (uint8_t)preferences.getInt("tmcHend", 0);
 
   // Initialize stepper
   initializeStepper();
@@ -1404,7 +1401,8 @@ void setup() {
   // see core0_task.h.
   startCore0Task();
 
-  // Initialize TMC2209 UART link (no-op if tmcEnabledConfig is false)
+  // Initialize TMC2209 UART link (always attempted - see tmc_handler.cpp;
+  // simply won't connect if the driver isn't wired for UART)
   initTmc();
 
   // Initialize pixel LEDs (loads config from preferences)
@@ -1919,12 +1917,10 @@ void printFullStatus() {
     Serial.println("Not initialized");
   }
 
-  // TMC2209 driver info
+  // TMC2209 driver info (UART control is always enabled - see tmc_handler.cpp)
   Serial.println("\n--- TMC2209 Driver Status ---");
-  if (!tmcEnabledConfig) {
-    Serial.println("UART control: Disabled");
-  } else if (!tmcConnected) {
-    Serial.println("UART control: Enabled, but link FAILED (check wiring/RSense/address)");
+  if (!tmcConnected) {
+    Serial.println("UART control: link FAILED (check wiring)");
   } else {
     Serial.println("UART control: Connected");
     Serial.print("Run Current: ");

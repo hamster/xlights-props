@@ -31,7 +31,6 @@ static int tokenize(const String& line, String tokens[3]) {
 static bool getTunable(const String& name, String& valueOut) {
   if (name == "normalSpeed") { valueOut = String(stepperSpeedConfig); return true; }
   if (name == "normalAccel") { valueOut = String(stepperAccelConfig); return true; }
-  if (name == "jumpStart") { valueOut = String(jumpStartConfig); return true; }
   if (name == "trackEnabled") { valueOut = String(stepperTrackEnabledConfig ? 1 : 0); return true; }
   if (name == "trackThreshold") { valueOut = String(stepperTrackThresholdConfig); return true; }
   if (name == "trackSpeed") { valueOut = String(stepperTrackSpeedConfig); return true; }
@@ -92,7 +91,7 @@ static bool getTunable(const String& name, String& valueOut) {
 }
 
 static const char* ALL_TUNABLE_NAMES[] = {
-  "normalSpeed", "normalAccel", "jumpStart", "trackEnabled", "trackThreshold",
+  "normalSpeed", "normalAccel", "trackEnabled", "trackThreshold",
   "trackSpeed", "trackAccel", "trackMaxLag", "trackMode", "coalesceMs",
   "coalesceSteps", "streamRateWindow", "streamSettle", "compactLog", "protocolDebug",
   "homeSpeed", "homeAccel", "lookaheadSteps", "lookaheadSettle",
@@ -109,7 +108,6 @@ static bool setTunable(const String& name, const String& valueStr) {
   long v = valueStr.toInt();
   if (name == "normalSpeed") { stepperSpeedConfig = v; stepper->setSpeedInHz(stepperSpeedConfig); return true; }
   if (name == "normalAccel") { stepperAccelConfig = v; stepper->setAcceleration(stepperAccelConfig); return true; }
-  if (name == "jumpStart") { jumpStartConfig = v; stepper->setJumpStart(jumpStartConfig); return true; }
   if (name == "trackEnabled") { stepperTrackEnabledConfig = (v != 0); return true; }
   if (name == "trackThreshold") { stepperTrackThresholdConfig = v; return true; }
   if (name == "trackSpeed") { stepperTrackSpeedConfig = v; return true; }
@@ -147,12 +145,12 @@ static bool setTunable(const String& name, const String& valueStr) {
   if (name == "pidLookaheadMs") { stepperPidLookaheadMsConfig = v; return true; }
   if (name == "pidTickMs") { stepperPidTickMsConfig = v; return true; }
   if (name == "pidLogMs") { stepperPidLogMsConfig = v; return true; }
-  // Deliberately bypasses /save-tmc entirely: that handler writes all 14 TMC
+  // Deliberately bypasses /save-tmc entirely: that handler writes several TMC
   // Preferences keys to flash on every call (real wear across a long sweep)
   // and reconstructs every other TMC field from HTTP form args, where an
-  // absent checkbox arg (tmcEnabled/tmcStallEnabled) reads as
-  // false - a script posting only tmcRunCurrent would silently disable the
-  // UART link and StallGuard as a side effect. Setting the config global
+  // absent checkbox arg (tmcStallEnabled) reads as
+  // false - a script posting only tmcRunCurrent would silently disable
+  // StallGuard as a side effect. Setting the config global
   // directly and calling applyTmcSettings() re-applies the *current*
   // in-memory value of every other TMC field (untouched here) alongside the
   // new current - same "RAM-only, no flash wear, no side effects on
