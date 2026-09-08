@@ -151,7 +151,17 @@ void handleSaveWifi() {
     }
 
     ssid = server.arg("ssid");
-    password = server.arg("password");
+    // Standard "leave blank to keep unchanged" convention for a password
+    // field, and a real fix (2026-09-08), not just a nicety: the field is
+    // deliberately never pre-filled with the real value (so it's never
+    // echoed into the page source), which means *every* WiFi settings save
+    // that doesn't involve retyping the password used to submit it empty
+    // and silently wipe the real one - found the hard way, testing an
+    // unrelated field via a raw POST that didn't re-supply it, which broke
+    // the actual saved network password on the bench device.
+    if (server.arg("password").length() > 0) {
+      password = server.arg("password");
+    }
 
     // Handle static IP configuration
     if (server.hasArg("ipMode")) {

@@ -175,26 +175,43 @@ individual entries below for what each one was.
   then recovered). Not investigated further tonight - worth watching for
   recurrence, and worth checking WiFi signal strength/interference on the
   bench if it keeps happening.
-  - **Recurred much more severely, same session, later that night** while
-    bench-testing the new AP-fallback retry feature (below): the real
-    network (`ssid="se"`) became completely unconnectable to this device
-    for 8+ minutes straight - not just a brief blip. Confirmed via serial
-    (not just HTTP, which was expectedly down since the device had fallen
-    to AP mode) that this wasn't a code problem: a genuinely fresh,
-    from-boot `connectToWifi()` attempt (no retry logic involved at all,
-    triggered by a real power-on-equivalent reset) failed identically to
-    every subsequent retry, and the real router (`192.168.10.254`) still
-    answered ICMP pings fine from a different machine on the same network
-    the whole time - so the LAN/router itself was up, only this specific
-    device's ability to associate with `se` was affected. Never resolved
-    within the session; device was left mid-retry, presumably self-healed
-    once whatever caused it cleared (that's exactly what the new retry
-    feature is for). Given how many reboot/reconnect cycles this device
-    was put through in immediately preceding testing, a router-side
-    flood/flap-protection mechanism throttling this MAC is a real
-    candidate cause, on top of the plain-signal-interference theory above
-    - if this recurs, checking router logs for that specific MAC address
-    (or just spacing out reboots more) would help distinguish the two.
+  - **What looked like a recurrence, same session, later that night, was
+    actually a real bug Claude introduced - not this item, and not an
+    external network issue.** While bench-testing the new AP-fallback
+    retry feature, the real network (`ssid="se"`) appeared completely
+    unconnectable for 8+ minutes straight, surviving a fresh from-boot
+    attempt and multiple retries alike, while the real router kept
+    answering pings the whole time - at the time this was written up
+    (wrongly) as a probable router-side flap-protection/interference
+    theory. **Root-caused the next day, 2026-09-08, when the user reported
+    the device "still won't connect, it should be":** a `/save-wifi` test
+    POST run *earlier that same session* (verifying the new
+    `wifiRetryInterval` field's round-trip) included `password=` (empty) -
+    `handleSaveWifi()` unconditionally overwrote and persisted whatever was
+    submitted, silently wiping the real saved WiFi password to blank. Every
+    "unconnectable" observation afterward was just correct behavior against
+    now-broken credentials, not flakiness of any kind - a bad password
+    fails consistently regardless of retry strategy, AP+STA mode, or how
+    many times you retry, which is exactly what was observed and
+    misread as evidence of an external cause. Real fix (see below) plus a
+    lesson worth keeping: check recent own write actions against
+    persisted state before reaching for an external/environmental
+    explanation for a sudden, total, and perfectly consistent failure.
+  - [x] **Fixed, 2026-09-08**: `handleSaveWifi()` (`html_handler.cpp`) now
+    only overwrites the stored password if a non-empty value was actually
+    submitted - standard "leave blank to keep unchanged" convention for a
+    password field. This wasn't just a fix for the test mistake above: the
+    web UI's own password field is deliberately never pre-filled with the
+    real value (so it's never echoed into page source), which means
+    *every* real Settings-page WiFi save that didn't involve retyping the
+    password - changing just the hostname, or static IP, or the new retry
+    interval - had this exact same silent-wipe bug for any real user, not
+    just this session's testing. The generic `/config` API's own password
+    setter (`config_handler.cpp`) was deliberately left as plain
+    set-whatever-is-given - it's an explicit, opt-in, single-key API (a
+    caller must specifically write `password=<value>` to touch it at all),
+    with none of the browser form's "every field gets submitted whether or
+    not you meant to change it" accidental-inclusion risk.
 - [x] **Tested, 2026-09-07 - jumpStart does not appear necessary at
   `homeAccel=20,000`.** Disabled it (`jumpStart=0`) and ran 3 back-to-back
   homing cycles: all clean, no stalls, no errors, identical ~11s timing to
