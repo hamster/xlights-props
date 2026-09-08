@@ -1,9 +1,40 @@
 #include "led_handler.h"
 #include <Preferences.h>
 #include "protocol_common.h"
+#include "stepper_handler.h"  // for the `stepper` global - see persistLedSettingsIfPending()
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 // External preferences object
 extern Preferences preferences;
+
+// See led_handler.h's declaration comments for the dual-core split this
+// pair implements. Both are only ever touched from led_handler.cpp itself -
+// core0_task.cpp only calls the four functions declared for it, never
+// reaches into these directly.
+static SemaphoreHandle_t ledShowSemaphore = NULL;
+static volatile bool ledReinitPending = false;
+
+bool ledSettingsPendingSave = false;
+
+// See the declaration comment in led_handler.h for why this can't just
+// happen synchronously inside handleSaveLed().
+void persistLedSettingsIfPending() {
+  if (!ledSettingsPendingSave) {
+    return;
+  }
+  if (stepper != NULL && stepper->isRunning()) {
+    return;  // wait for a quiet moment - values are already live in RAM/on the strip
+  }
+  preferences.putInt("ledPixelCount", ledPixelCount);
+  preferences.putString("ledColorOrder", ledColorOrder);
+  preferences.putFloat("ledGamma", ledGamma);
+  preferences.putInt("ledBrightness", ledBrightness);
+  preferences.putInt("ledStartNull", ledStartNullPixels);
+  preferences.putInt("ledEndNull", ledEndNullPixels);
+  ledSettingsPendingSave = false;
+  Serial.println("LED settings persisted to flash (motor now idle)");
+}
 
 // LED Configuration variables
 int ledPixelCount = 0;
@@ -126,29 +157,92 @@ void initPixelLeds() {
   Serial.print("  End Null Pixels: ");
   Serial.println(ledEndNullPixels);
 
-  // Initialize FastLED if we have pixels configured
+  // The actual FastLED hardware setup (addLeds()/setBrightness()/
+  // setCorrection(), initial clear+show) must run on Core 0 now - see
+  // led_handler.h's declaration comments. This just hands off the request;
+  // Core 0's task (already running by the time either of this function's
+  // call sites run - startCore0Task() happens before this in setup(), and
+  // handleSaveLed() runs long after boot) picks it up within one loop
+  // iteration (~10ms).
+  requestLedReinit();
+}
+
+// Actually applies FastLED.addLeds()/setBrightness()/setCorrection() and
+// does the initial blank+show - only ever called from serviceLedCore0()
+// (Core 0's own task context), matching initEncoder()'s established
+// pattern (encoder_handler.h) of hardware setup that must run from Core
+// 0's own context, not setup()'s Core 1 context. Handles both this
+// device's first-ever LED init at boot and any later reconfigure via
+// handleSaveLed() through the exact same path - requestLedReinit() doesn't
+// distinguish the two, and there's no reason it should.
+static void applyLedReinit() {
   if (ledPixelCount > 0) {
     int totalPixels = ledStartNullPixels + ledPixelCount + ledEndNullPixels;
     if (totalPixels > MAX_LEDS) {
       totalPixels = MAX_LEDS;
     }
 
-    // Initialize FastLED - RGB order (no hardware reordering)
-    // CRGB stores as RGB internally, we handle color order via ledColorOrder config
+    // NOTE: FastLED.addLeds() registers a *new* controller every call - it
+    // does not replace or remove a previous one. Reconfiguring LEDs more
+    // than once per boot (e.g. re-saving LED settings via the web UI, or
+    // a device that's been up long enough to do that a few times)
+    // accumulates additional controllers over the strip's lifetime, each
+    // of which show() then writes through - a pre-existing behavior from
+    // before this dual-core split (handleSaveLed() already called
+    // initPixelLeds() directly on every save), not introduced by it.
+    // Flagged, not fixed here - see TODO.md.
     FastLED.addLeds<WS2812B, LED_DATA_PIN, RGB>(leds, totalPixels);
     FastLED.setBrightness(ledBrightness * 255 / 100);
     FastLED.setCorrection(TypicalLEDStrip);
 
     // Clear all LEDs initially
     fill_solid(leds, totalPixels, CRGB::Black);
-    FastLED.show();
+    FastLED.show();  // direct call, not signalLedShow() - already on Core 0
 
     ledsInitialized = true;
     ledsBlanked = true;  // Start in blanked state
 
-    Serial.print("  FastLED initialized with ");
+    Serial.print("LED: FastLED (re)initialized on Core 0 with ");
     Serial.print(totalPixels);
     Serial.println(" total pixels");
+  } else {
+    // Matches the pixel-writing functions' own "!ledsInitialized ->
+    // nothing to do" gate - a save that dropped pixel count to 0 must
+    // actually clear this, not just leave a stale true from a previous
+    // config (the original single-core version of this function had this
+    // exact gap: it only ever set ledsInitialized = true, never back to
+    // false, so a save that zeroed the pixel count left the flag stale).
+    ledsInitialized = false;
+  }
+}
+
+void initLedCore0() {
+  ledShowSemaphore = xSemaphoreCreateBinary();
+}
+
+void serviceLedCore0() {
+  if (ledReinitPending) {
+    ledReinitPending = false;
+    applyLedReinit();
+  }
+  // Blocks up to 10ms waiting for a pending show() - this doubles as
+  // core0Task()'s own loop timing source now (see core0_task.cpp), so a
+  // pending show() fires almost immediately instead of waiting for the
+  // next fixed tick, while a quiet period still yields the same ~10ms
+  // cadence the encoder poll/watchdog reset already relied on.
+  if (ledShowSemaphore != NULL &&
+      xSemaphoreTake(ledShowSemaphore, pdMS_TO_TICKS(10)) == pdTRUE) {
+    FastLED.show();
+  }
+}
+
+void requestLedReinit() {
+  ledReinitPending = true;
+}
+
+void signalLedShow() {
+  if (ledShowSemaphore != NULL) {
+    xSemaphoreGive(ledShowSemaphore);
   }
 }
 
@@ -249,7 +343,7 @@ void updatePixelLeds(uint8_t* data, uint16_t size, int stepperChannels) {
 
   }
 
-  FastLED.show();
+  signalLedShow();
   ledsBlanked = false;
 
   if (protocolDebugConfig) {
@@ -342,7 +436,7 @@ void updatePixelLedsFragmented(uint8_t* data, uint16_t size, uint32_t pixelOffse
     leds[ledIndex].b = b;
   }
 
-  FastLED.show();
+  signalLedShow();
   ledsBlanked = false;
 
   if (protocolDebugConfig) {
@@ -365,7 +459,7 @@ void blankPixelLeds() {
   }
 
   fill_solid(leds, totalPixels, CRGB::Black);
-  FastLED.show();
+  signalLedShow();
   ledsBlanked = true;
 
   // Reset pixel tracking on blank
@@ -417,7 +511,7 @@ void updateLedTestMode() {
     leds[ledIndex] = testColors[(i + ledTestPhase) % 3];
   }
 
-  FastLED.show();
+  signalLedShow();
   ledsBlanked = false;
 
   ledTestPhase = (ledTestPhase + 1) % 3;

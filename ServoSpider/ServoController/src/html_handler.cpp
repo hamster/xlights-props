@@ -534,14 +534,14 @@ void handleSaveLed() {
     ledStartNullPixels = server.arg("ledStartNullPixels").toInt();
     ledEndNullPixels = server.arg("ledEndNullPixels").toInt();
 
-    preferences.putInt("ledPixelCount", ledPixelCount);
-    preferences.putString("ledColorOrder", ledColorOrder);
-    preferences.putFloat("ledGamma", ledGamma);
-    preferences.putInt("ledBrightness", ledBrightness);
-    preferences.putInt("ledStartNull", ledStartNullPixels);
-    preferences.putInt("ledEndNull", ledEndNullPixels);
+    // Flash write deferred until the stepper is confirmed idle - see
+    // ledSettingsPendingSave's declaration comment (led_handler.h). A real
+    // flash write here while the stepper is actively producing steps (not
+    // just during homing) crashed the board, reproduced on the bench.
+    // Everything above is already live in RAM/on the strip immediately.
+    ledSettingsPendingSave = true;
 
-    Serial.println("LED configuration saved!");
+    Serial.println("LED configuration updated (will save to flash once the motor is idle)");
     Serial.print("Pixel Count: ");
     Serial.println(ledPixelCount);
     Serial.print("Color Order: ");
@@ -556,9 +556,16 @@ void handleSaveLed() {
     Serial.print("End Null Pixels: ");
     Serial.println(ledEndNullPixels);
 
-    // Reinitialize LEDs with new settings immediately
-    initPixelLeds();
-    Serial.println("LEDs reinitialized with new settings");
+    // Reinitialize LEDs with new settings immediately - requestLedReinit()
+    // directly, NOT initPixelLeds(): that would re-read ledPixelCount/etc
+    // from flash via preferences.getX(), which is (a) a real flash access
+    // with the exact same active-stepping crash risk the deferred write
+    // above just avoided, and (b) actively wrong right now regardless -
+    // the RAM values just set above from the form are the correct new
+    // ones; the flash copy is deliberately still stale until
+    // persistLedSettingsIfPending() gets a safe moment to write it.
+    requestLedReinit();
+    Serial.println("LEDs reinitializing on Core 0 with new settings");
 
     // Send JSON response
     server.send(200, "application/json", "{\"success\":true,\"message\":\"LED settings saved and applied immediately!\"}");

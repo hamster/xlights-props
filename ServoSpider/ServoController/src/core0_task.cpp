@@ -1,5 +1,6 @@
 #include "core0_task.h"
 #include "encoder_handler.h"
+#include "led_handler.h"
 #include <esp_task_wdt.h>
 
 static TaskHandle_t core0TaskHandle = NULL;
@@ -30,11 +31,21 @@ static void core0Task(void* param) {
   // encoder_handler.h's file comment for the full history).
   initEncoder();
 
+  // FastLED's own hardware setup (addLeds()/etc) similarly can't run from
+  // setup() on Core 1 - see led_handler.h's declaration comments. This only
+  // creates the show semaphore; the actual FastLED.addLeds() call happens
+  // lazily, the first time Core 1's initPixelLeds() (called from setup(),
+  // shortly after startCore0Task()) requests it via requestLedReinit().
+  initLedCore0();
+
   // Drains the encoder's RMT ring buffer every ~10ms - see updateEncoder()'s
   // declaration comment (encoder_handler.h) for why this needs a periodic
-  // call at all now, unlike the GPIO-ISR version it replaced. Once FastLED's
-  // work is ready to move here too, its show()-triggering logic (woken by a
-  // semaphore Core 1 gives after writing pixel data) joins this same loop.
+  // call at all now, unlike the GPIO-ISR version it replaced. serviceLedCore0()
+  // (2026-09-08) does two things and also doubles as this loop's own timing
+  // source, replacing the old flat vTaskDelay: applies a pending LED reinit
+  // request, then blocks up to ~10ms for a pending show() signal from Core
+  // 1's pixel-write call sites, firing FastLED.show() the moment one
+  // arrives rather than waiting for the next fixed tick.
   unsigned long lastLoopMs = millis();
   for (;;) {
     unsigned long now = millis();
@@ -48,7 +59,7 @@ static void core0Task(void* param) {
 
     esp_task_wdt_reset();
     updateEncoder();
-    vTaskDelay(pdMS_TO_TICKS(10));
+    serviceLedCore0();
   }
 }
 

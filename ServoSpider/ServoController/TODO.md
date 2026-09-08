@@ -649,10 +649,65 @@ individual entries below for what each one was.
   first all session). Scope as real design work if ever picked up -
   resolve FastAccelStepper's cross-core call safety first, then design
   synchronization for `positionRequest` and PID's own internal state.
-- [ ] **Dual-core LED offload** - the rest of the design (Push-flag-aware
-  frame assembly, the LED semaphore/task, double-buffering if tearing
-  turns out to matter) is still just design, not code. See the dedicated
-  design section below for the full plan.
+- [x] **Dual-core LED offload - built and bench-verified, 2026-09-08**,
+  asked directly ("move the LEDs onto that other core so the LED library
+  isn't fighting with the stepper library"). The LED-semaphore/task part
+  of the design (see the dedicated design section below) is now real code,
+  not just a plan: every FastLED hardware call - `addLeds()`/
+  `setBrightness()`/`setCorrection()`/`show()` - runs exclusively from the
+  Core 0 task now (`led_handler.h`'s `initLedCore0()`/`serviceLedCore0()`),
+  fed by a binary semaphore (`signalLedShow()`) and a reinit-request flag
+  (`requestLedReinit()`) from Core 1's pixel-write/config-change call
+  sites, exactly matching the settled design below. Double-buffering was
+  **not** added - the design's "only worth it if tearing turns out to be
+  visible" call held, nothing bench-tested suggested it was needed.
+  **A real crash found and fixed along the way, unrelated to the core
+  split itself**: `handleSaveLed()` made six unconditional
+  `preferences.putX()` calls on every LED settings save - a real flash
+  write, the same documented hazard as the earlier TMC-settings-during-
+  homing crash, just never hit before because nothing had tested "save LED
+  settings while the stepper is actively driving" specifically. Reproduced
+  on the bench: a `/save-led` POST fired mid-run during real PID
+  continuous-run motion crashed the board (`PANIC` reset, confirmed via
+  `/persist-log`'s boot markers). Given the same deferred-write treatment
+  as `stepperSettingsPendingSave`/`protocolDebugPendingSave`: new
+  `ledSettingsPendingSave`/`persistLedSettingsIfPending()`, RAM/live-strip
+  changes apply immediately, the actual flash write waits for the stepper
+  to be confirmed idle. Also caught and fixed a second bug the deferred
+  write exposed: `handleSaveLed()` used to call `initPixelLeds()` to
+  reapply the new settings, which re-reads `ledPixelCount`/etc from flash
+  via `preferences.getX()` - now that the flash copy is deliberately stale
+  until the deferred write lands, that would have silently reverted the
+  save back to the old values (and was its own separate flash-access-while-
+  stepping hazard besides). Fixed by calling `requestLedReinit()` directly
+  instead, skipping the unnecessary/unsafe reload - the RAM values set
+  moments earlier from the HTTP form are already correct.
+  **Bench-verified**: two full runs (random and chase patterns, 150
+  pixels, real direction reversals, encoder-ground-truth-checked per the
+  entry above) with `/save-led` POSTed mid-run, including twice in one
+  run - zero crashes, boot markers unchanged throughout, encoder never
+  missed a transition, and the new settings both applied immediately (live
+  on the strip) and were confirmed to actually survive a subsequent real
+  reboot (deferred write completed once idle, not lost). Runtime
+  reconfigure without a reboot (`/save-led`'s existing behavior, predating
+  this session) continues to work exactly as before - only when the write
+  actually lands changed, not whether one is needed at all (that's still
+  only required for the generic `/config` POST path - `/save-led` never
+  needed a reboot for this). One known, benign side effect noted (not a
+  bug): `FastLED.addLeds()`'s first call each boot takes ~300-400ms on
+  Core 0's own task (real RMT driver install cost) - self-contained,
+  doesn't touch Core 1, encoder unaffected (`encoderMissed` stayed 0
+  through it in every test).
+  **Left alone, deliberately**: the DDP Push-flag/frame-assembly items
+  below are a separate, still-open piece of the original combined design -
+  not attempted this pass, the user's ask was specifically the core split.
+  Also left alone: `FastLED.addLeds()` registers a new controller on every
+  call rather than replacing the previous one - a pre-existing behavior
+  (already true before this split, since `handleSaveLed()` already called
+  this repeatedly) that a device saving LED settings many times per boot
+  will accumulate controllers from. Flagged in code comments
+  (`led_handler.cpp`), not fixed - out of scope for "move this to the
+  other core."
 - [ ] Confirm whether FPP actually sets the Push flag on the final
   fragment of a multi-packet DDP frame (believed likely - standard
   practice - but not confirmed against real captured traffic).
@@ -1431,7 +1486,7 @@ DDP reception doesn't need its own task: packets already land in a lwIP-managed 
 - New `core0_task.h`/`.cpp` - a real, watchdog-registered FreeRTOS task pinned to Core 0 via `xTaskCreatePinnedToCore()`. Its only job right now is calling `initEncoder()` from within itself, so the encoder's GPIO interrupt ends up Core-0-affine instead of Core-1-affine - directly testing the hypothesis above (the $ENCDIAG sweep's ~10-13-missed-transitions-per-leg result, not scaling with stepper speed, pointed at contention with FastAccelStepper's own Core-1-affine PCNT interrupt). `main.cpp`'s `setup()` now calls `startCore0Task()` instead of `initEncoder()` directly.
 - FastLED's `addLeds()`/`show()` work deliberately **not** moved to this task yet - LEDs are disabled (pixel count 0) during this tuning phase anyway (see the encoder section's note on freeing RMT), so there's nothing to move yet. When that's revisited, its logic belongs in this same Core 0 task's loop (currently just an idle watchdog-reset loop), fed by the semaphore design above, not a second task.
 - [x] **Closed out** (user, 2026-09-07) - bench verification considered adequate; the encoder has since been relied on extensively across the whole 2026-09-07 PID session with no indication of a missed-transition problem.
-- [ ] The rest of the design (Push-flag-aware frame assembly, the LED semaphore/task, double-buffering if tearing turns out to matter) is still just design, not code.
+- [x] **The LED semaphore/task piece built and bench-verified 2026-09-08** - see the Wave 5 entry above for the full writeup (including a real crash found and fixed along the way, unrelated to the split itself). Double-buffering not added - not needed per bench testing. Push-flag-aware frame assembly is still open, tracked separately below (it was always a distinct piece of this combined design, not blocking the core split itself).
 
 ## DDP Push flag is parsed but never checked - causes partial-frame display on multi-fragment updates (raised 2026-09-05, not yet implemented)
 

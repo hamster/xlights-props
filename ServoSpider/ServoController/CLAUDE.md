@@ -32,16 +32,16 @@ Build artifacts are auto-copied to `build/ServoController-<version>.bin`. Versio
 
 ## Architecture
 
-### Dual-Core Split (in progress — see TODO.md's Priority 1 for the full design and why the original justification below turned out to be only partly right)
-- **Core 1 (Main)**: WiFi, web server, stepper control (including FastAccelStepper's own background task, explicitly pinned via `engine.init(1)`), DDP parsing, LED updates (main loop)
-- **Core 0**: a dedicated task (`core0_task.h`/`.cpp`), currently just hosting the rotary encoder's GPIO interrupt (see `encoder_handler.h`) so it doesn't contend with FastAccelStepper's own Core-1-affine interrupt — not yet doing anything with LEDs
-- FastLED.show() is still called directly from the DDP handler for immediate LED updates — moving that to the Core 0 task is designed but not yet implemented
-- The move to ESP32-S3 was originally understood as splitting stepper/protocol handling from WS2812 output because `FastLED.show()` blocks its calling core for the WS2812 transmission time (~30µs/pixel) — checking the actual vendored driver source showed that's mostly not true on this hardware (it's async - see TODO.md); the real, current justification is explicit core allocation so nothing on Core 1 (stepper dispatch, DDP, web, TMC UART) contends with anything else, which is why the encoder moved first rather than LEDs.
+### Dual-Core Split (LED work completed 2026-09-08 — see TODO.md's Priority 1 for the full design history)
+- **Core 1 (Main)**: WiFi, web server, stepper control (including FastAccelStepper's own background task, explicitly pinned via `engine.init(1)`), DDP parsing, TMC UART, serial commands
+- **Core 0**: a dedicated task (`core0_task.h`/`.cpp`) hosting both the rotary encoder's timer-poll (`encoder_handler.h`) and, as of 2026-09-08, every actual FastLED hardware call — `addLeds()`/`setBrightness()`/`setCorrection()`/`show()` (`led_handler.h`'s `initLedCore0()`/`serviceLedCore0()`) — so neither contends with FastAccelStepper's own Core-1-affine MCPWM+PCNT work. Core 1's pixel-write call sites (`ddp_handler.cpp`'s `updatePixelLedsFragmented()`, `led_handler.cpp`'s own `blankPixelLeds()`/`updateLedTestMode()`) still write directly into the shared `leds[]` array (no double-buffer — an accepted, self-correcting tradeoff, see TODO.md) and signal Core 0 via a binary semaphore (`signalLedShow()`) instead of calling `FastLED.show()` themselves; a config change instead calls `requestLedReinit()` instead of touching `FastLED.addLeds()` directly. `FastLED.addLeds()` itself moving to Core 0 (not just `show()`) matters because it's what binds the RMT completion interrupt to whichever core calls it.
+- The move to ESP32-S3 was originally understood as splitting stepper/protocol handling from WS2812 output because `FastLED.show()` blocks its calling core for the WS2812 transmission time (~30µs/pixel) — checking the actual vendored driver source first suggested that's mostly not true on this hardware (async), but a closer check of the actual *compiled* driver (not just the source's `#if` guard) found the opposite: this toolchain's bundled framework builds FastLED against the legacy, more blocking-style IDF4 RMT driver, not the async IDF5 one (see TODO.md's Priority 1 section) — so the original blocking concern does hold here, and is exactly why moving `show()`'s call site off Core 1 was worth doing, alongside the explicit-core-allocation goal (nothing on Core 1 — stepper dispatch, DDP, web, TMC UART — contends with anything else).
+- One known, benign side effect: `FastLED.addLeds()` (RMT driver install) takes on the order of ~300-400ms the first time it runs each boot — a real, measured one-time cost on Core 0's own task, self-contained (doesn't touch Core 1, and the encoder's own `encoderMissed` counter stays 0 through it), not a bug.
 
 ### Key Data Flow
 ```
 DDP packet → ddp_handler → positionRequest (shared variable) → main loop → stepper movement
-                         → updatePixelLeds() → FastLED.show()
+                         → updatePixelLedsFragmented() → leds[] write → signalLedShow() → (Core 0 task) → FastLED.show()
 ```
 
 ### Channel Layout

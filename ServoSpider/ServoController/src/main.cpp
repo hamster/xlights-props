@@ -1284,6 +1284,12 @@ void loop() {
   // if a save is pending (no-op otherwise) - see stepperSettingsPendingSave.
   persistStepperSettingsIfPending();
 
+  // Same idle-gated deferral for LED settings - see ledSettingsPendingSave's
+  // declaration comment (led_handler.h). Found via a real crash: a save
+  // mid-PID-motion hit the same active-stepping flash-write hazard the
+  // stepper settings above were already protected against.
+  persistLedSettingsIfPending();
+
   server.handleClient();
   handleSerialCommands();
 

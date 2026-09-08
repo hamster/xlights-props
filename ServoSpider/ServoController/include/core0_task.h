@@ -22,14 +22,17 @@
 // hypothesis directly, rather than trying to out-prioritize the stepper's
 // interrupt on the same core.
 //
-// FastLED's work is deliberately NOT moved here yet - LEDs are disabled
-// (pixel count 0) during this stepper-tuning phase, freeing RMT entirely,
-// and it's still an open question whether the eventual fix is pinning the
-// existing GPIO-ISR approach here, switching to a periodic timer-based poll
-// instead, or moving to RMT's RX/capture mode now that FastLED doesn't own
-// RMT during this phase - see TODO.md. When FastLED's Core 0 work is ready,
-// its show()-triggering logic belongs in this same task's loop, fed by a
-// semaphore from Core 1's pixel-write call sites, not a second task.
+// FastLED's work moved here too, 2026-09-08 - see led_handler.h's
+// declaration comments for initLedCore0()/serviceLedCore0()/
+// signalLedShow()/requestLedReinit() for the full design. Every actual
+// FastLED hardware call (addLeds()/setBrightness()/setCorrection()/show())
+// now runs exclusively from this task, in the same loop as the encoder
+// poll - not a second task, per the original plan below. Core 1's
+// pixel-write call sites (ddp_handler.cpp, led_handler.cpp's own
+// updatePixelLeds()/updatePixelLedsFragmented()/blankPixelLeds()/
+// updateLedTestMode()) still write directly into the shared leds[] array,
+// then signal this task via a binary semaphore instead of calling
+// FastLED.show() themselves.
 void startCore0Task();  // Call once from setup(), after initializeStepper() and before anything reads the encoder
 
 // Diagnostics added 2026-09-06 to actually measure (not just infer) whether
