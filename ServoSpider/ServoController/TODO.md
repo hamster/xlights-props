@@ -138,21 +138,6 @@ individual entries below for what each one was.
   20-50ms hot-path rate that actually caused the crash. `stepper_handler.cpp`
   and `led_handler.cpp` (the two files that run every `loop()` iteration
   during real motion/LED updates) have zero matches at all.
-- [ ] **Consolidate the two remaining near-identical throttled-retry
-  implementations** - homing's `retryMoveIfDied()` (`stepper_handler.cpp`,
-  `static`/file-local) and PID's hand-rolled equivalent
-  (`lastPidRunRetryMs`/`lastPidHystRetryMs` in `main.cpp`). (A third,
-  Streaming's own less-hardened version, was removed along with the rest of
-  Streaming mode, 2026-09-07 - see the Coalesce/Streaming/Lookahead removal
-  entry below.) Real duplication, and worth re-examining together given how
-  much was learned this project about `isRunning()`/
-  `isRampGeneratorActive()` both being unreliable trust signals.
-  **Reclassified out of "cheap and mechanical," 2026-09-07**: on closer
-  look this touches battle-tested, delicately-fixed code in two different
-  call patterns (homing's search-continuation, PID's direction-aware
-  continuous-run retry) - the TODO history below is full of "found the hard
-  way" bugs in exactly this logic. Real risk of a silent regression, not a
-  quick refactor - treat as Wave 3/design-level work, not Wave 2.
 - [ ] `pidReengageThreshold`/`RAMMED_STEP_TOLERANCE` (both 150) were chosen
   by feel (matched to each other, and to the DDP-quantization math) rather
   than an independent sweep. Partial progress, 2026-09-07: `pidReengageThreshold=150`
@@ -186,14 +171,6 @@ individual entries below for what each one was.
   the capture) before it could isolate the actual artifact. Real
   investigation effort already spent without an answer - not a quick
   re-attempt.
-- [ ] `$CHECKSTEPS` only catches step loss in the *overshoot* direction
-  (switch fires early) - can't distinguish "no drift" from "drift the
-  other way" (undershoot, never reaching the switch). Worth a second check
-  toward the far end if undershoot-direction loss turns out to matter.
-  **Reclassified, 2026-09-07**: this is a new capability (a second check
-  mode), not cleanup - needs a design decision first (run both checks
-  always, or only when configured; what target for the far-end check).
-  Wave 3-shaped, not Wave 2.
 
 ### Wave 3 - real decisions needed before more code (closed out 2026-09-08)
 
@@ -643,6 +620,29 @@ individual entries below for what each one was.
 
 ### Wave 5 - bigger, deliberately-deferred design work
 
+- [ ] **Consolidate the two remaining near-identical throttled-retry
+  implementations** - homing's `retryMoveIfDied()` (`stepper_handler.cpp`,
+  `static`/file-local) and PID's hand-rolled equivalent
+  (`lastPidRunRetryMs`/`lastPidHystRetryMs` in `main.cpp`). (A third,
+  Streaming's own less-hardened version, was removed along with the rest of
+  Streaming mode, 2026-09-07 - see the Coalesce/Streaming/Lookahead removal
+  entry, Wave 3.) Real duplication, and worth re-examining together given
+  how much was learned this project about `isRunning()`/
+  `isRampGeneratorActive()` both being unreliable trust signals. **Folded
+  in here from Wave 2, 2026-09-08** (originally filed as "cheap,
+  mechanical" but reclassified 2026-09-07 once it became clear this
+  touches battle-tested, delicately-fixed code in two different call
+  patterns - the TODO history below is full of "found the hard way" bugs
+  in exactly this logic. Real risk of a silent regression, not a quick
+  refactor - genuinely design-level work, matching this wave.
+- [ ] **`$CHECKSTEPS` undershoot-direction check** - it currently only
+  catches step loss in the *overshoot* direction (switch fires early);
+  can't distinguish "no drift" from "drift the other way" (undershoot,
+  never reaching the switch). Worth a second check toward the far end if
+  undershoot-direction loss turns out to matter. **Folded in here from
+  Wave 2, 2026-09-08** - this is a new capability (a second check mode),
+  not cleanup, and needs a design decision first (run both checks always,
+  or only when configured; what target to use for the far-end check).
 - [ ] **Core 0 for PID** - explicitly declined for the 2026-09-07 tick-rate
   session (see that section below for the full reasoning and the concrete
   evidence for it: `pidTickMs=2` caused real DDP packet rejection, the
