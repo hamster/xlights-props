@@ -51,6 +51,106 @@ function showNotification(message, isSuccess) {
         });
     }
 
+    // ---- Debug tab: Serial Debug toggle, Compact Motion Log, Persistent Log ----
+
+    function toggleProtocolDebug() {
+      var enabled = document.getElementById('protocolDebug').checked;
+      fetch('/protocol-debug?enable=' + enabled)
+        .then(response => response.json())
+        .then(data => {
+          console.log('Serial debug output: ' + (data.protocolDebug ? 'enabled' : 'disabled'));
+        })
+        .catch(error => {
+          showNotification('Error toggling serial debug output: ' + error, false);
+        });
+    }
+
+    function toggleCompactLogLive() {
+      var enabled = document.getElementById('compactLogLiveEnabled').checked;
+      fetch('/compact-log?enable=' + enabled)
+        .then(response => response.json())
+        .then(data => {
+          console.log('Compact motion log: ' + (data.compactLog ? 'enabled' : 'disabled'));
+        })
+        .catch(error => {
+          showNotification('Error toggling compact motion log: ' + error, false);
+        });
+    }
+
+    function fetchCompactLog() {
+      fetch('/compact-log')
+        .then(response => response.text())
+        .then(text => {
+          var view = document.getElementById('compact-log-view');
+          view.textContent = text.length > 0 ? text : '(empty)';
+          view.scrollTop = view.scrollHeight;
+        })
+        .catch(error => {
+          console.log('Error fetching compact motion log:', error);
+        });
+    }
+
+    function clearCompactLogView() {
+      fetch('/compact-log?clear=1')
+        .then(response => response.text())
+        .then(() => {
+          document.getElementById('compact-log-view').textContent = '(cleared)';
+        })
+        .catch(error => {
+          showNotification('Error clearing compact motion log: ' + error, false);
+        });
+    }
+
+    function fetchPersistLog() {
+      fetch('/persist-log')
+        .then(response => response.text())
+        .then(text => {
+          var view = document.getElementById('persist-log-view');
+          view.textContent = text.length > 0 ? text : '(empty)';
+          view.scrollTop = view.scrollHeight;
+        })
+        .catch(error => {
+          console.log('Error fetching persistent log:', error);
+        });
+    }
+
+    function clearPersistLogView() {
+      fetch('/persist-log?clear=1')
+        .then(response => response.text())
+        .then(() => {
+          document.getElementById('persist-log-view').textContent = '(cleared)';
+        })
+        .catch(error => {
+          showNotification('Error clearing persistent log: ' + error, false);
+        });
+    }
+
+    // Auto-refresh only while the Debug tab is actually open, on its own
+    // slower interval - these logs can be tens of KB, no reason to poll
+    // them every second the way status-data is.
+    window.debugLogRefreshInterval = null;
+    function startDebugLogAutoRefresh() {
+      stopDebugLogAutoRefresh();
+      fetchCompactLog();
+      fetchPersistLog();
+      window.debugLogRefreshInterval = setInterval(function() {
+        if (document.getElementById('compactLogAutoRefresh').checked) {
+          fetchCompactLog();
+          fetchPersistLog();
+        }
+      }, 3000);
+    }
+    function stopDebugLogAutoRefresh() {
+      if (window.debugLogRefreshInterval) {
+        clearInterval(window.debugLogRefreshInterval);
+        window.debugLogRefreshInterval = null;
+      }
+    }
+    function onCompactLogAutoRefreshChanged() {
+      // Nothing to do beyond the checkbox itself - the interval above
+      // checks it live on every tick rather than being torn down/rebuilt.
+    }
+
     function fetchLedPreview() {
       fetch('/led-preview')
         .then(response => response.json())
@@ -157,6 +257,13 @@ function showNotification(message, isSuccess) {
           }, 1000);
           console.log('Status updates resumed');
         }
+      }
+
+      // Debug tab's log viewers only poll while that tab is actually open
+      if (tabName === 'debug-tab') {
+        startDebugLogAutoRefresh();
+      } else {
+        stopDebugLogAutoRefresh();
       }
     }
 
@@ -522,6 +629,12 @@ function showNotification(message, isSuccess) {
           var ledTestCheckbox = document.getElementById('led-test-mode-enabled');
           if (ledTestCheckbox && document.activeElement !== ledTestCheckbox) {
             ledTestCheckbox.checked = data.ledTestMode || false;
+          }
+
+          // Sync Compact Motion Log checkbox (Debug tab) across all clients
+          var compactLogCheckbox = document.getElementById('compactLogLiveEnabled');
+          if (compactLogCheckbox && document.activeElement !== compactLogCheckbox) {
+            compactLogCheckbox.checked = data.compactLog || false;
           }
 
           // Update locate mode indicator to sync across all clients

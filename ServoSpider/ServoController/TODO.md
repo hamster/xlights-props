@@ -348,17 +348,55 @@ individual entries below for what each one was.
   and still counts - the standing note that tuning needs it as ground
   truth still holds, it's just no longer surfaced in the normal UI. Flip
   the `#define` back to `1` if bench access to it is needed again.
-- [ ] Remove the **Serial Debug** checkbox from channel config and the
-  redundant **Stepper Control** duplicate mention - both fold into a new
-  **Live Log / Debug tab**: shows the Compact Motion Log and/or the
-  in-RAM diagnostic logs live in the browser instead of requiring a
-  serial connection. (Two earlier, half-specified proposals for this -
-  a "Live Log" tab and a separate "Debug" tab - were really the same
-  feature; reconcile into one before building.) Needs a transport decision
-  (polling an endpoint, matching the `/status-data` pattern, is the
-  simplest fit) and a buffering design (how much history, RAM is limited
-  at 327KB total). **Not started** - real design work, not mechanical
-  cleanup; deliberately not rushed alongside the rest of this wave.
+- [x] **New "Debug" tab, built 2026-09-08 - first version.** Reconciled the
+  two earlier half-specified "Live Log" / "Debug tab" proposals into one
+  feature, per the note below. Turned out to be almost entirely a UI-only
+  task: the backend pieces the design called for (a polling endpoint
+  matching `/status-data`'s pattern; an in-RAM ring buffer) already
+  existed from earlier bench-tooling work and just needed a browser front
+  end - `GET /compact-log` (96KB RAM ring buffer, CSV position/speed/
+  tracking data) and `GET /persist-log` (SPIFFS-backed, reboot-surviving
+  breadcrumbs) were both already real HTTP endpoints, added for
+  `tools/*.py` bench scripts to hit directly without opening serial (which
+  resets this board - see the WiFi mode selector item above). New
+  "Debug" tab: a Compact Motion Log viewer (Enable/Refresh Now/Clear,
+  auto-refreshes every 3s only while the tab is actually open - these
+  buffers can be tens of KB and there's no reason to poll them on
+  `/status-data`'s 1s cadence) and a Persistent Diagnostic Log viewer
+  (Refresh Now/Clear, same auto-refresh). Both boxes are plain
+  `fetch().then(response => response.text())` into a scrollable
+  `<pre>`, not JSON - matches what the endpoints already return.
+  **Serial Debug checkbox moved here too**, out of Channel Configuration
+  as planned - but rather than folding it into the existing `/save-protocol`
+  form (which would've meant either restructuring that form across two
+  tabs or risking silently clearing it on every unrelated Channel Settings
+  save, since `handleSaveProtocol()` reads it via `hasArg()`), gave it its
+  own instant-apply `GET /protocol-debug?enable=true|false` toggle -
+  same pattern already used for `/compact-log`'s and `/led-test`'s enable
+  toggles, applies immediately with no save/reboot round-trip.
+  `handleSaveProtocol()` no longer touches `protocolDebugConfig` at all.
+  **The redundant "Stepper Control" duplicate mention** referenced in the
+  original item text was already resolved in an earlier Wave 4 pass (see
+  the "Remove the redundant Stepper Control section from Settings" item
+  above) - nothing left to do here.
+  **Deliberately deferred to a later pass, not part of this first
+  version**: `GET /ddp-rx-log` (a third existing RAM log, bench/tooling-
+  only and off by default via `$SET ddpRxLog`) isn't surfaced in this tab
+  - `tools/*.py` already hits it directly and it's a narrower, more
+  specialist tool than the other two; a true live mirror of `Serial.print`/
+  `println()` output (the original, more ambitious "Debug tab" proposal)
+  was not attempted - the three existing RAM/flash logs already cover
+  what actually gets used in practice, and wrapping every `Serial.print`
+  call project-wide is real, separate, higher-risk work not worth doing
+  speculatively.
+  Bench-verified over HTTP end to end: `/protocol-debug?enable=true|false`
+  toggles and persists correctly; `/compact-log?enable=` /
+  fetch / `?clear=1` all round-trip; `/persist-log` fetch returns real
+  reboot-surviving content (confirmed actual homing-search breadcrumbs
+  from a prior boot); the served page (~84KB, no truncation - see the
+  heap-fragmentation bug fixed earlier this wave) contains exactly one
+  `id="protocolDebug"` checkbox, now inside the Debug tab, with the
+  template placeholder correctly substituted rather than left literal.
 - [x] **WiFi settings**: add an explicit mode selector (Client only / AP
   fallback / AP only) instead of today's implicit behavior (traced in
   `wifi_handler.cpp`/`main.cpp`: today it always tries client first, then

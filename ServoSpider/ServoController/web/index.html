@@ -51,6 +51,7 @@
   <div class="tabs">
     <button class="tab active" onclick="showTab('status-tab')">Status</button>
     <button class="tab" onclick="showTab('settings-tab')">Settings</button>
+    <button class="tab" onclick="showTab('debug-tab')">Debug</button>
     <button class="tab" onclick="showTab('update-tab')">OTA Update</button>
   </div>
 
@@ -512,13 +513,6 @@
           </div>
 
           <div class="form-group">
-            <label for="protocolDebug">
-              <input type="checkbox" id="protocolDebug" name="protocolDebug" {{PROTOCOL_DEBUG_CHECKED}}>
-              Enable Serial Debug Output
-            </label>
-          </div>
-
-          <div class="form-group">
             <label for="ledBlankTime">LED Blank Time (seconds, 0=disabled):</label>
             <input type="number" id="ledBlankTime" name="ledBlankTime" value="{{LED_BLANK_TIME}}" min="0" max="3600" required>
           </div>
@@ -579,6 +573,55 @@
         <button onclick="rebootDevice()" style="width: 100%; margin-bottom: 10px;" class="btn-danger">Reboot Device</button>
         <button onclick="resetSettings()" style="width: 100%;" class="btn-danger">Reset Settings</button>
       </div>
+      </div>
+    </div>
+
+    <!-- Debug Tab -->
+    <div id="debug-tab" class="tab-content">
+      <div class="status-grid">
+
+      <!-- Serial Debug Output Box -->
+      <div class="status-box">
+        <h4>Serial Debug Output</h4>
+        <div class="form-group">
+          <label for="protocolDebug">
+            <input type="checkbox" id="protocolDebug" {{PROTOCOL_DEBUG_CHECKED}} onchange="toggleProtocolDebug()">
+            Enable Serial Debug Output
+          </label>
+          <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Verbose per-move logging to the serial console (position moves, which tracking profile was used). Applies immediately - no save or reboot needed.</p>
+        </div>
+      </div>
+
+      <!-- Compact Motion Log Box -->
+      <div class="status-box">
+        <h4>Compact Motion Log</h4>
+        <p style="color: #666; font-size: 12px;">CSV position/speed/tracking data, one line per DDP command in Direct mode or roughly every control tick in PID mode. Bench/tuning tool - leave off during normal show operation, it isn't meant to run continuously.</p>
+        <div class="form-group">
+          <label for="compactLogLiveEnabled">
+            <input type="checkbox" id="compactLogLiveEnabled" onchange="toggleCompactLogLive()">
+            Enable logging
+          </label>
+        </div>
+        <div class="form-group">
+          <label for="compactLogAutoRefresh">
+            <input type="checkbox" id="compactLogAutoRefresh" checked onchange="onCompactLogAutoRefreshChanged()">
+            Auto-refresh while this tab is open (every 3s)
+          </label>
+        </div>
+        <button type="button" class="btn-warning btn-inline" onclick="fetchCompactLog()">Refresh Now</button>
+        <button type="button" class="btn-danger btn-inline" onclick="clearCompactLogView()">Clear</button>
+        <pre id="compact-log-view" class="log-view">(not yet loaded - click Refresh Now, or open this tab)</pre>
+      </div>
+
+      <!-- Persistent Diagnostic Log Box -->
+      <div class="status-box">
+        <h4>Persistent Diagnostic Log</h4>
+        <p style="color: #666; font-size: 12px;">Reboot-surviving breadcrumbs - boot/reset reason, homing search progress, TMC stall events. Always on, low rate, safe to leave running.</p>
+        <button type="button" class="btn-warning btn-inline" onclick="fetchPersistLog()">Refresh Now</button>
+        <button type="button" class="btn-danger btn-inline" onclick="clearPersistLogView()">Clear</button>
+        <pre id="persist-log-view" class="log-view">(not yet loaded - click Refresh Now, or open this tab)</pre>
+      </div>
+
       </div>
     </div>
 

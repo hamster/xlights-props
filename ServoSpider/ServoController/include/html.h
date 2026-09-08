@@ -198,6 +198,27 @@ body {
     .status-box strong {
       color: #e0e0e0;
     }
+    .log-view {
+      background-color: #0a0f16;
+      color: #8fd6ff;
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-size: 12px;
+      line-height: 1.4;
+      padding: 10px;
+      border-radius: 5px;
+      max-height: 320px;
+      overflow-y: auto;
+      overflow-x: auto;
+      white-space: pre;
+      margin: 10px 0 0;
+    }
+    .btn-inline {
+      width: auto;
+      display: inline-block;
+      padding: 8px 16px;
+      margin: 5px 5px 5px 0;
+      font-size: 14px;
+    }
     .status {
       padding: 8px 10px;
       margin: 10px 0;
@@ -538,6 +559,106 @@ function showNotification(message, isSuccess) {
         });
     }
 
+    // ---- Debug tab: Serial Debug toggle, Compact Motion Log, Persistent Log ----
+
+    function toggleProtocolDebug() {
+      var enabled = document.getElementById('protocolDebug').checked;
+      fetch('/protocol-debug?enable=' + enabled)
+        .then(response => response.json())
+        .then(data => {
+          console.log('Serial debug output: ' + (data.protocolDebug ? 'enabled' : 'disabled'));
+        })
+        .catch(error => {
+          showNotification('Error toggling serial debug output: ' + error, false);
+        });
+    }
+
+    function toggleCompactLogLive() {
+      var enabled = document.getElementById('compactLogLiveEnabled').checked;
+      fetch('/compact-log?enable=' + enabled)
+        .then(response => response.json())
+        .then(data => {
+          console.log('Compact motion log: ' + (data.compactLog ? 'enabled' : 'disabled'));
+        })
+        .catch(error => {
+          showNotification('Error toggling compact motion log: ' + error, false);
+        });
+    }
+
+    function fetchCompactLog() {
+      fetch('/compact-log')
+        .then(response => response.text())
+        .then(text => {
+          var view = document.getElementById('compact-log-view');
+          view.textContent = text.length > 0 ? text : '(empty)';
+          view.scrollTop = view.scrollHeight;
+        })
+        .catch(error => {
+          console.log('Error fetching compact motion log:', error);
+        });
+    }
+
+    function clearCompactLogView() {
+      fetch('/compact-log?clear=1')
+        .then(response => response.text())
+        .then(() => {
+          document.getElementById('compact-log-view').textContent = '(cleared)';
+        })
+        .catch(error => {
+          showNotification('Error clearing compact motion log: ' + error, false);
+        });
+    }
+
+    function fetchPersistLog() {
+      fetch('/persist-log')
+        .then(response => response.text())
+        .then(text => {
+          var view = document.getElementById('persist-log-view');
+          view.textContent = text.length > 0 ? text : '(empty)';
+          view.scrollTop = view.scrollHeight;
+        })
+        .catch(error => {
+          console.log('Error fetching persistent log:', error);
+        });
+    }
+
+    function clearPersistLogView() {
+      fetch('/persist-log?clear=1')
+        .then(response => response.text())
+        .then(() => {
+          document.getElementById('persist-log-view').textContent = '(cleared)';
+        })
+        .catch(error => {
+          showNotification('Error clearing persistent log: ' + error, false);
+        });
+    }
+
+    // Auto-refresh only while the Debug tab is actually open, on its own
+    // slower interval - these logs can be tens of KB, no reason to poll
+    // them every second the way status-data is.
+    window.debugLogRefreshInterval = null;
+    function startDebugLogAutoRefresh() {
+      stopDebugLogAutoRefresh();
+      fetchCompactLog();
+      fetchPersistLog();
+      window.debugLogRefreshInterval = setInterval(function() {
+        if (document.getElementById('compactLogAutoRefresh').checked) {
+          fetchCompactLog();
+          fetchPersistLog();
+        }
+      }, 3000);
+    }
+    function stopDebugLogAutoRefresh() {
+      if (window.debugLogRefreshInterval) {
+        clearInterval(window.debugLogRefreshInterval);
+        window.debugLogRefreshInterval = null;
+      }
+    }
+    function onCompactLogAutoRefreshChanged() {
+      // Nothing to do beyond the checkbox itself - the interval above
+      // checks it live on every tick rather than being torn down/rebuilt.
+    }
+
     function fetchLedPreview() {
       fetch('/led-preview')
         .then(response => response.json())
@@ -644,6 +765,13 @@ function showNotification(message, isSuccess) {
           }, 1000);
           console.log('Status updates resumed');
         }
+      }
+
+      // Debug tab's log viewers only poll while that tab is actually open
+      if (tabName === 'debug-tab') {
+        startDebugLogAutoRefresh();
+      } else {
+        stopDebugLogAutoRefresh();
       }
     }
 
@@ -1011,6 +1139,12 @@ function showNotification(message, isSuccess) {
             ledTestCheckbox.checked = data.ledTestMode || false;
           }
 
+          // Sync Compact Motion Log checkbox (Debug tab) across all clients
+          var compactLogCheckbox = document.getElementById('compactLogLiveEnabled');
+          if (compactLogCheckbox && document.activeElement !== compactLogCheckbox) {
+            compactLogCheckbox.checked = data.compactLog || false;
+          }
+
           // Update locate mode indicator to sync across all clients
           var bannerSpider = document.getElementById('banner-spider');
           if (data.locateMode) {
@@ -1234,6 +1368,7 @@ function showNotification(message, isSuccess) {
   <div class="tabs">
     <button class="tab active" onclick="showTab('status-tab')">Status</button>
     <button class="tab" onclick="showTab('settings-tab')">Settings</button>
+    <button class="tab" onclick="showTab('debug-tab')">Debug</button>
     <button class="tab" onclick="showTab('update-tab')">OTA Update</button>
   </div>
 
@@ -1695,13 +1830,6 @@ function showNotification(message, isSuccess) {
           </div>
 
           <div class="form-group">
-            <label for="protocolDebug">
-              <input type="checkbox" id="protocolDebug" name="protocolDebug" {{PROTOCOL_DEBUG_CHECKED}}>
-              Enable Serial Debug Output
-            </label>
-          </div>
-
-          <div class="form-group">
             <label for="ledBlankTime">LED Blank Time (seconds, 0=disabled):</label>
             <input type="number" id="ledBlankTime" name="ledBlankTime" value="{{LED_BLANK_TIME}}" min="0" max="3600" required>
           </div>
@@ -1762,6 +1890,55 @@ function showNotification(message, isSuccess) {
         <button onclick="rebootDevice()" style="width: 100%; margin-bottom: 10px;" class="btn-danger">Reboot Device</button>
         <button onclick="resetSettings()" style="width: 100%;" class="btn-danger">Reset Settings</button>
       </div>
+      </div>
+    </div>
+
+    <!-- Debug Tab -->
+    <div id="debug-tab" class="tab-content">
+      <div class="status-grid">
+
+      <!-- Serial Debug Output Box -->
+      <div class="status-box">
+        <h4>Serial Debug Output</h4>
+        <div class="form-group">
+          <label for="protocolDebug">
+            <input type="checkbox" id="protocolDebug" {{PROTOCOL_DEBUG_CHECKED}} onchange="toggleProtocolDebug()">
+            Enable Serial Debug Output
+          </label>
+          <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Verbose per-move logging to the serial console (position moves, which tracking profile was used). Applies immediately - no save or reboot needed.</p>
+        </div>
+      </div>
+
+      <!-- Compact Motion Log Box -->
+      <div class="status-box">
+        <h4>Compact Motion Log</h4>
+        <p style="color: #666; font-size: 12px;">CSV position/speed/tracking data, one line per DDP command in Direct mode or roughly every control tick in PID mode. Bench/tuning tool - leave off during normal show operation, it isn't meant to run continuously.</p>
+        <div class="form-group">
+          <label for="compactLogLiveEnabled">
+            <input type="checkbox" id="compactLogLiveEnabled" onchange="toggleCompactLogLive()">
+            Enable logging
+          </label>
+        </div>
+        <div class="form-group">
+          <label for="compactLogAutoRefresh">
+            <input type="checkbox" id="compactLogAutoRefresh" checked onchange="onCompactLogAutoRefreshChanged()">
+            Auto-refresh while this tab is open (every 3s)
+          </label>
+        </div>
+        <button type="button" class="btn-warning btn-inline" onclick="fetchCompactLog()">Refresh Now</button>
+        <button type="button" class="btn-danger btn-inline" onclick="clearCompactLogView()">Clear</button>
+        <pre id="compact-log-view" class="log-view">(not yet loaded - click Refresh Now, or open this tab)</pre>
+      </div>
+
+      <!-- Persistent Diagnostic Log Box -->
+      <div class="status-box">
+        <h4>Persistent Diagnostic Log</h4>
+        <p style="color: #666; font-size: 12px;">Reboot-surviving breadcrumbs - boot/reset reason, homing search progress, TMC stall events. Always on, low rate, safe to leave running.</p>
+        <button type="button" class="btn-warning btn-inline" onclick="fetchPersistLog()">Refresh Now</button>
+        <button type="button" class="btn-danger btn-inline" onclick="clearPersistLogView()">Clear</button>
+        <pre id="persist-log-view" class="log-view">(not yet loaded - click Refresh Now, or open this tab)</pre>
+      </div>
+
       </div>
     </div>
 

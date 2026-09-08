@@ -186,6 +186,27 @@ body {
     .status-box strong {
       color: #e0e0e0;
     }
+    .log-view {
+      background-color: #0a0f16;
+      color: #8fd6ff;
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-size: 12px;
+      line-height: 1.4;
+      padding: 10px;
+      border-radius: 5px;
+      max-height: 320px;
+      overflow-y: auto;
+      overflow-x: auto;
+      white-space: pre;
+      margin: 10px 0 0;
+    }
+    .btn-inline {
+      width: auto;
+      display: inline-block;
+      padding: 8px 16px;
+      margin: 5px 5px 5px 0;
+      font-size: 14px;
+    }
     .status {
       padding: 8px 10px;
       margin: 10px 0;

@@ -474,17 +474,17 @@ void handleSavePid() {
 
 void handleSaveProtocol() {
   // DDP is the only supported protocol; this form covers channel/stepper settings.
+  // protocolDebug moved to the Debug tab, 2026-09-08 - it's now its own
+  // instant-apply toggle (handleProtocolDebugToggle()/GET /protocol-debug),
+  // not part of this form, so it's deliberately not read here anymore.
   bool newStepperControl = server.hasArg("stepperControl");
   bool new16Bit = server.hasArg("control16Bit");
-  bool newDebug = server.hasArg("protocolDebug");
 
   stepperControlEnabled = newStepperControl;
   control16BitConfig = new16Bit;
-  protocolDebugConfig = newDebug;
 
   preferences.putBool("stepperControl", stepperControlEnabled);
   preferences.putBool("control16Bit", control16BitConfig);
-  preferences.putBool("protocolDebug", protocolDebugConfig);
 
   // Save blank time settings
   if (server.hasArg("ledBlankTime")) {
@@ -796,6 +796,28 @@ void handleLedTest() {
     // Return current LED test mode state
     server.send(200, "application/json", ledTestModeActive ? "{\"ledTestMode\":true}" : "{\"ledTestMode\":false}");
   }
+}
+
+// GET /protocol-debug?enable=true|false - instant-apply toggle for
+// protocolDebugConfig (Debug tab's "Enable Serial Debug Output" checkbox,
+// moved out of the Channel Configuration form 2026-09-08 - same
+// enable=true|false pattern as /compact-log and /led-test below, rather
+// than a full form POST, since this is the only field it controls). No
+// GET-with-no-args mode - there's nothing to retrieve, only the running
+// verbose Serial.print()/println() calls this gates, which show up in a
+// live serial connection, not over HTTP.
+void handleProtocolDebugToggle() {
+  if (!server.hasArg("enable")) {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"missing enable arg\"}");
+    return;
+  }
+  const String& enableArg = server.arg("enable");
+  bool enable = (enableArg.length() > 0 && enableArg[0] == 't');  // "true"
+  protocolDebugConfig = enable;
+  preferences.putBool("protocolDebug", protocolDebugConfig);
+  Serial.print("Serial debug output ");
+  Serial.println(enable ? "enabled" : "disabled");
+  server.send(200, "application/json", enable ? "{\"success\":true,\"protocolDebug\":true}" : "{\"success\":true,\"protocolDebug\":false}");
 }
 
 // GET /compact-log?enable=true|false - toggles compactLogEnabled (original
@@ -1151,6 +1173,7 @@ void startWebServer() {
   server.on("/led-test", HTTP_GET, handleLedTest);
 
   // Temporary compact motion CSV log toggle
+  server.on("/protocol-debug", HTTP_GET, handleProtocolDebugToggle);  // Debug tab's Serial Debug checkbox
   server.on("/compact-log", HTTP_GET, handleCompactLog);
   server.on("/persist-log", HTTP_GET, handlePersistLog);  // reboot-surviving diagnostic log - see persist_log.h
   server.on("/ddp-rx-log", HTTP_GET, handleDdpRxLog);      // DDP reception bench log - see ddp_handler.h

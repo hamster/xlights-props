@@ -30,6 +30,7 @@ void handleHoming();
 void handleLocate();
 void handleLedTest();
 void handleCompactLog();
+void handleProtocolDebugToggle();
 void handleStatusData();
 void handleMove();
 void handleSetPosition();
