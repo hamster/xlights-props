@@ -13,15 +13,11 @@ float tmcRSenseConfig = 0.11f;
 uint8_t tmcAddressConfig = 0;
 uint16_t tmcRunCurrentConfig = 800;
 uint8_t tmcHoldPercentConfig = 50;
-bool tmcStealthChopConfig = true;
 bool tmcStallEnabledConfig = false;
 uint16_t tmcStallThresholdConfig = 50;
 uint16_t tmcMicrostepsConfig = 16;
 uint8_t tmcHstrtConfig = 0;
 uint8_t tmcHendConfig = 0;
-uint8_t tmcPwmRegConfig = 4;
-uint8_t tmcPwmLimConfig = 12;
-bool tmcPwmAutogradConfig = true;
 
 TmcStatus tmcStatus;
 
@@ -110,38 +106,31 @@ void applyTmcSettings() {
   // physical distance per step just changed.
   tmcDriver->microsteps(tmcMicrostepsConfig);
 
-  // SpreadCycle hysteresis start/end - only meaningful when SpreadCycle is
-  // active, but harmless to set unconditionally. Datasheet-recommended
-  // constraint: hstrt + hend should stay <= 15, though it's not enforced
-  // here (this is exploratory tuning territory, not a hard safety limit).
+  // SpreadCycle hysteresis start/end (SpreadCycle is now the only chopper
+  // mode - see this function's own SpreadCycle-only block below).
+  // Datasheet-recommended constraint: hstrt + hend should stay <= 15,
+  // though it's not enforced here (this is exploratory tuning territory,
+  // not a hard safety limit).
   tmcDriver->hstrt(tmcHstrtConfig);
   tmcDriver->hend(tmcHendConfig);
 
   float holdMultiplier = tmcHoldPercentConfig / 100.0f;
   tmcDriver->rms_current(tmcRunCurrentConfig, holdMultiplier);
 
-  // PWMCONF fields never set elsewhere also default to 0 in the same way -
-  // pwm_reg/pwm_lim bound StealthChop's autoscale step size/amplitude, so
-  // leaving them at 0 would silently cripple StealthChop the moment it's
-  // selected. Defaults match TMC's documented factory-default reset state.
-  tmcDriver->pwm_autograd(tmcPwmAutogradConfig);
-  tmcDriver->pwm_reg(tmcPwmRegConfig);
-  tmcDriver->pwm_lim(tmcPwmLimConfig);
-
-  if (tmcStealthChopConfig) {
-    tmcDriver->en_spreadCycle(false);
-    tmcDriver->pwm_autoscale(true);
-  } else {
-    tmcDriver->en_spreadCycle(true);
-    tmcDriver->pwm_autoscale(false);
-  }
+  // SpreadCycle only (StealthChop removed 2026-09-07 - see tmc_handler.h's
+  // declaration comment for the real, decisive bench failure that ended
+  // it: barely any torque, audibly wrong, the step counter running to
+  // 95980 against a real ~15500 travel before the search timed out). No
+  // config toggle left, no PWMCONF autoscale fields to set - those were
+  // StealthChop-specific and went with it.
+  tmcDriver->en_spreadCycle(true);
+  tmcDriver->pwm_autoscale(false);
 
   Serial.print("TMC2209 settings applied: ");
   Serial.print(tmcRunCurrentConfig);
   Serial.print("mA run / ");
   Serial.print((int)(holdMultiplier * tmcRunCurrentConfig));
-  Serial.print("mA hold, ");
-  Serial.println(tmcStealthChopConfig ? "StealthChop" : "SpreadCycle");
+  Serial.println("mA hold, SpreadCycle");
 }
 
 void clearTmcStall() {

@@ -148,7 +148,7 @@ static bool setTunable(const String& name, const String& valueStr) {
   // Deliberately bypasses /save-tmc entirely: that handler writes all 14 TMC
   // Preferences keys to flash on every call (real wear across a long sweep)
   // and reconstructs every other TMC field from HTTP form args, where an
-  // absent checkbox arg (tmcEnabled/tmcStallEnabled/tmcPwmAutograd) reads as
+  // absent checkbox arg (tmcEnabled/tmcStallEnabled) reads as
   // false - a script posting only tmcRunCurrent would silently disable the
   // UART link and StallGuard as a side effect. Setting the config global
   // directly and calling applyTmcSettings() re-applies the *current*

@@ -561,6 +561,46 @@ void updateStreamingMode() {
 // separate "on command received" handler for this mode - this is the
 // whole thing.
 void updatePidMode() {
+  // Stale-tick watchdog (2026-09-07, see TODO.md's "Needed: a stale-tick
+  // watchdog" entry for the full incident this fixes). In continuous-run
+  // mode, runForward()/runBackward() mean "keep going indefinitely" - the
+  // stepper does not stop on its own, only this function's own next tick
+  // decides whether to keep going, reverse, or stop. If loop() doesn't get
+  // back around to call this for a while (a large HTTP response - the
+  // Compact Motion Log is up to 96KB - is the case that actually happened;
+  // WiFi reconnect logic and SPIFFS writes are also blocking and run from
+  // loop()), the stepper just cruises with nothing supervising it. Measured
+  // directly: a real 1.0s gap in logged rows during which the trolley
+  // travelled +3,660 steps completely unsupervised, confirmed by the
+  // encoder as real physical motion, not a counter artifact.
+  //
+  // Neither the overshoot safety net below nor the directional containment
+  // guards further down help here, because both only run when this
+  // function runs - they cannot fire during exactly the gap where they're
+  // needed. This check is what closes that gap: if it's been suspiciously
+  // long since the last tick while a continuous run was in flight,
+  // forceStop() immediately, before anything else in this function (which
+  // would otherwise still be reasoning from now-stale assumptions) runs.
+  //
+  // Flat 200ms, not scaled to stepperPidTickMsConfig - this is detecting an
+  // abnormal LOOP-LEVEL stall (the observed hazard was 500-1000ms+), not
+  // normal tick-to-tick variance, so it doesn't need to track how fast the
+  // control loop itself is configured to run. Comfortably longer than
+  // normal jitter at any tick rate this project has tested (5-20ms) and
+  // comfortably shorter than the real hazard windows that motivated this.
+  {
+    unsigned long nowWatchdog = millis();
+    static const unsigned long STALE_TICK_THRESHOLD_MS = 200;
+    if (continuousRunDirection != 0 && lastPidUpdateMs != 0 &&
+        (nowWatchdog - lastPidUpdateMs) > STALE_TICK_THRESHOLD_MS) {
+      stepper->forceStop();
+      pidStopSettling = true;
+      pidDirectionSwitchPending = false;  // abandon any in-flight reversal handshake - a fresh one starts clean next tick
+      continuousRunDirection = 0;
+      persistLog("PID stale-tick watchdog: %lums since last tick, forced stop", nowWatchdog - lastPidUpdateMs);
+    }
+  }
+
   if (stepper->isRunning()) {
     int curPos = stepper->getCurrentPosition();
     // Same hard safety net TRACK_MODE_STREAMING uses - a continuously-
@@ -1322,15 +1362,11 @@ void setup() {
   tmcAddressConfig = (uint8_t)preferences.getInt("tmcAddress", 0);
   tmcRunCurrentConfig = (uint16_t)preferences.getInt("tmcRunCurrent", 800);
   tmcHoldPercentConfig = (uint8_t)preferences.getInt("tmcHoldPercent", 50);
-  tmcStealthChopConfig = preferences.getBool("tmcStealthChop", true);
   tmcStallEnabledConfig = preferences.getBool("tmcStallEnabled", false);
   tmcStallThresholdConfig = (uint16_t)preferences.getInt("tmcStallThresh", 50);
   tmcMicrostepsConfig = (uint16_t)preferences.getInt("tmcMicrosteps", 16);
   tmcHstrtConfig = (uint8_t)preferences.getInt("tmcHstrt", 0);
   tmcHendConfig = (uint8_t)preferences.getInt("tmcHend", 0);
-  tmcPwmRegConfig = (uint8_t)preferences.getInt("tmcPwmReg", 4);
-  tmcPwmLimConfig = (uint8_t)preferences.getInt("tmcPwmLim", 12);
-  tmcPwmAutogradConfig = preferences.getBool("tmcPwmAutograd", true);
 
   // Initialize stepper
   initializeStepper();
@@ -1869,8 +1905,7 @@ void printFullStatus() {
     Serial.print(" mA, Hold: ");
     Serial.print(tmcHoldPercentConfig);
     Serial.println("%");
-    Serial.print("Chopper Mode: ");
-    Serial.println(tmcStealthChopConfig ? "StealthChop" : "SpreadCycle");
+    Serial.println("Chopper Mode: SpreadCycle");
     Serial.print("Over-Temp Warning: ");
     Serial.println(tmcStatus.overTempWarning ? "YES" : "No");
     Serial.print("Over-Temp Shutdown: ");

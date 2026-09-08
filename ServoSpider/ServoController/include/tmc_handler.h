@@ -22,15 +22,20 @@ extern float tmcRSenseConfig;             // sense resistor, ohms (module-specif
 extern uint8_t tmcAddressConfig;          // UART address from MS1/MS2 strapping, 0-3
 extern uint16_t tmcRunCurrentConfig;      // RMS run current, mA
 extern uint8_t tmcHoldPercentConfig;      // hold current as % of run current
-extern bool tmcStealthChopConfig;         // true = StealthChop, false = SpreadCycle
+// StealthChop removed 2026-09-07 - tried it live at this project's normal
+// operating settings (1200mA, 200,000 accel) and it failed badly:
+// dramatically insufficient torque, barely moving, audibly wrong, the
+// step counter running far out of range (a homing attempt reached
+// position 95980 against a real ~15500 travel) before the search
+// timed out. Not a subtle resonance/lost-step edge case worth tuning
+// around - SpreadCycle is now the only chopper mode this driver runs.
+// tmcPwmRegConfig/tmcPwmLimConfig/tmcPwmAutogradConfig (StealthChop's own
+// autoscale tuning knobs, meaningless under SpreadCycle) went with it.
 extern bool tmcStallEnabledConfig;        // enable stall-detection safety cutoff
 extern uint16_t tmcStallThresholdConfig;  // raw SG_RESULT trip point (0-1023, lower = more loaded)
 extern uint16_t tmcMicrostepsConfig;      // microsteps per full step (1,2,4,8,16,32,64,128,256)
 extern uint8_t tmcHstrtConfig;            // SpreadCycle hysteresis start, raw register value 0-7
 extern uint8_t tmcHendConfig;             // SpreadCycle hysteresis end, raw register value 0-15
-extern uint8_t tmcPwmRegConfig;           // StealthChop autoscale max PWM amplitude step, 1-15
-extern uint8_t tmcPwmLimConfig;           // StealthChop autoscale amplitude limit, 0-15
-extern bool tmcPwmAutogradConfig;         // StealthChop automatic gradient adaptation
 
 // Live diagnostics snapshot, refreshed periodically by updateTmc()
 struct TmcStatus {

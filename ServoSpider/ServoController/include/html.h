@@ -1673,17 +1673,6 @@ function showNotification(message, isSuccess) {
             <div class="collapsible-content">
               <div class="collapsible-content-inner">
                 <div class="form-group">
-                  <label style="display: block; margin-bottom: 8px;">
-                    <input type="radio" name="tmcChopperMode" value="stealthchop" {{TMC_STEALTHCHOP_CHECKED}}>
-                    StealthChop (quiet)
-                  </label>
-                  <label style="display: block; margin-bottom: 8px;">
-                    <input type="radio" name="tmcChopperMode" value="spreadcycle" {{TMC_SPREADCYCLE_CHECKED}}>
-                    SpreadCycle (louder, more torque headroom)
-                  </label>
-                </div>
-
-                <div class="form-group">
                   <label for="tmcMicrosteps">Microsteps per Full Step:</label>
                   <select id="tmcMicrosteps" name="tmcMicrosteps" style="width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box; border: 2px solid #ddd; border-radius: 4px;">
                     <option value="1" {{TMC_USTEP_1}}>1 (full step)</option>
@@ -1699,7 +1688,7 @@ function showNotification(message, isSuccess) {
                   <p style="color: #666; font-size: 12px; margin: 4px 0 0;">Changing this changes physical distance per step - re-home afterward and expect Stepper Speed (Hz) to feel different.</p>
                 </div>
 
-                <p style="margin: 20px 0 5px; font-weight: bold;">SpreadCycle Hysteresis (raw register values; only affects SpreadCycle mode; datasheet suggests keeping hstrt + hend &le; 15)</p>
+                <p style="margin: 20px 0 5px; font-weight: bold;">SpreadCycle Hysteresis (raw register values; datasheet suggests keeping hstrt + hend &le; 15)</p>
                 <div class="form-group">
                   <label for="tmcHstrt">Hysteresis Start (hstrt, 0-7):</label>
                   <input type="number" id="tmcHstrt" name="tmcHstrt" value="{{TMC_HSTRT}}" min="0" max="7" required>
@@ -1707,22 +1696,6 @@ function showNotification(message, isSuccess) {
                 <div class="form-group">
                   <label for="tmcHend">Hysteresis End (hend, 0-15):</label>
                   <input type="number" id="tmcHend" name="tmcHend" value="{{TMC_HEND}}" min="0" max="15" required>
-                </div>
-
-                <p style="margin: 20px 0 5px; font-weight: bold;">StealthChop Autoscale (only affects StealthChop mode)</p>
-                <div class="form-group">
-                  <label for="tmcPwmReg">Autoscale Step Size (pwm_reg, 1-15):</label>
-                  <input type="number" id="tmcPwmReg" name="tmcPwmReg" value="{{TMC_PWM_REG}}" min="1" max="15" required>
-                </div>
-                <div class="form-group">
-                  <label for="tmcPwmLim">Autoscale Amplitude Limit (pwm_lim, 0-15):</label>
-                  <input type="number" id="tmcPwmLim" name="tmcPwmLim" value="{{TMC_PWM_LIM}}" min="0" max="15" required>
-                </div>
-                <div class="form-group">
-                  <label for="tmcPwmAutograd">
-                    <input type="checkbox" id="tmcPwmAutograd" name="tmcPwmAutograd" {{TMC_PWM_AUTOGRAD_CHECKED}}>
-                    Automatic Gradient Adaptation (pwm_autograd)
-                  </label>
                 </div>
 
                 <div class="form-group">

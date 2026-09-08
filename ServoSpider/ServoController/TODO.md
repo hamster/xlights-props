@@ -217,8 +217,8 @@ User's question: "what do you think will help the smoothness?" Two candidates pr
 
 **Net result of this whole detour**: jerk is essentially unchanged from before this investigation (484.0 at p8 in final validation, vs. 513.5 originally) - the smoothness gap to Direct mode remains open. The one durable improvement is the derivative filter, kept as part of the recommended config.
 
-- [ ] The smoothness/jerk gap to Direct mode is still open - neither derivative filtering nor a first-cut trajectory-reference layer closed it. A proper attempt at the trajectory-reference idea (see the bugs above) is the most promising remaining lever identified, but needs real care around the physical bounds and the stop/settle interaction before it's safe to try on hardware again.
-- [ ] `pidTrajFollow`/`pidTrajAccel` exist as RAM-only tunables (off by default) if this is picked back up - don't flip `pidTrajFollow` on without addressing the two bugs above first.
+- [x] **Closed the other way - a faster PID tick rate, not the trajectory-reference idea, turned out to be the real lever** (see "PID tick rate found to be the real ripple lever" above, 2026-09-07 late). At tick=5ms, jerk now beats Direct mode at p12+ periods. The trajectory-reference layer was never revisited - superseded, not attempted.
+- [x] **Removed entirely 2026-09-07**, not just left off - see the tick-rate section above for why the underlying idea was superseded rather than fixed.
 
 ### Operational note: a DTR/RTS toggle sequence - or possibly just the first `pio.exe upload` after a device has been running a while - can leave the ESP32-S3 stuck in USB download/bootloader mode
 
@@ -226,12 +226,12 @@ Found live tonight: manually toggling DTR/RTS via raw pyserial (outside `pio.exe
 
 **Recurred several more times later the same night without any manual DTR/RTS involved** - just the plain `pio.exe run --target upload` sequence used all session, on what looked like the *first* upload attempt after the device had been running/being tested for a while (always recovered by simply re-running the exact same upload command a second time, immediately, no code changes). Not root-caused - could be a marginal reset-timing issue on this specific board/driver combination, unrelated to the original manual-DTR/RTS incident. Worth remembering either way: after any flash, verify HTTP connectivity before assuming success, and don't jump to "the new firmware crashed" - try one more plain re-upload first.
 
-- [ ] Close the remaining smoothness gap to Direct mode (jerk ~300-550 vs Direct's ~140-155) - not yet found a change that improves this without cost elsewhere. Candidates not yet tried: filtering/smoothing the derivative-on-measurement rate estimate itself (separate from the feedforward EMA), Ki (still completely untested), or accepting the current jerk level as the cost of the much tighter tracking.
+- [x] **Closed** - the tick-rate fix (2026-09-07 late) took jerk to 110-142 depending on period, at or below Direct's 140-155, with no accuracy cost. Ki is moot (removed).
 - [ ] Root-cause the Kd=0.1 permanent freeze/corruption bug - a real, serious, reproduced-once issue, not yet understood. Until it is, treat Kd below ~0.15 as an unverified danger zone with feedforward enabled.
 - [ ] Investigate the ~20-reboot flurry that coincided with the Kd=0.1 testing window - not confirmed as the same root cause, but the timing is suspicious and reset reason was UNKNOWN (a real crash signature) for all but one of them.
-- [ ] `pidAccel` below 50000 is a real, available lever if the smoothness/corner-tightness trade is ever revisited (see the table above) - not chosen tonight, but characterized.
-- [ ] Ki still completely untested against feedforward (or ever, really - see prior sessions' notes).
-- [ ] Decide whether to persist `trackMode=4` to NVS (make PID+feedforward the real production default) - deliberately left as a live-only override tonight pending the user's own review of this report.
+- [x] **Superseded** - the tick-rate fix is strictly better (no accuracy cost at all, where lowering `pidAccel` always traded some away). `pidAccel` stays 50000.
+- [x] **Moot - Ki removed entirely 2026-09-07.** Never set nonzero in any session; see stepper_handler.h's declaration comment for why it was removed rather than left untested.
+- [x] Superseded by the later, more thorough re-tune the same project - see the live curated TODO list at the top of this file for the current, still-open version of this decision.
 
 ## Direct-mode reversal lag investigation + a real crash bug found and fixed (2026-09-06/07)
 
@@ -348,7 +348,7 @@ Added `sgResult` (live StallGuard reading) as a new column in the Compact Motion
 **Real result once all of the above was in place** (1400mA run current, `trackAccel` 5000→2500, StallGuard disabled): the 12-20s (tracking-dominated) runs improved substantially - RMS error dropped (1768→1378, 2003→1147, 1791→752) and **real step loss went to zero** on all three, where the old config lost 3-13 steps almost every run. The 5s run (mostly normal-profile, `near_stall_pct=0%`) got worse in RMS terms, a separate lower-priority thing to look at later, not a stalling problem. Data saved to `tuning_runs/summary.csv`/`all_rows.csv` (accumulating across every session) plus per-run `.log`/`.json`/`.png` as usual.
 
 - [ ] StallGuard is currently disabled for tuning-data-collection purposes - needs a real decision before this ships: re-enable at a threshold informed by this session's `min_sg_result` data (bottomed at 2-4 even in the improved config, so a naive re-enable at the old defaults would likely still false-trigger), or find a different real-time safety mechanism. Not urgent per the user ("hardware can't hurt itself, it just sounds terrible") for continued bench tuning, but worth resolving before any unattended/production use.
-- [ ] The 5s run's regression (normal-profile-dominated, RMS worse with the new settings) isn't explained yet.
+- [x] **Explained by later sessions**: the 5s (and 4s) case is a genuine physical speed-ceiling limit, confirmed and re-confirmed across multiple later characterization sweeps - not a bug, not settings-dependent. The user's own later decision (2026-09-07) moved the project's tested floor to 6s for exactly this reason.
 
 **Follow-up sweep, same session**: bracketed the 2500/1400mA result with three more configs (`trackAccel` 1500 and 3500 at 1400mA, and 2500 at 1300mA) to check it wasn't just "better than the one prior data point." Full comparison table and graphs: `tools/TUNING_SESSION_2026-09-06.md`. Findings:
 - **1500 is confirmed worse, not safer** - more conservative acceleration gave both worse RMS error *and* more stuck-at-switch events than 2500. The sweet spot isn't toward gentler.
@@ -362,8 +362,8 @@ Added `sgResult` (live StallGuard reading) as a new column in the Compact Motion
 
 **Also found and fixed while investigating this**: DDP's 4-bit rolling sequence number (`header.sequenceNum`, already parsed) was never actually validated - any packet was accepted regardless of arrival order. Added `isNewerDdpSeq()`/`lastAcceptedDdpSeq` (`ddp_handler.cpp`) to reject genuinely out-of-order or duplicate packets (seq==0 - "sequencing not in use" - always accepted, per the DDP convention), counted in a new `ddpPacketsRejectedOutOfOrder` stat (serial `s` status, `/status-data`). Turned out not to be the explanation for the spikes above (raw DDP was already smooth even before this fix), but a real, latent correctness gap worth closing regardless on an unreliable transport like WiFi/UDP.
 
-- [ ] Whether `trackAccel=2500`/1400mA is the actual sweet spot, or just better than the one prior data point, isn't fully established - the follow-up sweep above narrowed it down but each config still has only one run.
-- [ ] Full session summary with tables and embedded graphs: `tools/TUNING_SESSION_2026-09-06.md`.
+- [x] **Superseded** - a later, more rigorous sweep ("Direct-mode reversal lag investigation") chose and saved `trackAccel=20000` from real multi-point data. The 2500/1400mA figures here were an early, coarser pass.
+- [x] Done - `tools/TUNING_SESSION_2026-09-06.md` exists.
 
 **Two real production features added the same session, in response to user questions about StallGuard's normal-operation false positives and remote calibration verification:**
 
@@ -386,7 +386,7 @@ Tested clean across multiple full homing cycles on the bench, including back-to-
 
 **Important gotcha hit while verifying this fix**: changing the *compiled* default alone did NOT actually fix this device. After flashing it, the device still stalled/cycled erratically on boot - checked live and found `\$GET jumpStart` / `\$GET homeAccel` still reporting the *old* values (`0` / `1000000`). Cause: this device already had explicit values saved in NVS from some earlier session (`Preferences.getInt("jumpStart", 0)` / `Preferences.getInt("stepAccelHome", stepperAccelHoming)` - a saved NVS value always wins over the compiled fallback default, regardless of what the fallback is). **A compiled default change only helps a device that has never had that key saved** - any device already configured needs the fix applied and saved for real (web UI Stepper Configuration save, or the `/save-stepper` POST used here directly). Confirmed fixed on this device by POSTing the corrected full settings form to `/save-stepper` and verifying with a real reboot afterward that `\$GET ALL` now reports `jumpStart=20`/`homeAccel=20000` from flash, not RAM.
 
-- [ ] Not yet stress-tested beyond a handful of cycles - worth doing several more back-to-back re-homes over a longer session to build more confidence this is fully resolved, not just improved.
+- [x] **Closed out** (user, 2026-09-07) - exercised by dozens of homing cycles across every subsequent bench session since.
 - [ ] The starting-torque stall (jump-start symptom) could in principle also affect any *other* cold-start move, not just homing - e.g. the very first DDP-commanded move after a period of rest. `jumpStartConfig` is a global FastAccelStepper setting (applies to every move, not just homing), so this should already help there too, but hasn't been specifically tested for that case.
 
 ## Root-caused (see the section above): a homing search ran 90+ seconds and traveled well past the normal range
@@ -535,7 +535,7 @@ Raised while reviewing tuning data: `getCurrentPosition()` is pure step-count bo
 
 14. **Current (6th implementation): hardware timer poll, both channels, in software** (`encoder_handler.cpp`, rewritten). A `hw_timer_t` ISR (`onEncoderTimer()`, `IRAM_ATTR`) fires at `ENCODER_POLL_HZ` (4kHz - ~20x oversampling over the <200Hz real edge rate this project's own bench data implies), reads both channels via `gpio_get_level()`, and decodes X4 quadrature via the standard state-transition lookup table (`QUAD_TABLE`). No RMT, no ring buffer, no dependency on FreeRTOS task scheduling at all - just a periodic ISR, installed from `core0Task()` (keeping it Core-0-affine the same way `initEncoder()` always has been). `getMissedTransitionCount()` is now a *real* diagnostic (not RMT's backlog heuristic): it counts genuine skipped transitions - a poll landing on a state where both quadrature bits changed since the last sample, which a valid signal can't do in one real step. Direction is genuinely measured again (not inferred from the stepper's commanded direction, as the RMT version was reduced to) - this directly resolves item 11's open "does this generalize to real tracking-mode tuning" question, since direction no longer depends on there being an idle checkpoint at all.
     - **Bench-verified clean (2026-09-06)**: full homing + 64-leg `$ENCDIAG` sweep (all 4 frequencies) completed end-to-end with zero crashes, `missedTotal` staying at 0 for the entire sweep, and drift across all 64 legs totaling ~23 counts (1563 down to 1540) - tiny, monotonic, consistent with real mechanical backlash, not a counting error. `core0MaxGapMs`/`core0MinStack` stayed at their healthy boot-time values throughout, confirming item 12's finding held under the new implementation too.
-- [ ] Not yet actually *used* for anything beyond passive display - the real payoff (settling "is this control-loop lag or real slip" definitively, and eventually a closed-loop PID prerequisite) still needs a bench session correlating `encoderCount` against `curPos` during real tracking-mode motion.
+- [x] **Done, extensively** - the entire 2026-09-07 PID tuning session used the encoder as ground truth against `curPos` this exact way (see "Tuning requires encoder ground truth" and every subsequent verified sweep).
 
 ## Implemented: display max travel-time (end-to-end speed) in the UI, from real homing data
 
@@ -547,13 +547,13 @@ Implemented by timing the `HOMING_FIND_OTHER_END` leg - the continuous run from 
 
 Surfaced in three places: a "One-way (0-100%) travel: N steps in M ms (~X steps/s average)" log line the moment it's measured, a "Full Travel" row on the Status tab (web UI, both the initial server-templated page load and the live `/status-data` poll), and the serial `s` full status report's Stepper Status section.
 
-- [ ] **Not yet bench-verified** - compiles clean, but needs a real homing cycle to confirm the timing/distance actually line up with real hardware (and to sanity-check the steps/s figure against the already-known ~6500 Hz configured homing speed).
+- [x] **Closed out** (user, 2026-09-07) - exercised by many subsequent real homing cycles.
 - [ ] `$CHECKSTEPS` only catches step loss in the *overshoot* direction (switch fires early) - it can't distinguish "no drift" from "drift the other way" (steps lost such that the trolley undershoots and never reaches the switch at commanded position 0). Worth considering a second check toward the far end (`bottomPosition * 2`) if undershoot-direction loss turns out to matter in practice.
 
 ### Looking ahead (raised while building the harness, not yet started)
 
-- [ ] **Consider moving some/all of this tuning onto the device itself** - an on-device auto-tune mode (sweep parameters, run its own internal test pattern, pick/report a result) so bench-tuning doesn't require a laptop tethered over serial. Worth revisiting once the off-device harness above has actually been used for a full tuning pass and it's clear which parts of the workflow are worth automating on-device vs. keeping as an external tool (plotting/long-term data logging in particular seem like a poor fit for the ESP32 itself).
-- [ ] **Consider a real closed-loop controller (e.g. PID) for position tracking**, instead of the current approach of picking between speed/accel profiles and committing targets via `moveTo()`/`runForward()`/`runBackward()`. None of the three `StepperTrackMode` strategies has actually been validated on the bench yet (see above) - Direct is the only one with real accumulated data, and that data is what motivated designing Coalesce/Streaming in the first place, but neither has been properly tuned or tested, so it's not yet clear whether the right next step is "tune these harder" or "replace the profile-switching approach with genuine closed-loop control." Worth deciding after the pending bench sessions above actually produce data on how well Coalesce/Streaming perform once tuned - if they still don't hold up, that's the point to seriously evaluate PID (or similar) instead of continuing to iterate on open-loop profile selection.
+- [x] **Dropped by the user, 2026-09-07** - actual direction taken was the opposite (richer external Python tooling, `ddp_continuous_test.py`/`analyze_ripple.py`), not on-device automation.
+- [x] **Done** - `TRACK_MODE_PID` exists, is extensively tuned, and is the mode under active use.
 
 ## Fixed: re-homing silently didn't move, after the trolley drifted off the switch during normal operation
 
@@ -566,8 +566,8 @@ Fixed two ways in `stepper_handler.cpp`:
 2. A trip while *not* homing is no longer silently discarded either: it now force-stops (as it always did) and additionally marks the system `homed = false`, logging a warning - since the trolley reaching the switch outside of homing means something has genuinely drifted, and continuing to trust the old homed position would be wrong.
 3. `startHoming()` now also defensively clears `pendingForceStop` itself, belt-and-suspenders against any other path that might leave it stale.
 
-- [ ] Not yet bench-verified - logic reasoned through carefully and the code inspection is conclusive about the mechanism, but this hasn't been reproduced-then-fixed-and-reverified on the actual hardware yet.
-- [ ] The underlying drift itself (why the trolley ends up offset from the switch after extended operation in the first place) is still an open question, likely related to the still-unreproduced "loses steps" concern from the tracking-mode work above - this fix addresses the *symptom* (re-homing not working once already offset), not why it got offset to begin with.
+- [x] **Closed out** (user, 2026-09-07) - bench verification is considered adequate at this point given extensive subsequent real-world exercise.
+- [x] **Root-caused later** - the 2026-09-07 PID session found and fixed the actual mechanism (a control-loop containment gap letting the trolley run unsupervised past a boundary during a blind window). See that session's "real bug found and fixed" section.
 
 ## Root-caused: tracking jerkiness, and three motion strategies added to compare on the bench
 
@@ -587,9 +587,9 @@ Follow-up to the "loses steps / drives into the end stop" report below - a compa
 
 All three still use the same tracking-vs-normal profile decision (`stepperTrackThresholdConfig`/`stepperTrackMaxLagConfig`) - they differ in *how* a chosen target gets committed to the stepper, not in when tracking vs. normal speed/accel applies. Selectable in Settings → Stepper Configuration → Tracking Motion Strategy; persists like the other stepper settings (deferred write while moving, per the earlier crash fix).
 
-- [ ] **Not yet bench-tested** - all three modes compile and the logic has been reasoned through carefully, but none has been tried on real hardware yet. Compare using the same Compact Motion Log capture process that produced the original findings.
+- [x] **Closed out** (user, 2026-09-07) - Direct and PID have both since been extensively bench-tested; Coalesce/Streaming remain lower priority (Streaming is shelved) but are no longer tracked as "blocking, untested."
 - [ ] Streaming mode's rate estimate and the coalesce parameters (250ms/400 steps, 250ms/150ms defaults) are untuned guesses - expect to need adjustment per-prop like the other tracking parameters.
-- [ ] The "buzzes against the end stop" symptom specifically still hasn't been reproduced in a captured log - worth deliberately trying to trigger it (whichever pan speed/pattern caused it originally) with Compact Motion Log running, across all three modes, since that's the one open safety-relevant question none of this analysis has directly addressed yet.
+- [x] **Superseded** - the 2026-09-07 PID session's containment guards and encoder-verified stall detection directly address "driven past a boundary" scenarios with real, repeatable bench evidence, in more depth than this item asked for.
 
 ## Compact Motion Log (temporary diagnostic tool)
 
@@ -683,7 +683,7 @@ DDP reception doesn't need its own task: packets already land in a lwIP-managed 
 - `engine.init(1)` - FastAccelStepper's `StepperTask` now explicitly pinned to Core 1 (`stepper_handler.cpp`'s `initializeStepper()`), instead of the previous unpinned `engine.init()`.
 - New `core0_task.h`/`.cpp` - a real, watchdog-registered FreeRTOS task pinned to Core 0 via `xTaskCreatePinnedToCore()`. Its only job right now is calling `initEncoder()` from within itself, so the encoder's GPIO interrupt ends up Core-0-affine instead of Core-1-affine - directly testing the hypothesis above (the $ENCDIAG sweep's ~10-13-missed-transitions-per-leg result, not scaling with stepper speed, pointed at contention with FastAccelStepper's own Core-1-affine PCNT interrupt). `main.cpp`'s `setup()` now calls `startCore0Task()` instead of `initEncoder()` directly.
 - FastLED's `addLeds()`/`show()` work deliberately **not** moved to this task yet - LEDs are disabled (pixel count 0) during this tuning phase anyway (see the encoder section's note on freeing RMT), so there's nothing to move yet. When that's revisited, its logic belongs in this same Core 0 task's loop (currently just an idle watchdog-reset loop), fed by the semaphore design above, not a second task.
-- [ ] **Not yet bench-verified** - compiles clean, but the actual point (does pinning the encoder to Core 0 reduce `$ENCDIAG`'s missed-transition rate) hasn't been tested on real hardware yet. Re-run `$ENCDIAG` and compare `missedTotal`'s growth rate against the pre-pinning sweep in the encoder section above.
+- [x] **Closed out** (user, 2026-09-07) - bench verification considered adequate; the encoder has since been relied on extensively across the whole 2026-09-07 PID session with no indication of a missed-transition problem.
 - [ ] The rest of the design (Push-flag-aware frame assembly, the LED semaphore/task, double-buffering if tearing turns out to matter) is still just design, not code.
 
 ## DDP Push flag is parsed but never checked - causes partial-frame display on multi-fragment updates (raised 2026-09-05, not yet implemented)
@@ -737,7 +737,7 @@ Added `tmc_handler` (new module, `teemuatlut/TMCStepper` dependency) using the d
   - [ ] Worth auditing whether any *other* code path can call `Preferences.putX()` (or otherwise trigger a flash write) while homing's interrupt is live and unguarded - the fix above only closes the specific TMC path that was actually hit. The interrupt-side fix (deferring `forceStop()` to `updateHoming()`) is the real belt-and-suspenders protection; the `/save-tmc` guard is closing one specific door, not the whole hallway.
   - [ ] Relevant to Priority 1 (splitting protocol/DDP handling and `FastLED.show()` across cores): any future interrupt or cross-core signaling needs the same IRAM-safety scrutiny - don't assume a library function is interrupt-safe just because it's called from inside an `IRAM_ATTR` function; check whether the *callee* is also IRAM-resident.
 - [ ] Tune the stall-detection threshold: watch live `SG_RESULT` on the Status tab during normal moves vs. a deliberately blocked/jammed trolley, then pick a threshold with margin, before enabling the cutoff for real use.
-- [ ] Confirm StealthChop doesn't introduce mid-range resonance/lost-step issues at this project's typical speed range once actually tried - TMC2209 StealthChop can be less robust than SpreadCycle at higher step rates; SpreadCycle is there as a fallback under Advanced.
+- [x] **Resolved decisively, 2026-09-07 - StealthChop removed from the project entirely.** Tried it live at this project's normal operating settings: dramatically insufficient torque, audibly wrong, barely moving, the step counter running to position 95980 during a homing attempt against a real ~15500 travel before the search timed out. Not a subtle resonance edge case worth tuning around. SpreadCycle is now the only chopper mode the firmware supports - see `tmc_handler.h`'s declaration comment.
 
 ## TRACK_MODE_PID - closed-loop DDP tracking, no encoder dependency (added this session, 2026-09-06)
 
@@ -840,8 +840,8 @@ Overshoot drops steadily from 300 (Kd=0) to near-zero by Kd=0.5-0.7, with first-
 
 **Working PID gains after this pass: `Kp=15, Ki=0, Kd=0.7, MaxSpeed=7000, Accel=50000, Deadband=30`** (live only - not yet saved anywhere durable; there's no Preferences path for any PID tunable, so nothing persists across a reboot regardless).
 
-- [ ] **Not yet done**: Ki tuning - not expected to matter much for final accuracy (the deadband-triggered `moveTo()` snap already closes any P/PD steady-state gap for a single step), but worth checking whether it meaningfully reduces lag during *sustained* tracking of a moving target rather than a single step - a fundamentally different test (continuous ramp, not step-response) from everything done so far.
-- [ ] This sweep only tested one direction (target above start, i.e. "down"/gravity-assisted per the earlier sweeps' convention) and one step size (~6000 steps, 2000→8000) - not yet verified the same Kp/Kd combination is equally clean in the "up"/gravity-opposed direction or for smaller/larger steps.
+- [x] **Moot - Ki removed entirely 2026-09-07** (see stepper_handler.h's declaration comment).
+- [x] **Superseded** - the later continuous-wave testing (triangle waves, both directions, every cycle) is a far more thorough test than this item asked for, and covers this concern as a side effect.
 - [x] Tested against a real synthetic DDP stream (triangle wave via `tuning_harness.py`) - see the section immediately below. Found and fixed two more real bugs in the process; the "up"/gravity-opposed direction concern above turned out to be a symptom of one of them, not a separate real asymmetry (the second fix below made both directions clean).
 
 ### PID vs. a real DDP triangle wave (2026-09-06) - two more real bugs found and fixed
@@ -923,7 +923,7 @@ Built proper tooling rather than continuing to guess at Bug 4's cause: `tools/dd
 **This is a real, useful, if partial, answer**: pure DDP reception, with no stepper motion at all, is completely healthy on this hardware/network - ruling out a general WiFi/protocol/environment problem as the explanation for Bug 4's multi-second freezes. Bug 4 was only ever observed during runs that were *also* actively driving the stepper. **This points the remaining investigation specifically at something tied to real motor motion** - most plausibly either electrical/RF interference from the stepper driver disrupting the WiFi radio while actively switching, or CPU/interrupt resource contention on the single core juggling DDP + WiFi + stepper + TMC UART simultaneously - rather than a WiFi range/environment issue (which the clean RSSI here argues against) or a firmware DDP-parsing bug (which the clean reception here also argues against).
 
 - [x] Re-ran with real motion - see the dedicated section immediately below. Bug 4 did **not** reproduce.
-- [ ] The user offered to move a WiFi access point physically closer to the unit if needed - not needed based on the results below, but keep in mind if the freeze ever comes back in the field.
+- [x] Standing contingency note, not an action item.
 
 ### Motion + reception combined test (2026-09-06) - Bug 4 did NOT reproduce; root cause still unconfirmed
 
@@ -939,13 +939,13 @@ Before re-running, two things changed in support of running this test with minim
 1. `WiFi.setSleep(false)` (added this session, see above) - motivated by a since-debunked artifact, but never ruled out as a genuine fix for something WiFi-power-save-related under real load.
 2. Moving `ddpRxLogConfig`'s output off Serial - not relevant here since Bug 4 was originally observed on runs that did **not** have that diagnostic enabled at all (it didn't exist yet), so this can't be the explanation, but it does mean this test's own instrumentation is now lighter-weight than the original `protocolDebug`-based runs were.
 
-- [ ] **Root cause still not confirmed.** Recommend at least one longer/repeated run (the original Bug 4 sighting came from a multi-run sweep session, not a single clean 60s shot) before treating this as closed. If it stays clean across several longer runs, the leading hypothesis becomes `WiFi.setSleep(false)` having fixed a real (if differently-shaped than first suspected) power-save interaction after all.
+- [x] **Closing pending recurrence** - never recurred across many subsequent long bench sessions, including the entire 2026-09-07 PID investigation (hours of continuous-wave testing). `WiFi.setSleep(false)` remains the leading candidate; downgrading from "open investigation" to "watch for recurrence."
 - [x] The visible high-frequency ripple in actual speed during active tracking - measured (not just eyeballed) via a real damping sweep and found to be a genuine underdamped Kp/Kd resonance (period ~80-100ms, ~10-13Hz, independent of commanded speed - not DDP-frame-rate-locked), not input quantization. See "PID damping sweep" section below - `pidKd` lowered from 0.7 to 0.3, measurably reduces it at every duration.
-- [ ] Ki tuning still not done (see above - unaffected by this section's fixes).
+- [x] **Moot - Ki removed entirely 2026-09-07.**
 - [ ] `pidReengageThreshold`/`RAMMED_STEP_TOLERANCE` were both set to 150 somewhat by feel (matching each other for consistency) rather than from a systematic sweep - reasonable given the DDP-quantization math that motivated them (~60 steps/DDP-unit on this device), but not independently verified as optimal.
 - [ ] The deadband-settled branch's own `moveTo()` (the very first snap into `pidSettled`) doesn't have the same dead-move retry as the hysteresis band - lower risk (that branch only fires once error is already within the tight deadband, so a dead move there barely matters) but not verified clean the same rigorous way.
 - [ ] Streaming mode got the jumpStart fix but *not* the retry-throttle fix (bug #2) - it has the identical exposure (same untamed "reissue every tick while `!isRunning()`" pattern) but wasn't the mode under active test, so this is unverified there. Low priority given Streaming is already deprioritized/shelved, but worth doing before ever picking Streaming back up.
-- [ ] Consider whether `retryMoveIfDied()` (currently `static`/file-local to `stepper_handler.cpp`, homing-only) should be extracted into a small shared utility now that PID has its own hand-rolled equivalent (`lastPidRunRetryMs` in `main.cpp`) - three near-identical throttled-retry implementations (homing, PID, and Streaming once #2 above is done) is real duplication.
+- [x] Merged into the live curated TODO list at the top of this file (retry-logic consolidation, Wave 2).
 
 ### Bug 5 (found AND fixed, 2026-09-06): PID freezes for seconds at every direction reversal - a real production show-stopper, found while chasing the speed ripple
 
@@ -983,8 +983,8 @@ Kd=0.3 wins on both ripple *and* rms_error against baseline at every duration in
 **Applied**: `pidKd`'s compiled default changed from `0.7` to `0.3` (`stepper_handler.cpp`) - like every PID tunable, there's no Preferences/NVS path for it, so the compiled default is the only thing making this durable across a reboot. Flashed and verified live (`GET /tunable?name=pidKd` reads back `0.3000` after a fresh boot).
 
 - [ ] Figure out what actually happened during the Kd=0 sweep's "rammed into stop" trip - false positive from residual dead-run position drift (most likely, per the no-buzz observation) vs. a genuine, if quiet, overshoot. If it's a false positive, `updateRammedIntoStopCheck()`'s reliance on step-count drift as a proxy for real jamming may need revisiting the same way `isRunning()`/`isRampGeneratorActive()` did in Bug 5.
-- [ ] Ki still not tuned; Kp itself not re-swept against the continuous-wave signal now that Kd's moved (all Kp candidates tested here kept Kd fixed at whatever value was being compared, not jointly optimized).
-- [ ] The still-open PID design-goal mismatch (small moves always racing to target instead of pacing to available time - see the "Bug 4" section context above) is unaffected by this sweep and still deferred.
+- [x] Ki: moot, removed entirely 2026-09-07. Kp re-sweep: done the same night - see "PID tick rate found to be the real ripple lever" above (Kp=3 chosen).
+- [x] **Resolved** - this is exactly what the time-budget velocity feedforward ("Time-budget PID velocity feedforward" section) was built to fix.
 
 ### Raw DDP trace jumpiness - root-caused and fixed for real (2026-09-06)
 
@@ -998,7 +998,7 @@ The "commanded position looks jagged" symptom noticed multiple times across this
 
 **Verified**: a fresh 20s run went from 92.7% clean single-unit transitions (7.3% jumps of 2-5 units) under the old code to **100% clean (510/510 transitions, zero jumps of any size)** under the fix.
 
-- [ ] All of this session's earlier plots (both `TUNING_SESSION_2026-09-06.md` and `PID_TUNING_SESSION_2026-09-06.md`) were captured with the old, jumpy sender - none of them need to be redone (the jumpiness didn't bias comparisons between configs, since it's evenly distributed host-side jitter, not something any config could fix), but any *new* runs going forward will show visibly cleaner raw-DDP traces than the ones already on record.
+- [x] Informational note, not an action item - no action was ever needed (says so itself: "none of them need to be redone").
 
 ## Smaller/follow-up items
 

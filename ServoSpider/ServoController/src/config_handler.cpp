@@ -71,15 +71,11 @@ static const ConfigField CONFIG_FIELDS[] = {
     {"tmcAddress", CF_INT, false},
     {"tmcRunCurrent", CF_INT, false},
     {"tmcHoldPercent", CF_INT, false},
-    {"tmcStealthChop", CF_BOOL, false},
     {"tmcStallEnabled", CF_BOOL, false},
     {"tmcStallThresh", CF_INT, false},
     {"tmcMicrosteps", CF_INT, false},
     {"tmcHstrt", CF_INT, false},
     {"tmcHend", CF_INT, false},
-    {"tmcPwmReg", CF_INT, false},
-    {"tmcPwmLim", CF_INT, false},
-    {"tmcPwmAutograd", CF_BOOL, false},
 
     {"ledPixelCount", CF_INT, false},
     {"ledColorOrder", CF_STRING, false},
@@ -138,15 +134,11 @@ static String getFieldValue(const char* key) {
   if (!strcmp(key, "tmcAddress")) return String(tmcAddressConfig);
   if (!strcmp(key, "tmcRunCurrent")) return String(tmcRunCurrentConfig);
   if (!strcmp(key, "tmcHoldPercent")) return String(tmcHoldPercentConfig);
-  if (!strcmp(key, "tmcStealthChop")) return tmcStealthChopConfig ? "1" : "0";
   if (!strcmp(key, "tmcStallEnabled")) return tmcStallEnabledConfig ? "1" : "0";
   if (!strcmp(key, "tmcStallThresh")) return String(tmcStallThresholdConfig);
   if (!strcmp(key, "tmcMicrosteps")) return String(tmcMicrostepsConfig);
   if (!strcmp(key, "tmcHstrt")) return String(tmcHstrtConfig);
   if (!strcmp(key, "tmcHend")) return String(tmcHendConfig);
-  if (!strcmp(key, "tmcPwmReg")) return String(tmcPwmRegConfig);
-  if (!strcmp(key, "tmcPwmLim")) return String(tmcPwmLimConfig);
-  if (!strcmp(key, "tmcPwmAutograd")) return tmcPwmAutogradConfig ? "1" : "0";
 
   if (!strcmp(key, "ledPixelCount")) return String(ledPixelCount);
   if (!strcmp(key, "ledColorOrder")) return ledColorOrder;
@@ -211,15 +203,11 @@ static bool setFieldValue(const char* key, const String& value, bool& isStepperF
   if (!strcmp(key, "tmcAddress")) { tmcAddressConfig = (uint8_t)i; preferences.putInt("tmcAddress", tmcAddressConfig); return true; }
   if (!strcmp(key, "tmcRunCurrent")) { tmcRunCurrentConfig = (uint16_t)i; preferences.putInt("tmcRunCurrent", tmcRunCurrentConfig); return true; }
   if (!strcmp(key, "tmcHoldPercent")) { tmcHoldPercentConfig = (uint8_t)i; preferences.putInt("tmcHoldPercent", tmcHoldPercentConfig); return true; }
-  if (!strcmp(key, "tmcStealthChop")) { tmcStealthChopConfig = b; preferences.putBool("tmcStealthChop", tmcStealthChopConfig); return true; }
   if (!strcmp(key, "tmcStallEnabled")) { tmcStallEnabledConfig = b; preferences.putBool("tmcStallEnabled", tmcStallEnabledConfig); return true; }
   if (!strcmp(key, "tmcStallThresh")) { tmcStallThresholdConfig = (uint16_t)i; preferences.putInt("tmcStallThresh", tmcStallThresholdConfig); return true; }
   if (!strcmp(key, "tmcMicrosteps")) { tmcMicrostepsConfig = (uint16_t)i; preferences.putInt("tmcMicrosteps", tmcMicrostepsConfig); return true; }
   if (!strcmp(key, "tmcHstrt")) { tmcHstrtConfig = (uint8_t)i; preferences.putInt("tmcHstrt", tmcHstrtConfig); return true; }
   if (!strcmp(key, "tmcHend")) { tmcHendConfig = (uint8_t)i; preferences.putInt("tmcHend", tmcHendConfig); return true; }
-  if (!strcmp(key, "tmcPwmReg")) { tmcPwmRegConfig = (uint8_t)i; preferences.putInt("tmcPwmReg", tmcPwmRegConfig); return true; }
-  if (!strcmp(key, "tmcPwmLim")) { tmcPwmLimConfig = (uint8_t)i; preferences.putInt("tmcPwmLim", tmcPwmLimConfig); return true; }
-  if (!strcmp(key, "tmcPwmAutograd")) { tmcPwmAutogradConfig = b; preferences.putBool("tmcPwmAutograd", tmcPwmAutogradConfig); return true; }
 
   if (!strcmp(key, "ledPixelCount")) { ledPixelCount = i; preferences.putInt("ledPixelCount", ledPixelCount); return true; }
   if (!strcmp(key, "ledColorOrder")) { ledColorOrder = value; preferences.putString("ledColorOrder", ledColorOrder); return true; }

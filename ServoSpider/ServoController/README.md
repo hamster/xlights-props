@@ -99,7 +99,7 @@ Access the device via its IP address (or `http://<hostname>.local`) in a web bro
 - Stepper motor parameters
 - Channel settings, including 8-bit/16-bit stepper mode
 - LED/pixel configuration (count, color order, gamma, brightness, null pixels)
-- Stepper driver (TMC2209 UART): current control, StealthChop/SpreadCycle, StallGuard jam-detection cutoff, diagnostics — optional, off by default
+- Stepper driver (TMC2209 UART): current control, SpreadCycle chopper mode, StallGuard jam-detection cutoff, diagnostics — optional, off by default
 - Blank-time timeouts (turn off LEDs / return stepper to zero after N seconds without a command)
 - Firmware update (OTA)
 - Reset all settings to defaults
@@ -173,10 +173,8 @@ Requires the driver's UART (single-wire PDN_UART pad) wired to D6 (TX) / D7 (RX)
 - **Run Current** (mA) / **Hold Current** (% of run) — replaces the board's physical Vref trimpot once enabled; the trimpot has no further effect after this is turned on
 - **Stall Detection** — a firmware-side safety cutoff that watches the driver's live StallGuard reading (`SG_RESULT`) and force-stops the motor if it drops below a configured threshold while moving, e.g. a jammed rope. This needs bench tuning: watch the live `SG_RESULT` value on the Status tab under normal moves vs. a deliberately blocked one to pick a threshold, then enable the cutoff. It's independent of the physical homing switch and doesn't affect homing.
 - **Advanced**:
-  - **StealthChop / SpreadCycle** — quiet vs. higher-torque chopper mode
   - **Microsteps per Full Step** — 1 to 256 (default: 16). Changing this changes the physical distance covered per step, so **re-home afterward** and re-tune Homing Speed/Acceleration and normal Stepper Speed/Acceleration if movement feels too fast or slow.
-  - **SpreadCycle Hysteresis Start/End** (`hstrt`/`hend`) — raw chopper tuning values, only affect SpreadCycle mode; default 0/0 (a conservative but valid starting point, not confirmed to need adjustment)
-  - **StealthChop Autoscale Step Size/Amplitude Limit/Automatic Gradient Adaptation** (`pwm_reg`/`pwm_lim`/`pwm_autograd`) — governs StealthChop's self-tuning; only affect StealthChop mode
+  - **SpreadCycle Hysteresis Start/End** (`hstrt`/`hend`) — raw chopper tuning values; default 0/0 (a conservative but valid starting point, not confirmed to need adjustment). SpreadCycle is the only chopper mode this driver runs — StealthChop was tried and dropped: at this project's normal operating settings it had dramatically insufficient torque, audibly wrong, real slipped steps well before reaching commanded targets.
   - **Sense Resistor** / **Driver Address** — match your TMC2209 module's actual sense resistor (commonly 0.11Ω for SilentStepStick-style modules) and MS1/MS2 address strapping (0 for a single-driver setup, both pins grounded)
 
 ### LED/Pixel Settings

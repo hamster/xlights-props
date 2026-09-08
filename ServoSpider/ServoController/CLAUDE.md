@@ -60,7 +60,7 @@ DDP packet → ddp_handler → positionRequest (shared variable) → main loop �
 | `ddp_handler` | DDP receiver on port 4048, handles fragmented packets (the only supported protocol) |
 | `led_handler` | FastLED direct updates, gamma correction, color order mapping |
 | `stepper_handler` | FastAccelStepper control, non-blocking homing state machine |
-| `tmc_handler` | TMC2209 UART link (current control, StealthChop/SpreadCycle, StallGuard cutoff, diagnostics) - optional, disabled unless enabled in Settings |
+| `tmc_handler` | TMC2209 UART link (current control, StallGuard cutoff, diagnostics) - optional, disabled unless enabled in Settings. SpreadCycle only - StealthChop was tried and dropped 2026-09-07 (dramatically insufficient torque at this project's normal operating settings, not a subtle edge case) |
 | `wifi_handler` | WiFi client/AP modes, captive portal DNS, mDNS |
 | `html_handler` | Web API endpoints, serves HTML from `html.h` |
 | `ota_handler` | HTTP OTA firmware updates with chunked upload |
@@ -72,7 +72,7 @@ The trolley hangs on a rope wound onto a pulley the stepper drives through a wor
 ### Configuration Storage
 All settings stored in ESP32 Preferences (NVS flash):
 - `wifi-config` namespace
-- Keys: `ssid`, `password`, `hostname`, `protocol`, `stepperControl`, `control16Bit`, `stepSpeedHome`, `stepAccelHome`, `stepBlankTime`, `tmcEnabled`, `tmcRSense`, `tmcAddress`, `tmcRunCurrent`, `tmcHoldPercent`, `tmcStealthChop`, `tmcStallEnabled`, `tmcStallThresh`, `tmcMicrosteps`, `tmcHstrt`, `tmcHend`, `tmcPwmReg`, `tmcPwmLim`, `tmcPwmAutograd`, etc. All ≤15 chars (see NVS note below).
+- Keys: `ssid`, `password`, `hostname`, `protocol`, `stepperControl`, `control16Bit`, `stepSpeedHome`, `stepAccelHome`, `stepBlankTime`, `tmcEnabled`, `tmcRSense`, `tmcAddress`, `tmcRunCurrent`, `tmcHoldPercent`, `tmcStallEnabled`, `tmcStallThresh`, `tmcMicrosteps`, `tmcHstrt`, `tmcHend`, etc. All ≤15 chars (see NVS note below).
 
 ## Pin Configuration
 

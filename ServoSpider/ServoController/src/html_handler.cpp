@@ -113,8 +113,6 @@ void handleRoot() {
   page.replace("{{TMC_ADDRESS}}", String(tmcAddressConfig));
   page.replace("{{TMC_RUN_CURRENT}}", String(tmcRunCurrentConfig));
   page.replace("{{TMC_HOLD_PERCENT}}", String(tmcHoldPercentConfig));
-  page.replace("{{TMC_STEALTHCHOP_CHECKED}}", tmcStealthChopConfig ? "checked" : "");
-  page.replace("{{TMC_SPREADCYCLE_CHECKED}}", tmcStealthChopConfig ? "" : "checked");
   page.replace("{{TMC_STALL_ENABLED_CHECKED}}", tmcStallEnabledConfig ? "checked" : "");
   page.replace("{{TMC_STALL_THRESHOLD}}", String(tmcStallThresholdConfig));
   const uint16_t tmcMicrostepOptions[] = {1, 2, 4, 8, 16, 32, 64, 128, 256};
@@ -123,9 +121,6 @@ void handleRoot() {
   }
   page.replace("{{TMC_HSTRT}}", String(tmcHstrtConfig));
   page.replace("{{TMC_HEND}}", String(tmcHendConfig));
-  page.replace("{{TMC_PWM_REG}}", String(tmcPwmRegConfig));
-  page.replace("{{TMC_PWM_LIM}}", String(tmcPwmLimConfig));
-  page.replace("{{TMC_PWM_AUTOGRAD_CHECKED}}", tmcPwmAutogradConfig ? "checked" : "");
 
   // LED configuration values
   page.replace("{{LED_PIXEL_COUNT}}", String(ledPixelCount));
@@ -431,15 +426,11 @@ void handleSaveTmc() {
   uint8_t newAddress = server.hasArg("tmcAddress") ? (uint8_t)server.arg("tmcAddress").toInt() : tmcAddressConfig;
   uint16_t newRunCurrent = server.hasArg("tmcRunCurrent") ? (uint16_t)server.arg("tmcRunCurrent").toInt() : tmcRunCurrentConfig;
   uint8_t newHoldPercent = server.hasArg("tmcHoldPercent") ? (uint8_t)server.arg("tmcHoldPercent").toInt() : tmcHoldPercentConfig;
-  bool newStealthChop = server.hasArg("tmcChopperMode") ? (server.arg("tmcChopperMode") == "stealthchop") : tmcStealthChopConfig;
   bool newStallEnabled = server.hasArg("tmcStallEnabled");
   uint16_t newStallThreshold = server.hasArg("tmcStallThreshold") ? (uint16_t)server.arg("tmcStallThreshold").toInt() : tmcStallThresholdConfig;
   uint16_t newMicrosteps = server.hasArg("tmcMicrosteps") ? (uint16_t)server.arg("tmcMicrosteps").toInt() : tmcMicrostepsConfig;
   uint8_t newHstrt = server.hasArg("tmcHstrt") ? (uint8_t)server.arg("tmcHstrt").toInt() : tmcHstrtConfig;
   uint8_t newHend = server.hasArg("tmcHend") ? (uint8_t)server.arg("tmcHend").toInt() : tmcHendConfig;
-  uint8_t newPwmReg = server.hasArg("tmcPwmReg") ? (uint8_t)server.arg("tmcPwmReg").toInt() : tmcPwmRegConfig;
-  uint8_t newPwmLim = server.hasArg("tmcPwmLim") ? (uint8_t)server.arg("tmcPwmLim").toInt() : tmcPwmLimConfig;
-  bool newPwmAutograd = server.hasArg("tmcPwmAutograd");
 
   bool linkSettingsChanged = (newEnabled != tmcEnabledConfig) || (newRSense != tmcRSenseConfig) || (newAddress != tmcAddressConfig);
   // A fresh homing run is needed if microstepping changes, since bottomPosition
@@ -451,30 +442,22 @@ void handleSaveTmc() {
   tmcAddressConfig = newAddress;
   tmcRunCurrentConfig = newRunCurrent;
   tmcHoldPercentConfig = newHoldPercent;
-  tmcStealthChopConfig = newStealthChop;
   tmcStallEnabledConfig = newStallEnabled;
   tmcStallThresholdConfig = newStallThreshold;
   tmcMicrostepsConfig = newMicrosteps;
   tmcHstrtConfig = newHstrt;
   tmcHendConfig = newHend;
-  tmcPwmRegConfig = newPwmReg;
-  tmcPwmLimConfig = newPwmLim;
-  tmcPwmAutogradConfig = newPwmAutograd;
 
   preferences.putBool("tmcEnabled", tmcEnabledConfig);
   preferences.putFloat("tmcRSense", tmcRSenseConfig);
   preferences.putInt("tmcAddress", tmcAddressConfig);
   preferences.putInt("tmcRunCurrent", tmcRunCurrentConfig);
   preferences.putInt("tmcHoldPercent", tmcHoldPercentConfig);
-  preferences.putBool("tmcStealthChop", tmcStealthChopConfig);
   preferences.putBool("tmcStallEnabled", tmcStallEnabledConfig);
   preferences.putInt("tmcStallThresh", tmcStallThresholdConfig);
   preferences.putInt("tmcMicrosteps", tmcMicrostepsConfig);
   preferences.putInt("tmcHstrt", tmcHstrtConfig);
   preferences.putInt("tmcHend", tmcHendConfig);
-  preferences.putInt("tmcPwmReg", tmcPwmRegConfig);
-  preferences.putInt("tmcPwmLim", tmcPwmLimConfig);
-  preferences.putBool("tmcPwmAutograd", tmcPwmAutogradConfig);
 
   if (microstepsChanged) {
     Serial.println("TMC2209 microstepping changed - re-home to recalculate bottomPosition!");
